@@ -108,5 +108,20 @@ def get_llm_backend_for_tools():
 
         return LiteLLMBackend(**config_params)
 
+    elif model_config["provider"] == "vertexai":
+        config_params = {
+            "provider": "vertexai",
+        }
+        set_param(config_params, model_config, "model_name", "gemini-1.5-pro")
+        set_param(config_params, model_config, "project_id", None, required=True)
+        set_param(config_params, model_config, "location", "us-central1")
+        set_param(config_params, model_config, "top_p", 0.95)
+        set_param(config_params, model_config, "temperature", 0.0)
+        set_param(config_params, model_config, "max_tokens", None)
+
+        print("Making LiteLLMBackend with config_params: ", config_params)
+
+        return LiteLLMBackend(**config_params)
+
     else:
         raise ValueError(f"Unsupported provider - {model_config['provider']}. Exiting...")

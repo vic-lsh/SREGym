@@ -10,6 +10,7 @@ import litellm
 import openai
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ibm import ChatWatsonx
 from langchain_litellm import ChatLiteLLM
 from langchain_openai import ChatOpenAI
@@ -27,7 +28,6 @@ LLM_QUERY_INIT_RETRY_DELAY = int(os.getenv("LLM_QUERY_INIT_RETRY_DELAY", "1"))  
 
 
 class LiteLLMBackend:
-
     def __init__(
         self,
         provider: str,
@@ -41,6 +41,8 @@ class LiteLLMBackend:
         wx_project_id: Optional[str] = None,
         azure_version: Optional[str] = None,
         extra_headers: Optional[Dict[str, str]] = None,
+        project_id: Optional[str] = None,
+        location: Optional[str] = None,
     ):
         self.provider = provider
         self.model_name = model_name
@@ -53,6 +55,8 @@ class LiteLLMBackend:
         self.wx_project_id = wx_project_id
         self.azure_version = azure_version
         self.extra_headers = extra_headers
+        self.project_id = project_id
+        self.location = location
         litellm.drop_params = True
         litellm.modify_params = True  # for Anthropic
 
@@ -103,7 +107,6 @@ class LiteLLMBackend:
                 model_config["top_p"] = self.top_p
             llm = ChatOpenAI(**model_config)
         elif self.provider == "watsonx":
-
             model_config = {
                 "model_id": self.model_name,
             }
@@ -121,7 +124,6 @@ class LiteLLMBackend:
             llm = ChatWatsonx(**model_config)
 
         elif self.provider == "litellm":
-
             model_config = {
                 "model": self.model_name,
             }
@@ -138,6 +140,24 @@ class LiteLLMBackend:
                 model_config["max_tokens"] = self.max_tokens
 
             llm = ChatLiteLLM(**model_config)
+        elif self.provider == "vertexai":
+            model_config = {
+                "model": self.model_name,
+                "vertexai": True,
+            }
+
+            if self.project_id is not None:
+                model_config["project"] = self.project_id
+            if self.location is not None:
+                model_config["location"] = self.location
+            if self.temperature is not None:
+                model_config["temperature"] = self.temperature
+            if self.top_p is not None:
+                model_config["top_p"] = self.top_p
+            if self.max_tokens is not None:
+                model_config["max_tokens"] = self.max_tokens
+
+            llm = ChatGoogleGenerativeAI(**model_config)
         else:
             raise ValueError(f"Unsupported provider: {self.provider}")
 
