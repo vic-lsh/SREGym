@@ -1,16 +1,16 @@
 """Adopted from previous project"""
 
+import contextlib
 import json
 import logging
 import os
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import litellm
 import openai
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ibm import ChatWatsonx
 from langchain_litellm import ChatLiteLLM
 from langchain_openai import ChatOpenAI
@@ -32,17 +32,17 @@ class LiteLLMBackend:
         self,
         provider: str,
         model_name: str,
-        api_key: Optional[str] = None,
-        url: Optional[str] = None,
-        top_p: Optional[float] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        seed: Optional[int] = None,
-        wx_project_id: Optional[str] = None,
-        azure_version: Optional[str] = None,
-        extra_headers: Optional[Dict[str, str]] = None,
-        project_id: Optional[str] = None,
-        location: Optional[str] = None,
+        api_key: str | None = None,
+        url: str | None = None,
+        top_p: float | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        seed: int | None = None,
+        wx_project_id: str | None = None,
+        azure_version: str | None = None,
+        extra_headers: dict[str, str] | None = None,
+        project_id: str | None = None,
+        location: str | None = None,
     ):
         self.provider = provider
         self.model_name = model_name
@@ -63,8 +63,8 @@ class LiteLLMBackend:
     def inference(
         self,
         messages: str | list[SystemMessage | HumanMessage | AIMessage],
-        system_prompt: Optional[str] = None,
-        tools: Optional[list[any]] = None,
+        system_prompt: str | None = None,
+        tools: list[any] | None = None,
     ):
         if isinstance(messages, str):
             # logger.info(f"NL input as str received: {messages}")
@@ -141,15 +141,26 @@ class LiteLLMBackend:
 
             llm = ChatLiteLLM(**model_config)
         elif self.provider == "vertexai":
+            # Use ChatLiteLLM for Vertex AI as fallback since langchain-google-vertexai is missing
+            # and ChatGoogleGenerativeAI is for AI Studio.
+
+            # Ensure model name is prefixed correctly for litellm
+            model_name = self.model_name
+            if not model_name.startswith("vertex_ai/"):
+                model_name = f"vertex_ai/{model_name}"
+
             model_config = {
-                "model": self.model_name,
-                "vertexai": True,
+                "model": model_name,
             }
 
             if self.project_id is not None:
-                model_config["project"] = self.project_id
+                model_config["vertex_project"] = self.project_id
             if self.location is not None:
+                model_config["vertex_location"] = self.location
                 model_config["location"] = self.location
+                print(f"Setting vertex location: {self.location}")
+            else:
+                print("No vertex location provided")
             if self.temperature is not None:
                 model_config["temperature"] = self.temperature
             if self.top_p is not None:
@@ -157,7 +168,7 @@ class LiteLLMBackend:
             if self.max_tokens is not None:
                 model_config["max_tokens"] = self.max_tokens
 
-            llm = ChatGoogleGenerativeAI(**model_config)
+            llm = ChatLiteLLM(**model_config)
         else:
             raise ValueError(f"Unsupported provider: {self.provider}")
 
@@ -193,7 +204,7 @@ class LiteLLMBackend:
                     f"Last few messages: {prompt_messages[-3:] if len(prompt_messages) >= 3 else prompt_messages}"
                 )
                 raise
-            except (openai.RateLimitError, HTTPError) as e:
+            except (openai.RateLimitError, HTTPError):
                 # Rate-limiting errors - retry with exponential backoff
                 logger.warning(
                     f"Rate-limited. Retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
@@ -246,7 +257,7 @@ class LiteLLMBackend:
         raise RuntimeError("Max retries exceeded. Unable to complete the request.")
 
 
-def _parse_duration_to_seconds(duration: Any) -> Optional[float]:
+def _parse_duration_to_seconds(duration: Any) -> float | None:
     """Convert duration to seconds.
 
     Supports:
@@ -274,7 +285,7 @@ def _parse_duration_to_seconds(duration: Any) -> Optional[float]:
     return None
 
 
-def _extract_retry_delay_seconds_from_exception(exc: BaseException) -> Optional[float]:
+def _extract_retry_delay_seconds_from_exception(exc: BaseException) -> float | None:
     """Extract retry delay seconds from JSON details RetryInfo only.
 
     Returns 60.0 if no RetryInfo found in error details.
@@ -315,14 +326,12 @@ def _extract_retry_delay_seconds_from_exception(exc: BaseException) -> Optional[
             if isinstance(arg, (dict, list)):
                 candidates.append(arg)
             elif isinstance(arg, (str, bytes)):
-                try:
+                with contextlib.suppress(Exception):
                     candidates.append(json.loads(arg))
-                except Exception:
-                    pass
     except Exception:
         pass
 
-    def find_retry_delay(data: Any) -> Optional[float]:
+    def find_retry_delay(data: Any) -> float | None:
         if data is None:
             return None
         if isinstance(data, dict):

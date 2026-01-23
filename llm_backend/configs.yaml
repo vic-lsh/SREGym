@@ -141,3 +141,20 @@
   location: "$GOOGLE_CLOUD_LOCATION"
   temperature: 0.0
   top_p: 0.95
+
+"vertex-ai-gemini-2.5-pro":
+  provider: "vertexai"
+  model_name: "gemini-2.5-pro"
+  project_id: "$GOOGLE_CLOUD_PROJECT"
+  location: "$GOOGLE_CLOUD_LOCATION"
+  temperature: 0.0
+  top_p: 0.95
+
+
+"vertex-ai-gemini-3-pro-preview":
+  provider: "vertexai"
+  model_name: "gemini-3-pro-preview"
+  project_id: "$GOOGLE_CLOUD_PROJECT"
+  location: "$GOOGLE_CLOUD_LOCATION"
+  temperature: 0.0
+  top_p: 0.95
