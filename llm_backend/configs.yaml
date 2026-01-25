@@ -118,21 +118,23 @@
   provider: "litellm"
   model_name: "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 
-"vertex-ai-gemini-1.5-pro":
-  provider: "vertexai"
-  model_name: "gemini-1.5-pro"
-  project_id: "$GOOGLE_CLOUD_PROJECT"
-  location: "$GOOGLE_CLOUD_LOCATION"
-  temperature: 0.0
-  top_p: 0.95
+# NOTE: gemini-1.5 models may not be available in all projects
+# If you get 404 errors, these models might be deprecated or require special access
+# "vertex-ai-gemini-1.5-pro":
+#   provider: "vertexai"
+#   model_name: "gemini-1.5-pro"
+#   project_id: "$GOOGLE_CLOUD_PROJECT"
+#   location: "$GOOGLE_CLOUD_LOCATION"
+#   temperature: 0.0
+#   top_p: 0.95
 
-"vertex-ai-gemini-1.5-flash":
-  provider: "vertexai"
-  model_name: "gemini-1.5-flash"
-  project_id: "$GOOGLE_CLOUD_PROJECT"
-  location: "$GOOGLE_CLOUD_LOCATION"
-  temperature: 0.0
-  top_p: 0.95
+# "vertex-ai-gemini-1.5-flash":
+#   provider: "vertexai"
+#   model_name: "gemini-1.5-flash"
+#   project_id: "$GOOGLE_CLOUD_PROJECT"
+#   location: "$GOOGLE_CLOUD_LOCATION"
+#   temperature: 0.0
+#   top_p: 0.95
 
 "vertex-ai-gemini-2.0-flash-exp":
   provider: "vertexai"
@@ -149,7 +151,6 @@
   location: "$GOOGLE_CLOUD_LOCATION"
   temperature: 0.0
   top_p: 0.95
-
 
 "vertex-ai-gemini-3-pro-preview":
   provider: "vertexai"

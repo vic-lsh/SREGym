@@ -153,14 +153,19 @@ class LiteLLMBackend:
                 "model": model_name,
             }
 
+            # ChatLiteLLM requires vertex parameters to be passed via model_kwargs
+            vertex_kwargs = {}
             if self.project_id is not None:
-                model_config["vertex_project"] = self.project_id
+                vertex_kwargs["vertex_project"] = self.project_id
             if self.location is not None:
-                model_config["vertex_location"] = self.location
-                model_config["location"] = self.location
+                vertex_kwargs["vertex_location"] = self.location
                 print(f"Setting vertex location: {self.location}")
             else:
                 print("No vertex location provided")
+
+            if vertex_kwargs:
+                model_config["model_kwargs"] = vertex_kwargs
+
             if self.temperature is not None:
                 model_config["temperature"] = self.temperature
             if self.top_p is not None:
