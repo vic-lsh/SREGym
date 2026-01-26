@@ -7,11 +7,11 @@ from dotenv import load_dotenv
 
 from llm_backend.get_llm_backend import LiteLLMBackend
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 def load_model_config():
-    with open(os.path.join(os.path.dirname(__file__), "configs.yaml"), "r") as f:
+    with open(os.path.join(os.path.dirname(__file__), "configs.yaml")) as f:
         configs = yaml.load(f, Loader=yaml.FullLoader)
     return configs
 
@@ -25,11 +25,15 @@ def set_param(params, config, field, default_value, required=False):
     elif default_value is not None:
         value_or_env = default_value
 
-    if value_or_env is not None and type(value_or_env) == str and value_or_env.startswith("$"):
+    if value_or_env is not None and isinstance(value_or_env, str) and value_or_env.startswith("$"):
         key = value_or_env[1:]
         if key in os.environ:
             value_to_set = os.environ[key]
-        # else do nothing
+        else:
+            print(f"Warning: Environment variable {key} not found for field {field}.")
+            if default_value is not None:
+                print(f"Falling back to default value: {default_value}")
+                value_to_set = default_value
     else:
         value_to_set = value_or_env
 
@@ -49,9 +53,7 @@ def get_llm_backend_for_tools():
     print("Found MODEL_ID: ", MODEL_ID)
 
     if MODEL_ID not in llm_config:
-        print(
-            f"Unable to find model configuration - {MODEL_ID}. Available models: {[key for key in llm_config.keys()]}"
-        )
+        print(f"Unable to find model configuration - {MODEL_ID}. Available models: {[key for key in llm_config]}")
         exit(1)
     model_config = llm_config[MODEL_ID]
 
@@ -103,6 +105,21 @@ def get_llm_backend_for_tools():
         set_param(config_params, model_config, "temperature", 0.0)
         set_param(config_params, model_config, "max_tokens", None)
         set_param(config_params, model_config, "wx_project_id", "$WX_PROJECT_ID", required=True)
+
+        print("Making LiteLLMBackend with config_params: ", config_params)
+
+        return LiteLLMBackend(**config_params)
+
+    elif model_config["provider"] == "vertexai":
+        config_params = {
+            "provider": "vertexai",
+        }
+        set_param(config_params, model_config, "model_name", "gemini-1.5-pro")
+        set_param(config_params, model_config, "project_id", None, required=True)
+        set_param(config_params, model_config, "location", "us-central1")
+        set_param(config_params, model_config, "top_p", 0.95)
+        set_param(config_params, model_config, "temperature", 0.0)
+        set_param(config_params, model_config, "max_tokens", None)
 
         print("Making LiteLLMBackend with config_params: ", config_params)
 

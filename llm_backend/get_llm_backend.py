@@ -1,10 +1,11 @@
 """Adopted from previous project"""
 
+import contextlib
 import json
 import logging
 import os
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import litellm
 import openai
@@ -27,20 +28,21 @@ LLM_QUERY_INIT_RETRY_DELAY = int(os.getenv("LLM_QUERY_INIT_RETRY_DELAY", "1"))  
 
 
 class LiteLLMBackend:
-
     def __init__(
         self,
         provider: str,
         model_name: str,
-        api_key: Optional[str] = None,
-        url: Optional[str] = None,
-        top_p: Optional[float] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        seed: Optional[int] = None,
-        wx_project_id: Optional[str] = None,
-        azure_version: Optional[str] = None,
-        extra_headers: Optional[Dict[str, str]] = None,
+        api_key: str | None = None,
+        url: str | None = None,
+        top_p: float | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        seed: int | None = None,
+        wx_project_id: str | None = None,
+        azure_version: str | None = None,
+        extra_headers: dict[str, str] | None = None,
+        project_id: str | None = None,
+        location: str | None = None,
     ):
         self.provider = provider
         self.model_name = model_name
@@ -53,14 +55,16 @@ class LiteLLMBackend:
         self.wx_project_id = wx_project_id
         self.azure_version = azure_version
         self.extra_headers = extra_headers
+        self.project_id = project_id
+        self.location = location
         litellm.drop_params = True
         litellm.modify_params = True  # for Anthropic
 
     def inference(
         self,
         messages: str | list[SystemMessage | HumanMessage | AIMessage],
-        system_prompt: Optional[str] = None,
-        tools: Optional[list[any]] = None,
+        system_prompt: str | None = None,
+        tools: list[any] | None = None,
     ):
         if isinstance(messages, str):
             # logger.info(f"NL input as str received: {messages}")
@@ -103,7 +107,6 @@ class LiteLLMBackend:
                 model_config["top_p"] = self.top_p
             llm = ChatOpenAI(**model_config)
         elif self.provider == "watsonx":
-
             model_config = {
                 "model_id": self.model_name,
             }
@@ -121,7 +124,6 @@ class LiteLLMBackend:
             llm = ChatWatsonx(**model_config)
 
         elif self.provider == "litellm":
-
             model_config = {
                 "model": self.model_name,
             }
@@ -134,6 +136,40 @@ class LiteLLMBackend:
                 model_config["api_key"] = self.api_key
             if self.url is not None:
                 model_config["api_base"] = self.url
+            if self.max_tokens is not None:
+                model_config["max_tokens"] = self.max_tokens
+
+            llm = ChatLiteLLM(**model_config)
+        elif self.provider == "vertexai":
+            # Use ChatLiteLLM for Vertex AI as fallback since langchain-google-vertexai is missing
+            # and ChatGoogleGenerativeAI is for AI Studio.
+
+            # Ensure model name is prefixed correctly for litellm
+            model_name = self.model_name
+            if not model_name.startswith("vertex_ai/"):
+                model_name = f"vertex_ai/{model_name}"
+
+            model_config = {
+                "model": model_name,
+            }
+
+            # ChatLiteLLM requires vertex parameters to be passed via model_kwargs
+            vertex_kwargs = {}
+            if self.project_id is not None:
+                vertex_kwargs["vertex_project"] = self.project_id
+            if self.location is not None:
+                vertex_kwargs["vertex_location"] = self.location
+                print(f"Setting vertex location: {self.location}")
+            else:
+                print("No vertex location provided")
+
+            if vertex_kwargs:
+                model_config["model_kwargs"] = vertex_kwargs
+
+            if self.temperature is not None:
+                model_config["temperature"] = self.temperature
+            if self.top_p is not None:
+                model_config["top_p"] = self.top_p
             if self.max_tokens is not None:
                 model_config["max_tokens"] = self.max_tokens
 
@@ -173,7 +209,7 @@ class LiteLLMBackend:
                     f"Last few messages: {prompt_messages[-3:] if len(prompt_messages) >= 3 else prompt_messages}"
                 )
                 raise
-            except (openai.RateLimitError, HTTPError) as e:
+            except (openai.RateLimitError, HTTPError):
                 # Rate-limiting errors - retry with exponential backoff
                 logger.warning(
                     f"Rate-limited. Retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
@@ -226,7 +262,7 @@ class LiteLLMBackend:
         raise RuntimeError("Max retries exceeded. Unable to complete the request.")
 
 
-def _parse_duration_to_seconds(duration: Any) -> Optional[float]:
+def _parse_duration_to_seconds(duration: Any) -> float | None:
     """Convert duration to seconds.
 
     Supports:
@@ -254,7 +290,7 @@ def _parse_duration_to_seconds(duration: Any) -> Optional[float]:
     return None
 
 
-def _extract_retry_delay_seconds_from_exception(exc: BaseException) -> Optional[float]:
+def _extract_retry_delay_seconds_from_exception(exc: BaseException) -> float | None:
     """Extract retry delay seconds from JSON details RetryInfo only.
 
     Returns 60.0 if no RetryInfo found in error details.
@@ -295,14 +331,12 @@ def _extract_retry_delay_seconds_from_exception(exc: BaseException) -> Optional[
             if isinstance(arg, (dict, list)):
                 candidates.append(arg)
             elif isinstance(arg, (str, bytes)):
-                try:
+                with contextlib.suppress(Exception):
                     candidates.append(json.loads(arg))
-                except Exception:
-                    pass
     except Exception:
         pass
 
-    def find_retry_delay(data: Any) -> Optional[float]:
+    def find_retry_delay(data: Any) -> float | None:
         if data is None:
             return None
         if isinstance(data, dict):
