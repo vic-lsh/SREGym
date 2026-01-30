@@ -9,8 +9,6 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-from llm_backend.get_llm_backend import LiteLLMBackend
-
 logger = logging.getLogger("all.gemini_cli.agent")
 
 
@@ -21,6 +19,7 @@ class GeminiCliAgent:
 
     _OUTPUT_FILENAME = "gemini-cli.txt"
     _SUMMARY_FILENAME = "long_term_summary.txt"
+    _INSTRUCTION_FILENAME = "instruction.txt"
 
     @staticmethod
     def check_installation() -> bool:
@@ -117,6 +116,11 @@ class GeminiCliAgent:
     def summary_path(self) -> Path:
         """Path to the long-term summary file."""
         return self.logs_dir / self._SUMMARY_FILENAME
+    
+    @property
+    def instruction_path(self) -> Path:
+        """Path to the instruction file."""
+        return self.logs_dir / self._INSTRUCTION_FILENAME
 
     def get_usage_metrics(self) -> dict[str, int]:
         """
@@ -176,84 +180,6 @@ class GeminiCliAgent:
                     pass
         return text
 
-    def _summarize_trajectory(self, instruction: str, response: str) -> str:
-        """Generate a summary of the current iteration using an LLM."""
-        prompt = f"""
-Analyze the following interaction trajectory of an SRE agent. Summarize:
-0) What is the symptom?
-1) What is the root cause (if diagnosed)?
-2) What are the fixes (if any)?
-
-DO NOT use external knowledge. Strictly use the provided text.
-
-Trajectory:
----
-Instruction:
-{instruction}
-
-Response:
-{response}
----
-"""
-        api_key = os.environ.get("GOOGLE_API_KEY", "") or os.environ.get("GEMINI_API_KEY", "")
-        model_name = self.model_name
-        if not model_name.startswith("gemini/") and "gemini" in model_name:
-             model_name = f"gemini/{model_name}"
-
-        try:
-            # Initialize LLM backend for summarization
-            # We use the same model as the agent or a default capable one
-            llm = LiteLLMBackend(
-                provider="litellm",
-                model_name=model_name,
-                api_key=api_key,
-                temperature=0.0
-            )
-            result = llm.inference(messages=prompt)
-            return result.content
-        except Exception as e:
-            logger.error(f"Failed to generate iteration summary: {e}")
-            return "Failed to generate summary."
-
-    def _merge_summaries(self, iteration_summary: str) -> str:
-        """Merge iteration summary with long-term summary."""
-        current_summary = ""
-        if self.summary_path.exists():
-            with open(self.summary_path, "r") as f:
-                current_summary = f.read()
-
-        prompt = f"""
-You are maintaining a long-term summary of SRE incidents.
-
-Current Long-Term Summary:
-{current_summary if current_summary else "(Empty)"}
-
-New Iteration Summary:
-{iteration_summary}
-
-Task: Update the Long-Term Summary.
-- If the new iteration reveals a NEW problem, symptom, or solution, add it to the summary.
-- If it is a reoccurrence of a previous problem, increment a count or note the reoccurrence in the summary.
-- Output the updated Long-Term Summary text only.
-"""
-        api_key = os.environ.get("GOOGLE_API_KEY", "") or os.environ.get("GEMINI_API_KEY", "")
-        model_name = self.model_name
-        if not model_name.startswith("gemini/") and "gemini" in model_name:
-             model_name = f"gemini/{model_name}"
-
-        try:
-            llm = LiteLLMBackend(
-                provider="litellm",
-                model_name=model_name,
-                api_key=api_key,
-                temperature=0.0
-            )
-            result = llm.inference(messages=prompt)
-            return result.content
-        except Exception as e:
-            logger.error(f"Failed to merge summaries: {e}")
-            return current_summary
-
     def run(self, instruction: str) -> int:
         """
         Run the Gemini CLI agent with the given instruction.
@@ -276,6 +202,14 @@ Task: Update the Long-Term Summary.
                     logger.info("Appended existing long-term summary to instruction.")
             except Exception as e:
                 logger.warning(f"Failed to read existing summary: {e}")
+
+        # Save instruction to file for external summarizer
+        if self.enable_summary:
+            try:
+                self.instruction_path.write_text(instruction)
+                logger.info(f"Saved instruction to {self.instruction_path}")
+            except Exception as e:
+                logger.warning(f"Failed to save instruction to file: {e}")
 
         logger.info(f"Running Gemini CLI with instruction: {instruction}")
         logger.info(f"Using model: {model}")
@@ -333,17 +267,7 @@ Task: Update the Long-Term Summary.
 
             logger.info(f"Gemini CLI finished with return code: {process.returncode}")
 
-            if self.enable_summary:
-                logger.info("Generating and merging summaries...")
-                response_text = self._get_response_text()
-                iter_summary = self._summarize_trajectory(instruction, response_text)
-                logger.info(f"Iteration Summary: {iter_summary}")
-                
-                updated_long_term = self._merge_summaries(iter_summary)
-                
-                with open(self.summary_path, "w") as f:
-                    f.write(updated_long_term)
-                logger.info(f"Updated long-term summary saved to {self.summary_path}")
+            # Summarization is now handled externally by main.py / summarize_results.py
 
             return process.returncode
 

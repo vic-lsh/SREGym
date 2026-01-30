@@ -4,6 +4,7 @@ import csv
 import logging
 import multiprocessing
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -171,6 +172,31 @@ def driver_loop(
                 if not use_external_harness:
                     LAUNCHER.cleanup_agent(agent_to_run)
                     console.log(f"🧹 Cleaned up agent process for {agent_to_run}")
+
+                    # Run summarization if enabled (specifically for gemini_cli)
+                    if enable_summary and agent_to_run == "gemini_cli":
+                        console.log("📝 Running external summarization for Gemini CLI...")
+                        try:
+                            # Run summarization script
+                            # We assume logs dir is default logs/gemini_cli as per driver.py default
+                            summarize_cmd = [
+                                sys.executable,
+                                "clients/gemini_cli/summarize_results.py",
+                                "--logs-dir", "logs/gemini_cli",
+                                "--model", os.environ.get("MODEL_ID", "gemini-2.0-flash")
+                            ]
+                            result = subprocess.run(
+                                summarize_cmd,
+                                capture_output=True,
+                                text=True
+                            )
+                            if result.returncode == 0:
+                                console.log("✅ External summarization step completed.")
+                            else:
+                                console.log(f"⚠️ External summarization failed (exit code {result.returncode}):")
+                                console.log(result.stderr)
+                        except Exception as e:
+                            console.log(f"⚠️ External summarization failed to launch: {e}")
 
         # Stop K8s API proxy when all problems are done
         if not use_external_harness:
