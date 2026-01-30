@@ -245,6 +245,7 @@ class Conductor:
         # Inject fault before the first stage if not already done
         if start_index == 0 and not self.fault_injected:
             self._inject_fault()
+            self.execution_start_time = time.time()
 
         if start_index < len(self.stage_sequence):
             stage = self.stage_sequence[start_index]
@@ -303,7 +304,6 @@ class Conductor:
         Returns:
             StartProblemResult: Result status indicating success or skip reason
         """
-        self.execution_start_time = time.time()
         self.problem = self.problems.get_problem_instance(self.problem_id)
         self.app = self.problem.app
         self.detection_oracle = DetectionOracle(self.problem)
