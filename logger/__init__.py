@@ -21,10 +21,17 @@ def init_logger():
 
     # Only add handlers if they don't exist to prevent duplication
     if not root_logger.handlers:
-        timestamp = get_current_datetime_formatted()
-        # create dir and file
-        path = f"./logs/sregym_{timestamp}.log"
-        os.makedirs("./logs", exist_ok=True)
+        # Check for env var to override log path
+        env_log_file = os.environ.get("SREGYM_LOG_FILE")
+        if env_log_file:
+            path = env_log_file
+            # Ensure the directory exists
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+        else:
+            timestamp = get_current_datetime_formatted()
+            # create dir and file
+            path = f"./logs/sregym_{timestamp}.log"
+            os.makedirs("./logs", exist_ok=True)
 
         handler = logging.FileHandler(path)
         # add code line and filename and function name

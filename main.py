@@ -35,6 +35,7 @@ def get_current_datetime_formatted():
 
 def driver_loop(
     conductor: Conductor,
+    experiment_log_dir: str,
     problem_filter: str = None,
     agent_to_run: str = None,
     use_external_harness: bool = False,
@@ -47,6 +48,7 @@ def driver_loop(
 
     Args:
         conductor: The Conductor instance
+        experiment_log_dir: Directory to store logs and results.
         problem_filter: Optional problem ID to run. If specified, only this problem will be run.
         agent_to_run: Agent name to run (required unless use_external_harness is True).
         use_external_harness: If True, inject fault and exit without running evaluation logic.
@@ -74,7 +76,7 @@ def driver_loop(
             LAUNCHER.set_agent_kubeconfig(conductor.get_agent_kubeconfig_path())
 
         all_results_for_agent = []
-        session_timestamp = get_current_datetime_formatted()
+        # session_timestamp = get_current_datetime_formatted()
 
         # Get all problem IDs and filter if needed
         problem_ids = conductor.problems.get_problem_ids()
@@ -113,11 +115,21 @@ def driver_loop(
                     console.log(f"✅ Fault injected for problem '{pid}'. Exiting for external harness.")
                     return []
 
+                # Define agent log directory
+                agent_log_dir = os.path.join(experiment_log_dir, agent_to_run)
+
                 if not use_external_harness:
                     reg = get_agent(agent_to_run, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
                     if reg:
-                        extra_args = "--enable-summary" if enable_summary else ""
-                        await LAUNCHER.ensure_started(reg, extra_args=extra_args)
+                        extra_args = ""
+                        # Pass explicit log dir to supported agents (e.g. gemini_cli)
+                        if agent_to_run == "gemini_cli":
+                             extra_args += f" --logs-dir {agent_log_dir}"
+                        
+                        if enable_summary:
+                             extra_args += " --enable-summary"
+                             
+                        await LAUNCHER.ensure_started(reg, extra_args=extra_args.strip())
 
                 # Poll until grading completes or agent exits
                 while conductor.submission_stage != "done":
@@ -161,7 +173,9 @@ def driver_loop(
 
                 fieldnames = sorted({key for row in all_results_for_agent for key in row.keys()})
                 current_date_time = get_current_datetime_formatted()
-                csv_path = f"{current_date_time}_{pid}_{agent_to_run}_results.csv"
+                
+                # Write results to experiment_log_dir
+                csv_path = os.path.join(experiment_log_dir, f"{current_date_time}_{pid}_{agent_to_run}_results.csv")
                 with open(csv_path, "w", newline="") as csvfile:
                     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                     writer.writeheader()
@@ -178,11 +192,10 @@ def driver_loop(
                         console.log("📝 Running external summarization for Gemini CLI...")
                         try:
                             # Run summarization script
-                            # We assume logs dir is default logs/gemini_cli as per driver.py default
                             summarize_cmd = [
                                 sys.executable,
                                 "clients/gemini_cli/summarize_results.py",
-                                "--logs-dir", "logs/gemini_cli",
+                                "--logs-dir", agent_log_dir,
                                 "--model", os.environ.get("MODEL_ID", "gemini-2.0-flash")
                             ]
                             result = subprocess.run(
@@ -231,6 +244,7 @@ def start_mcp_server_after_api():
 
 def _run_driver_and_shutdown(
     conductor: Conductor,
+    experiment_log_dir: str,
     problem_filter: str = None,
     agent_to_run: str = None,
     use_external_harness: bool = False,
@@ -240,6 +254,7 @@ def _run_driver_and_shutdown(
     """Run the benchmark driver, stash results, then tell the API to exit."""
     results = driver_loop(
         conductor,
+        experiment_log_dir,
         problem_filter=problem_filter,
         agent_to_run=agent_to_run,
         use_external_harness=use_external_harness,
@@ -252,8 +267,21 @@ def _run_driver_and_shutdown(
 
 
 def main(args):
+    # Generate session ID and log directory
+    session_timestamp = get_current_datetime_formatted()
+    # Ensure logs root exists
+    os.makedirs("logs", exist_ok=True)
+    # Create experiment directory
+    experiment_log_dir = os.path.abspath(f"logs/{session_timestamp}")
+    os.makedirs(experiment_log_dir, exist_ok=True)
+    
+    # Set log file path for init_logger
+    log_file_path = os.path.join(experiment_log_dir, f"sregym_{session_timestamp}.log")
+    os.environ["SREGYM_LOG_FILE"] = log_file_path
+
     # set up the logger
     init_logger()
+    logger.info(f"Experiment logs will be stored in: {experiment_log_dir}")
 
     # Initialize Noise Manager if config is provided or default config exists
     nm = None
@@ -281,7 +309,7 @@ def main(args):
     # Start the driver in the background; it will call request_shutdown() when finished
     driver_thread = threading.Thread(
         target=_run_driver_and_shutdown,
-        args=(conductor, args.problem, args.agent, args.use_external_harness, args.repeat, args.enable_summary),
+        args=(conductor, experiment_log_dir, args.problem, args.agent, args.use_external_harness, args.repeat, args.enable_summary),
         name="driver",
         daemon=True,
     )

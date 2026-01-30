@@ -43,7 +43,9 @@ class KubeCtl:
         if input_data is not None:
             input_data = input_data.encode("utf-8")
         try:
-            out = subprocess.run(command, shell=True, check=True, capture_output=True, input=input_data)  # nosec B602
+            out = subprocess.run(
+                command, shell=True, check=True, capture_output=True, input=input_data, cwd="exp_env"
+            )  # nosec B602
             out.stdout = out.stdout.decode("utf-8")
             out.stderr = out.stderr.decode("utf-8")
             return out
@@ -132,7 +134,9 @@ class KubeCtl:
             dry_run_arguments.extend(["-o", keylist])
 
         dry_run_command = KubeCtl.insert_flags(command, dry_run_arguments)
-        dry_run_result = subprocess.run(dry_run_command, shell=True, capture_output=True, text=True)  # nosec B602
+        dry_run_result = subprocess.run(
+            dry_run_command, shell=True, capture_output=True, text=True, cwd="exp_env"
+        )  # nosec B602
 
         if dry_run_result.returncode == 0:
             if len(dry_run_result.stdout.strip()) == 0:
