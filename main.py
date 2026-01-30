@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import csv
 import logging
+import multiprocessing
 import os
 import sys
 import threading
@@ -12,7 +13,6 @@ from pathlib import Path
 import uvicorn
 from rich.console import Console
 
-from llm_backend.init_backend import get_llm_backend_for_tools
 from logger import init_logger
 from mcp_server.configs.load_all_cfg import mcp_server_cfg
 from mcp_server.sregym_mcp_server import app as mcp_app
@@ -125,7 +125,7 @@ def driver_loop(
             if not use_external_harness:
                 agent_proc = LAUNCHER._procs.get(agent_to_run)
                 if agent_proc:
-                    console.log("⏳ Waiting for agent process to complete...")
+                    console.log(f"⏳ Waiting for agent process to complete...")
                     timeout = 30  # seconds
                     elapsed = 0
                     while elapsed < timeout:
@@ -147,7 +147,7 @@ def driver_loop(
                     snapshot[stage] = outcome
             all_results_for_agent.append(snapshot)
 
-            fieldnames = sorted({key for row in all_results_for_agent for key in row})
+            fieldnames = sorted({key for row in all_results_for_agent for key in row.keys()})
             current_date_time = get_current_datetime_formatted()
             csv_path = f"{current_date_time}_{pid}_{agent_to_run}_results.csv"
             with open(csv_path, "w", newline="") as csvfile:
@@ -199,23 +199,9 @@ def _run_driver_and_shutdown(
     results = driver_loop(
         conductor, problem_filter=problem_filter, agent_to_run=agent_to_run, use_external_harness=use_external_harness
     )
-    main.results = results
+    setattr(main, "results", results)
     # ⬇️ Ask the API server (running in main thread) to stop so we can write CSV
     request_shutdown()
-
-
-def check_llm_health():
-    """Checks if the LLM backend is reachable and credentials are valid."""
-    logger.info("🏥 Checking LLM health...")
-    try:
-        backend = get_llm_backend_for_tools()
-        # verify connection with a simple prompt
-        backend.inference("Hello, this is a health check.")
-        logger.info("✅ LLM health check passed.")
-    except Exception as e:
-        logger.error(f"❌ LLM health check failed: {e}")
-        logger.error("Please check your MODEL_ID and credentials.")
-        sys.exit(1)
 
 
 def main(args):
@@ -242,8 +228,6 @@ def main(args):
             logger.warning(f"⚠️ Failed to initialize noise manager: {e}")
 
     os.environ["MODEL_ID"] = args.model
-
-    check_llm_health()
 
     conductor = Conductor()
 
@@ -293,7 +277,7 @@ def main(args):
                 aggregated.setdefault(agent_name, []).extend(agent_rows)
 
         for agent_name, agent_results in aggregated.items():
-            fieldnames = sorted({key for row in agent_results for key in row})
+            fieldnames = sorted({key for row in agent_results for key in row.keys()})
             current_date_time = get_current_datetime_formatted()
             csv_path = f"{current_date_time}_{agent_name}_ALL_results.csv"
             with open(csv_path, "w", newline="") as csvfile:
