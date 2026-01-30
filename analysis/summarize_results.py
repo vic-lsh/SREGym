@@ -4,16 +4,23 @@ import glob
 import os
 
 
-def summarize_results(target_pattern=None):
+def summarize_results(target_path=None):
     # Determine which files to process
-    if target_pattern:
-        # If the user provided a specific file or pattern, use glob to expand it
-        # (e.g. they might pass "*.csv" or "specific_file.csv")
-        files = glob.glob(target_pattern)
-        print(f"Searching for files matching: '{target_pattern}'")
+    if target_path:
+        if os.path.isdir(target_path):
+            # If user provided a directory, search recursively for results inside
+            print(f"Searching for result files in directory: '{target_path}'")
+            # recursive=True requires the pattern to include ** for that part, but let's just use it on the pattern
+            pattern = os.path.join(target_path, "**", "*_results.csv")
+            files = glob.glob(pattern, recursive=True)
+        else:
+            # User provided a file pattern
+            files = glob.glob(target_path, recursive=True)
+            print(f"Searching for files matching: '{target_path}'")
     else:
-        # Default behavior: find all CSV files ending in _results.csv
-        files = glob.glob("*_results.csv")
+        # Default behavior: find all CSV files recursively in current directory
+        print("Searching for *_results.csv files recursively in current directory...")
+        files = glob.glob("**/*_results.csv", recursive=True)
 
     all_runs = []
 
@@ -23,7 +30,7 @@ def summarize_results(target_pattern=None):
         # Skip aggregate files and output files ONLY IF we are running in default mode.
         # If the user explicitly requested a file (e.g. ALL_results.csv), we should probably read it.
         # However, keeping safety logic is usually good, but let's relax it if the user specified a target.
-        if not target_pattern:
+        if not target_path:
              if "ALL_results" in file_path or "_output.csv" in file_path:
                 continue
 
@@ -138,9 +145,9 @@ def summarize_results(target_pattern=None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Summarize SREGym benchmark results.")
     parser.add_argument(
-        "file",
+        "path",
         nargs="?",
-        help="Optional path or glob pattern to specific CSV file(s) to summarize.",
+        help="Optional path to a log directory (searched recursively) or a specific glob pattern.",
     )
     args = parser.parse_args()
-    summarize_results(args.file)
+    summarize_results(args.path)
