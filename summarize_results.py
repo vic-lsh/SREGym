@@ -1,19 +1,31 @@
+import argparse
 import csv
 import glob
 import os
 
 
-def summarize_results():
-    # Find all CSV files ending in _results.csv
-    files = glob.glob("*_results.csv")
+def summarize_results(target_pattern=None):
+    # Determine which files to process
+    if target_pattern:
+        # If the user provided a specific file or pattern, use glob to expand it
+        # (e.g. they might pass "*.csv" or "specific_file.csv")
+        files = glob.glob(target_pattern)
+        print(f"Searching for files matching: '{target_pattern}'")
+    else:
+        # Default behavior: find all CSV files ending in _results.csv
+        files = glob.glob("*_results.csv")
+
     all_runs = []
 
     print(f"Scanning {len(files)} CSV files for results...")
 
     for file_path in sorted(files):
-        # Skip aggregate files and output files
-        if "ALL_results" in file_path or "_output.csv" in file_path:
-            continue
+        # Skip aggregate files and output files ONLY IF we are running in default mode.
+        # If the user explicitly requested a file (e.g. ALL_results.csv), we should probably read it.
+        # However, keeping safety logic is usually good, but let's relax it if the user specified a target.
+        if not target_pattern:
+             if "ALL_results" in file_path or "_output.csv" in file_path:
+                continue
 
         try:
             with open(file_path, "r", encoding="utf-8") as f:
@@ -124,4 +136,11 @@ def summarize_results():
 
 
 if __name__ == "__main__":
-    summarize_results()
+    parser = argparse.ArgumentParser(description="Summarize SREGym benchmark results.")
+    parser.add_argument(
+        "file",
+        nargs="?",
+        help="Optional path or glob pattern to specific CSV file(s) to summarize.",
+    )
+    args = parser.parse_args()
+    summarize_results(args.file)
