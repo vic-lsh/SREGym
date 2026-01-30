@@ -254,6 +254,10 @@ class CodexAgent:
 
             logger.info(f"Executing command: {' '.join(command)}")
 
+            # Ensure exp_env directory exists
+            exp_env_dir = Path("exp_env")
+            exp_env_dir.mkdir(exist_ok=True)
+
             # Set environment variables
             env = os.environ.copy()
             env["CODEX_HOME"] = str(self.codex_home)
@@ -268,6 +272,7 @@ class CodexAgent:
                     env=env,
                     text=True,
                     bufsize=1,
+                    cwd=exp_env_dir,
                 )
 
                 # Stream output to both file and logger

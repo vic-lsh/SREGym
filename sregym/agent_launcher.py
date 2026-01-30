@@ -49,6 +49,9 @@ class AgentLauncher:
         if extra_args:
             command += f" {extra_args}"
 
+        # Ensure exp_env directory exists
+        os.makedirs("exp_env", exist_ok=True)
+
         proc = subprocess.Popen(
             command,
             shell=True,
