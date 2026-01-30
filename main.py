@@ -38,6 +38,7 @@ def driver_loop(
     agent_to_run: str = None,
     use_external_harness: bool = False,
     repeat: int = 1,
+    enable_summary: bool = False,
 ):
     """
     Deploy each problem and wait for HTTP grading via POST /submit.
@@ -48,6 +49,7 @@ def driver_loop(
         problem_filter: Optional problem ID to run. If specified, only this problem will be run.
         agent_to_run: Agent name to run (required unless use_external_harness is True).
         use_external_harness: If True, inject fault and exit without running evaluation logic.
+        enable_summary: If True, pass --enable-summary to the agent.
     """
 
     async def driver():
@@ -113,7 +115,8 @@ def driver_loop(
                 if not use_external_harness:
                     reg = get_agent(agent_to_run, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
                     if reg:
-                        await LAUNCHER.ensure_started(reg)
+                        extra_args = "--enable-summary" if enable_summary else ""
+                        await LAUNCHER.ensure_started(reg, extra_args=extra_args)
 
                 # Poll until grading completes or agent exits
                 while conductor.submission_stage != "done":
@@ -206,6 +209,7 @@ def _run_driver_and_shutdown(
     agent_to_run: str = None,
     use_external_harness: bool = False,
     repeat: int = 1,
+    enable_summary: bool = False,
 ):
     """Run the benchmark driver, stash results, then tell the API to exit."""
     results = driver_loop(
@@ -214,6 +218,7 @@ def _run_driver_and_shutdown(
         agent_to_run=agent_to_run,
         use_external_harness=use_external_harness,
         repeat=repeat,
+        enable_summary=enable_summary,
     )
     setattr(main, "results", results)
     # ⬇️ Ask the API server (running in main thread) to stop so we can write CSV
@@ -250,7 +255,7 @@ def main(args):
     # Start the driver in the background; it will call request_shutdown() when finished
     driver_thread = threading.Thread(
         target=_run_driver_and_shutdown,
-        args=(conductor, args.problem, args.agent, args.use_external_harness, args.repeat),
+        args=(conductor, args.problem, args.agent, args.use_external_harness, args.repeat, args.enable_summary),
         name="driver",
         daemon=True,
     )
@@ -332,6 +337,11 @@ if __name__ == "__main__":
         type=int,
         default=1,
         help="Number of times to repeat each problem",
+    )
+    parser.add_argument(
+        "--enable-summary",
+        action="store_true",
+        help="Enable summarization of agent runs (only supported by gemini_cli)",
     )
     args = parser.parse_args()
 

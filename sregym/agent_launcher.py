@@ -27,7 +27,7 @@ class AgentLauncher:
         """
         self._agent_kubeconfig_path = kubeconfig_path
 
-    async def ensure_started(self, reg: AgentRegistration) -> Optional[AgentProcess]:
+    async def ensure_started(self, reg: AgentRegistration, extra_args: str = "") -> Optional[AgentProcess]:
         if not reg or not reg.kickoff_command:
             return None
         existing = self._procs.get(reg.name)
@@ -45,8 +45,12 @@ class AgentLauncher:
         if self._agent_kubeconfig_path:
             env["KUBECONFIG"] = self._agent_kubeconfig_path
 
+        command = reg.kickoff_command
+        if extra_args:
+            command += f" {extra_args}"
+
         proc = subprocess.Popen(
-            reg.kickoff_command,
+            command,
             shell=True,
             cwd=reg.kickoff_workdir or os.getcwd(),
             env=env,

@@ -27,6 +27,10 @@ def set_param(params, config, field, default_value, required=False):
 
     if value_or_env is not None and isinstance(value_or_env, str) and value_or_env.startswith("$"):
         key = value_or_env[1:]
+        if key == "GEMINI_API_KEY" and key not in os.environ and "GOOGLE_API_KEY" in os.environ:
+            print(f"Notice: {key} not found, falling back to GOOGLE_API_KEY.")
+            key = "GOOGLE_API_KEY"
+
         if key in os.environ:
             value_to_set = os.environ[key]
         else:
