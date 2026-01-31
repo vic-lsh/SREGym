@@ -2,12 +2,15 @@ import argparse
 import asyncio
 import csv
 import logging
-import multiprocessing
 import os
+import secrets
+import shutil
 import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -16,12 +19,15 @@ from rich.console import Console
 
 from logger import init_logger
 from mcp_server.configs.load_all_cfg import mcp_server_cfg
-from mcp_server.sregym_mcp_server import app as mcp_app
+from mcp_server.configs.mcp_tool_cfg import McpToolCfg
+from mcp_server.kubectl_server_helper.kubectl import set_exp_env_dir
+from mcp_server.sregym_mcp_server import create_mcp_app
 from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents
 from sregym.conductor.conductor import Conductor
-from sregym.conductor.conductor_api import request_shutdown, run_api
+from sregym.conductor.conductor_api import ApiServer
 from sregym.conductor.constants import StartProblemResult
+from sregym.conductor.problems.registry import ProblemRegistry
 
 LAUNCHER = AgentLauncher()
 logger = logging.getLogger(__name__)
@@ -41,6 +47,11 @@ def driver_loop(
     use_external_harness: bool = False,
     repeat: int = 1,
     enable_summary: bool = False,
+    launcher: AgentLauncher | None = None,
+    run_log_dir: str | None = None,
+    run_id: str | None = None,
+    mcp_tool_cfg: McpToolCfg | None = None,
+    agent_env: dict | None = None,
 ):
     """
     Deploy each problem and wait for HTTP grading via POST /submit.
@@ -73,7 +84,7 @@ def driver_loop(
             # Start K8s API proxy to hide chaos engineering namespaces from the agent
             console.log("🔒 Starting Kubernetes API proxy to hide chaos namespaces...")
             conductor.start_k8s_proxy()
-            LAUNCHER.set_agent_kubeconfig(conductor.get_agent_kubeconfig_path())
+            (launcher or LAUNCHER).set_agent_kubeconfig(conductor.get_agent_kubeconfig_path())
 
         all_results_for_agent = []
         # session_timestamp = get_current_datetime_formatted()
@@ -110,13 +121,23 @@ def driver_loop(
                     console.log(f"⏭️  Skipping problem '{pid}': requires Khaos but running on emulated cluster")
                     continue
 
+                if mcp_tool_cfg is not None:
+                    prometheus_port = getattr(conductor.prometheus, "port", None)
+                    if prometheus_port:
+                        mcp_tool_cfg.prometheus_url = f"http://localhost:{prometheus_port}"
+                    trace_api = getattr(conductor.app, "trace_api", None)
+                    if trace_api is not None:
+                        mcp_tool_cfg.jaeger_base_url = getattr(trace_api, "base_url", None)
+
                 # If using external harness, fault is injected - exit now
                 if use_external_harness:
                     console.log(f"✅ Fault injected for problem '{pid}'. Exiting for external harness.")
                     return []
 
                 # Define agent log directory
-                agent_log_dir = os.path.join(experiment_log_dir, agent_to_run)
+                agent_log_root = run_log_dir or experiment_log_dir
+                agent_log_dir = os.path.join(agent_log_root, agent_to_run)
+                os.makedirs(agent_log_dir, exist_ok=True)
 
                 if not use_external_harness:
                     reg = get_agent(agent_to_run, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
@@ -129,12 +150,14 @@ def driver_loop(
                         if enable_summary:
                              extra_args += " --enable-summary"
                              
-                        await LAUNCHER.ensure_started(reg, extra_args=extra_args.strip())
+                        await (launcher or LAUNCHER).ensure_started(
+                            reg, extra_args=extra_args.strip(), extra_env=agent_env
+                        )
 
                 # Poll until grading completes or agent exits
                 while conductor.submission_stage != "done":
                     # Check if agent process has exited
-                    agent_proc = LAUNCHER._procs.get(agent_to_run)
+                    agent_proc = (launcher or LAUNCHER)._procs.get(agent_to_run)
                     if agent_proc:
                         agent_proc.proc.poll()
                         if agent_proc.proc.returncode is not None:
@@ -147,7 +170,7 @@ def driver_loop(
                 # Wait for agent process to complete naturally before cleanup
                 # This allows the agent to finish saving trajectories and other cleanup tasks
                 if not use_external_harness:
-                    agent_proc = LAUNCHER._procs.get(agent_to_run)
+                    agent_proc = (launcher or LAUNCHER)._procs.get(agent_to_run)
                     if agent_proc:
                         console.log(f"⏳ Waiting for agent process to complete...")
                         timeout = 30  # seconds
@@ -175,7 +198,10 @@ def driver_loop(
                 current_date_time = get_current_datetime_formatted()
                 
                 # Write results to experiment_log_dir
-                csv_path = os.path.join(experiment_log_dir, f"{current_date_time}_{pid}_{agent_to_run}_results.csv")
+                run_suffix = f"_{run_id}" if run_id else ""
+                csv_path = os.path.join(
+                    experiment_log_dir, f"{current_date_time}_{pid}_{agent_to_run}{run_suffix}_results.csv"
+                )
                 with open(csv_path, "w", newline="") as csvfile:
                     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                     writer.writeheader()
@@ -184,7 +210,7 @@ def driver_loop(
 
                 # Cleanup agent process so a fresh one can be started for the next problem
                 if not use_external_harness:
-                    LAUNCHER.cleanup_agent(agent_to_run)
+                    (launcher or LAUNCHER).cleanup_agent(agent_to_run)
                     console.log(f"🧹 Cleaned up agent process for {agent_to_run}")
 
                     # Run summarization if enabled (specifically for gemini_cli)
@@ -221,49 +247,111 @@ def driver_loop(
     return asyncio.run(driver())
 
 
-def start_mcp_server_after_api():
-    # Small delay so the main API binds first (avoid port races if clients hit MCP immediately)
-    time.sleep(1.0)
-
-    host = "0.0.0.0" if mcp_server_cfg.expose_server else "127.0.0.1"
-    port = mcp_server_cfg.mcp_server_port
-
-    config = uvicorn.Config(
-        app=mcp_app,
-        host=host,
-        port=port,
-        log_level="info",
-    )
-    # IMPORTANT: we're not in the main thread
-    config.install_signal_handlers = False
-
-    server = uvicorn.Server(config)
-    # This call blocks *this* thread; it's fine because we're daemonizing the thread
-    server.run()
+@dataclass
+class RunContext:
+    problem_id: str
+    run_id: str
+    api_port: int
+    mcp_port: int
+    proxy_port: int
+    log_dir: str
+    namespace_suffix: str
 
 
-def _run_driver_and_shutdown(
-    conductor: Conductor,
-    experiment_log_dir: str,
-    problem_filter: str = None,
-    agent_to_run: str = None,
-    use_external_harness: bool = False,
-    repeat: int = 1,
-    enable_summary: bool = False,
-):
-    """Run the benchmark driver, stash results, then tell the API to exit."""
-    results = driver_loop(
-        conductor,
-        experiment_log_dir,
-        problem_filter=problem_filter,
-        agent_to_run=agent_to_run,
-        use_external_harness=use_external_harness,
-        repeat=repeat,
-        enable_summary=enable_summary,
-    )
-    setattr(main, "results", results)
-    # ⬇️ Ask the API server (running in main thread) to stop so we can write CSV
-    request_shutdown()
+class McpServer:
+    def __init__(self, app, host: str, port: int, exp_env_dir: str | None = None):
+        self.app = app
+        self.host = host
+        self.port = port
+        self.exp_env_dir = exp_env_dir
+        self._shutdown_event = threading.Event()
+        self._server = None
+
+    def run(self):
+        if self.exp_env_dir:
+            set_exp_env_dir(self.exp_env_dir)
+        config = uvicorn.Config(app=self.app, host=self.host, port=self.port, log_level="info")
+        config.install_signal_handlers = False
+        server = uvicorn.Server(config)
+        self._server = server
+
+        def _watch():
+            self._shutdown_event.wait()
+            server.should_exit = True
+
+        threading.Thread(target=_watch, name=f"mcp-shutdown-watcher-{self.port}", daemon=True).start()
+        try:
+            server.run()
+        finally:
+            self._shutdown_event.clear()
+            self._server = None
+
+    def shutdown(self):
+        self._shutdown_event.set()
+        if self._server is not None:
+            self._server.should_exit = True
+
+
+def _run_problem(ctx: RunContext, args, experiment_log_dir: str):
+    run_log_dir = ctx.log_dir
+    os.makedirs(run_log_dir, exist_ok=True)
+
+    exp_env_dir = os.path.join("exp_env", secrets.token_hex(4))
+    os.makedirs(exp_env_dir, exist_ok=True)
+
+    conductor = Conductor(namespace_suffix=ctx.namespace_suffix, k8s_proxy_port=ctx.proxy_port)
+    launcher = AgentLauncher(clean_exp_env=False)
+
+    api_host = os.getenv("API_HOSTNAME", "0.0.0.0")
+    api_server = ApiServer(conductor, host=api_host, port=ctx.api_port)
+    api_thread = threading.Thread(target=api_server.run, name=f"api-{ctx.run_id}", daemon=True)
+    api_thread.start()
+
+    mcp_server = None
+    mcp_thread = None
+    mcp_cfg = None
+    if not args.use_external_harness:
+        mcp_cfg = McpToolCfg(benchmark_submit_url=f"http://localhost:{ctx.api_port}/submit")
+        mcp_app = create_mcp_app(mcp_cfg)
+        mcp_host = "0.0.0.0" if mcp_server_cfg.expose_server else "127.0.0.1"
+        mcp_server = McpServer(mcp_app, host=mcp_host, port=ctx.mcp_port, exp_env_dir=exp_env_dir)
+        mcp_thread = threading.Thread(target=mcp_server.run, name=f"mcp-{ctx.run_id}", daemon=True)
+        mcp_thread.start()
+
+    agent_env = {
+        "API_PORT": str(ctx.api_port),
+        "MCP_SERVER_PORT": str(ctx.mcp_port),
+        "EXP_ENV_DIR": exp_env_dir,
+    }
+
+    try:
+        results = driver_loop(
+            conductor,
+            experiment_log_dir,
+            problem_filter=ctx.problem_id,
+            agent_to_run=args.agent,
+            use_external_harness=args.use_external_harness,
+            repeat=args.repeat,
+            enable_summary=args.enable_summary,
+            launcher=launcher,
+            run_log_dir=run_log_dir,
+            run_id=ctx.run_id,
+            mcp_tool_cfg=mcp_cfg,
+            agent_env=agent_env,
+        )
+        return results
+    finally:
+        if mcp_server:
+            mcp_server.shutdown()
+        if api_server:
+            api_server.shutdown()
+        if mcp_thread:
+            mcp_thread.join(timeout=5)
+        api_thread.join(timeout=5)
+        try:
+            shutil.rmtree(exp_env_dir)
+        except Exception:
+            pass
 
 
 def main(args):
@@ -302,48 +390,56 @@ def main(args):
         except Exception as e:
             logger.warning(f"⚠️ Failed to initialize noise manager: {e}")
 
+    if nm and args.parallel > 1:
+        logger.warning("⚠️ Noise manager is global; parallel runs may interfere with each other.")
+
     os.environ["MODEL_ID"] = args.model
 
-    conductor = Conductor()
+    registry = ProblemRegistry()
+    problem_ids = registry.get_problem_ids()
+    if args.problem:
+        if args.problem not in problem_ids:
+            raise RuntimeError(f"Problem '{args.problem}' not found in registry.")
+        problem_ids = [args.problem]
 
-    # Start the driver in the background; it will call request_shutdown() when finished
-    driver_thread = threading.Thread(
-        target=_run_driver_and_shutdown,
-        args=(conductor, experiment_log_dir, args.problem, args.agent, args.use_external_harness, args.repeat, args.enable_summary),
-        name="driver",
-        daemon=True,
-    )
-    driver_thread.start()
+    if not problem_ids:
+        logger.warning("⚠️ No problems to run.")
+        return []
 
-    # Start the MCP server in the background (lets the main thread run the Conductor API)
-    if not args.use_external_harness:  # No need for MCP if using external harness
-        mcp_thread = threading.Thread(
-            target=start_mcp_server_after_api,
-            name="mcp-server",
-            daemon=True,
+    base_api_port = int(os.getenv("API_PORT", "8000"))
+    base_mcp_port = int(os.getenv("MCP_SERVER_PORT", "9954"))
+    base_proxy_port = int(os.getenv("K8S_PROXY_PORT", "16443"))
+
+    run_contexts: list[RunContext] = []
+    for idx, pid in enumerate(problem_ids):
+        run_id = f"run{idx}"
+        run_log_dir = os.path.join(experiment_log_dir, f"{pid}_{run_id}")
+        run_contexts.append(
+            RunContext(
+                problem_id=pid,
+                run_id=run_id,
+                api_port=base_api_port + idx,
+                mcp_port=base_mcp_port + idx,
+                proxy_port=base_proxy_port + idx,
+                log_dir=run_log_dir,
+                namespace_suffix=run_id,
+            )
         )
-        mcp_thread.start()
 
-    # Start the Conductor HTTP API in the MAIN thread (blocking)
+    max_workers = max(1, args.parallel)
+    results = []
     try:
-        run_api(conductor)
-    except KeyboardInterrupt:
-        # If interrupted, still try to shut down cleanly
-        request_shutdown()
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_run_problem, ctx, args, experiment_log_dir) for ctx in run_contexts]
+            for future in as_completed(futures):
+                results.append(future.result())
     finally:
-        # Stop noise manager if it was initialized
         if nm:
             try:
                 logger.info("Stopping noise manager...")
                 nm.stop()
             except Exception as e:
                 logger.error(f"⚠️ Error stopping noise manager: {e}")
-
-        # Give driver a moment to finish setting results
-        driver_thread.join(timeout=5)
-
-    # When API shuts down, collect results from driver
-    results = getattr(main, "results", [])
 
     if not results:
         logger.warning("⚠️ No results to write.")
@@ -391,6 +487,12 @@ if __name__ == "__main__":
         type=int,
         default=1,
         help="Number of times to repeat each problem",
+    )
+    parser.add_argument(
+        "--parallel",
+        type=int,
+        default=1,
+        help="Maximum number of problems to run in parallel",
     )
     parser.add_argument(
         "--enable-summary",

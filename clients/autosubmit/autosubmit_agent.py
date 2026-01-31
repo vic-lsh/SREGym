@@ -9,7 +9,8 @@ server_url = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8000"
 def automatic_submit():
     # Ensure exp_env directory exists
     import os
-    os.makedirs("exp_env", exist_ok=True)
+    exp_env_dir = os.environ.get("EXP_ENV_DIR", "exp_env")
+    os.makedirs(exp_env_dir, exist_ok=True)
 
     ctr = 0
     while ctr < 10000:
@@ -26,7 +27,7 @@ def automatic_submit():
             ],
             capture_output=True,
             text=True,
-            cwd="exp_env",
+            cwd=exp_env_dir,
         )
         sleep(60)
         ctr += 1

@@ -4,6 +4,7 @@
 
 # ruff: noqa: UP007 UP006 UP035
 
+import os
 import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -138,11 +139,12 @@ def flake8(file_path: str) -> str:
         return ""
     cmd = "flake8 --isolated --select=F821,F822,F831,E111,E112,E113,E999,E902 {file_path}"
     # don't use capture_output because it's not compatible with python3.6
+    exp_env_dir = os.environ.get("EXP_ENV_DIR", "exp_env")
     out = subprocess.run(
         cmd.format(file_path=file_path),
         shell=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        cwd="exp_env",
+        cwd=exp_env_dir,
     )
     return out.stdout.decode()

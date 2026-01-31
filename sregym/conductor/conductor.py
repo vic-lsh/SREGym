@@ -24,7 +24,7 @@ from sregym.service.telemetry.prometheus import Prometheus
 
 
 class Conductor:
-    def __init__(self):
+    def __init__(self, namespace_suffix: str | None = None, k8s_proxy_port: int = 16443):
         # core services
         self.problems = ProblemRegistry()
         self.kubectl = KubeCtl()
@@ -41,7 +41,7 @@ class Conductor:
         # Kubernetes API proxy to hide chaos engineering namespaces from agents
         self.k8s_proxy = KubernetesAPIProxy(
             hidden_namespaces={"chaos-mesh", "khaos"},
-            listen_port=16443,
+            listen_port=k8s_proxy_port,
         )
         self._agent_kubeconfig_path: str | None = None
 
@@ -65,6 +65,25 @@ class Conductor:
         self.current_stage_index: int = 0
         self.waiting_for_agent: bool = False
         self.fault_injected: bool = False
+        self.namespace_suffix = namespace_suffix
+
+    def _apply_namespace_suffix(self):
+        if not self.namespace_suffix or not self.app:
+            return
+
+        base_namespace = self.app.namespace
+        suffix = self.namespace_suffix
+        sep = "-"
+        max_len = 63
+        max_base_len = max_len - len(sep) - len(suffix)
+        if max_base_len < 1:
+            trimmed_suffix = suffix[-(max_len - len(sep)) :]
+            new_namespace = f"{sep}{trimmed_suffix}"
+        else:
+            new_namespace = f"{base_namespace[:max_base_len]}{sep}{suffix}"
+        self.app.namespace = new_namespace
+        if isinstance(getattr(self.app, "helm_configs", None), dict):
+            self.app.helm_configs["namespace"] = new_namespace
 
     def register_agent(self, name="agent"):
         self.agent_name = name
@@ -306,6 +325,7 @@ class Conductor:
         """
         self.problem = self.problems.get_problem_instance(self.problem_id)
         self.app = self.problem.app
+        self._apply_namespace_suffix()
         self.detection_oracle = DetectionOracle(self.problem)
         self.results = {}
 

@@ -1,6 +1,8 @@
 """Interface to K8S controller service."""
 
+import contextvars
 import logging
+import os
 import re
 import shlex
 import subprocess  # nosec B404
@@ -14,6 +16,16 @@ from mcp_server.kubectl_server_helper.utils import parse_text
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+_exp_env_dir = contextvars.ContextVar("exp_env_dir", default=os.environ.get("EXP_ENV_DIR", "exp_env"))
+
+
+def set_exp_env_dir(path: str):
+    _exp_env_dir.set(path)
+
+
+def get_exp_env_dir() -> str:
+    return _exp_env_dir.get()
 
 
 class DryRunStatus(Enum):
@@ -43,8 +55,9 @@ class KubeCtl:
         if input_data is not None:
             input_data = input_data.encode("utf-8")
         try:
+            exp_env_dir = get_exp_env_dir()
             out = subprocess.run(
-                command, shell=True, check=True, capture_output=True, input=input_data, cwd="exp_env"
+                command, shell=True, check=True, capture_output=True, input=input_data, cwd=exp_env_dir
             )  # nosec B602
             out.stdout = out.stdout.decode("utf-8")
             out.stderr = out.stderr.decode("utf-8")
@@ -134,8 +147,9 @@ class KubeCtl:
             dry_run_arguments.extend(["-o", keylist])
 
         dry_run_command = KubeCtl.insert_flags(command, dry_run_arguments)
+        exp_env_dir = get_exp_env_dir()
         dry_run_result = subprocess.run(
-            dry_run_command, shell=True, capture_output=True, text=True, cwd="exp_env"
+            dry_run_command, shell=True, capture_output=True, text=True, cwd=exp_env_dir
         )  # nosec B602
 
         if dry_run_result.returncode == 0:

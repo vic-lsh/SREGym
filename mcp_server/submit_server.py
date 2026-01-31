@@ -126,4 +126,115 @@ async def localization(
     except Exception as e:
         logger.error(f"[localization_mcp] Exception occurred: {e}")
         logger.error(traceback.format_exc())
-        return {"uid": f"Exception: {e}"}
+    return {"uid": f"Exception: {e}"}
+
+
+def _default_submit_url() -> str:
+    return LanggraphToolConfig().benchmark_submit_url
+
+
+def create_submit_mcp(benchmark_submit_url: str | None = None, tool_cfg=None) -> FastMCP:
+    submit_mcp = FastMCP("Submission MCP Server")
+
+    @submit_mcp.tool(name="submit")
+    def submit(ans: str) -> dict[str, str]:
+        logger.info("[submit_mcp] submit mcp called")
+        url = benchmark_submit_url
+        if not url and tool_cfg is not None:
+            url = getattr(tool_cfg, "benchmark_submit_url", None)
+        if not url:
+            url = _default_submit_url()
+        headers = {"Content-Type": "application/json"}
+        payload = {"solution": f"{ans}"}
+
+        try:
+            response = requests.post(url, json=payload, headers=headers)
+            logger.info(f"[submit_mcp] Response status: {response.status_code}, text: {response.text}")
+            return {"status": str(response.status_code), "text": str(response.text)}
+
+        except Exception as e:
+            logger.error(f"[submit_mcp] HTTP submission failed: {e}")
+            return {"status": "N/A", "text": f"[submit_mcp] HTTP submission failed: {e}"}
+
+    @submit_mcp.tool(name="localization")
+    async def localization(
+        resource_type: str,
+        resource_name: str,
+        namespace: str,
+    ) -> dict[str, str]:
+        config.load_kube_config()
+        try:
+            cmd = [
+                "kubectl",
+                "get",
+                resource_type,
+                resource_name,
+                "-n",
+                namespace,
+                "-o",
+                "jsonpath={.metadata.uid}",
+            ]
+            logger.info(f"[localization_mcp] Running command: {' '.join(cmd)}")
+            if resource_type.lower() == "pod":
+                api = client.CoreV1Api()
+                obj = api.read_namespaced_pod(name=resource_name, namespace=namespace)
+            elif resource_type.lower() == "service":
+                api = client.CoreV1Api()
+                obj = api.read_namespaced_service(name=resource_name, namespace=namespace)
+            elif resource_type.lower() == "deployment":
+                api = client.AppsV1Api()
+                obj = api.read_namespaced_deployment(name=resource_name, namespace=namespace)
+            elif resource_type.lower() == "statefulset":
+                api = client.AppsV1Api()
+                obj = api.read_namespaced_stateful_set(name=resource_name, namespace=namespace)
+            elif resource_type.lower() == "persistentvolumeclaim":
+                api = client.CoreV1Api()
+                obj = api.read_namespaced_persistent_volume_claim(name=resource_name, namespace=namespace)
+            elif resource_type.lower() == "persistentvolume":
+                api = client.CoreV1Api()
+                obj = api.read_persistent_volume(name=resource_name)
+            elif resource_type.lower() == "configmap":
+                api = client.CoreV1Api()
+                obj = api.read_namespaced_config_map(name=resource_name, namespace=namespace)
+            elif resource_type.lower() == "replicaset":
+                api = client.AppsV1Api()
+                obj = api.read_namespaced_replica_set(name=resource_name, namespace=namespace)
+            elif resource_type.lower() == "memoryquota":
+                api = client.CoreV1Api()
+                obj = api.read_namespaced_resource_quota(name=resource_name, namespace=namespace)
+            elif resource_type.lower() == "ingress":
+                api = client.NetworkingV1Api()
+                obj = api.read_namespaced_ingress(name=resource_name, namespace=namespace)
+            elif resource_type.lower() == "networkpolicy":
+                api = client.NetworkingV1Api()
+                obj = api.read_namespaced_network_policy(name=resource_name, namespace=namespace)
+            elif resource_type.lower() == "tidbcluster":
+                api = client.CustomObjectsApi()
+                obj = api.read_namespaced_custom_object(
+                    group="pingcap.com", version="v1alpha1", namespace=namespace, plural="tidbclusters", name=resource_name
+                )
+            elif resource_type.lower() == "job":
+                api = client.BatchV1Api()
+                obj = api.read_namespaced_job(name=resource_name, namespace=namespace)
+            elif resource_type.lower() == "daemonset":
+                api = client.AppsV1Api()
+                obj = api.read_namespaced_daemon_set(name=resource_name, namespace=namespace)
+            elif resource_type.lower() == "clusterrole":
+                api = client.RbacAuthorizationV1Api()
+                obj = api.read_cluster_role(name=resource_name)
+            elif resource_type.lower() == "clusterrolebinding":
+                api = client.RbacAuthorizationV1Api()
+                obj = api.read_cluster_role_binding(name=resource_name)
+            else:
+                err_msg = f"Unsupported resource type: {resource_type}"
+                logger.error(f"[localization_mcp] {err_msg}")
+                return {"uid": f"Error: {err_msg}"}
+            uid = obj.metadata.uid
+            logger.info(f"[localization_mcp] Retrieved UID using Kubernetes client: {uid}")
+            return {"uid": uid}
+        except Exception as e:
+            logger.error(f"[localization_mcp] Exception occurred: {e}")
+            logger.error(traceback.format_exc())
+            return {"uid": f"Exception: {e}"}
+
+    return submit_mcp

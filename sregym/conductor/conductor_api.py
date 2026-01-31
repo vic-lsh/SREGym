@@ -41,6 +41,59 @@ class SubmitRequest(BaseModel):
     solution: str
 
 
+def create_api_app(conductor):
+    api_app = FastAPI()
+
+    @api_app.post("/submit")
+    async def submit_solution(req: SubmitRequest):
+        allowed = {"diagnosis", "mitigation"}
+        if conductor is None or conductor.submission_stage not in allowed:
+            logger.error(f"Cannot submit at stage: {conductor.submission_stage!r}")
+            raise HTTPException(status_code=400, detail=f"Cannot submit at stage: {conductor.submission_stage!r}")
+
+        # Use repr() to properly escape special characters in the solution string
+        wrapped = f"```\nsubmit({repr(req.solution)})\n```"
+        logger.debug(f"Wrapped submit content: {wrapped}")
+
+        try:
+            results = await conductor.submit(wrapped)
+        except Exception as e:
+            logger.error(f"Grading error: {e}")
+            raise HTTPException(status_code=400, detail=f"Grading error: {e}")
+
+        logger.debug(f"API returns Grading results by now: {results}")
+        return results
+
+    @api_app.get("/status")
+    async def get_status():
+        if conductor is None:
+            logger.error("No problem has been started")
+            raise HTTPException(status_code=400, detail="No problem has been started")
+        stage = conductor.submission_stage
+        logger.debug(f"API returns Current stage: {stage}")
+        return {"stage": stage}
+
+    @api_app.get("/get_app")
+    async def get_app():
+        if conductor is None:
+            logger.error("No problem has been started")
+            raise HTTPException(status_code=400, detail="No problem has been started")
+        app_inst = conductor.app
+        logger.debug(f"API returns App instance: {app_inst}")
+        return {"app_name": app_inst.app_name, "namespace": app_inst.namespace, "descriptions": str(app_inst.description)}
+
+    @api_app.get("/get_problem")
+    async def get_problem():
+        if conductor is None:
+            logger.error("No problem has been started")
+            raise HTTPException(status_code=400, detail="No problem has been started")
+        problem_id = conductor.problem_id
+        logger.debug(f"API returns Problem ID: {problem_id}")
+        return {"problem_id": problem_id}
+
+    return api_app
+
+
 @app.post("/submit")
 async def submit_solution(req: SubmitRequest):
     allowed = {"diagnosis", "mitigation"}
@@ -90,6 +143,40 @@ async def get_problem():
     problem_id = _conductor.problem_id
     logger.debug(f"API returns Problem ID: {problem_id}")
     return {"problem_id": problem_id}
+
+
+class ApiServer:
+    def __init__(self, conductor, host: str | None = None, port: int | None = None):
+        self.conductor = conductor
+        self.host = host or os.getenv("API_HOSTNAME", "0.0.0.0")
+        self.port = port or int(os.getenv("API_PORT", "8000"))
+        self.app = create_api_app(conductor)
+        self._shutdown_event = threading.Event()
+        self._server: Optional[Server] = None
+
+    def run(self):
+        logger.debug(f"API server starting on http://{self.host}:{self.port}")
+        config = Config(app=self.app, host=self.host, port=self.port, log_level="info")
+        config.install_signal_handlers = False
+        server = Server(config)
+        self._server = server
+
+        def _watch():
+            self._shutdown_event.wait()
+            logger.debug("API server shutdown event received")
+            server.should_exit = True
+
+        threading.Thread(target=_watch, name=f"api-shutdown-watcher-{self.port}", daemon=True).start()
+        try:
+            server.run()
+        finally:
+            self._shutdown_event.clear()
+            self._server = None
+
+    def shutdown(self):
+        self._shutdown_event.set()
+        if self._server is not None:
+            self._server.should_exit = True
 
 
 def run_api(conductor):

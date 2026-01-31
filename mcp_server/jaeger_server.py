@@ -202,3 +202,174 @@ def get_dependency_graph(ctx: Context, last_n_minutes: int = 30) -> str:
     result = noise_manager.on_tool_result("jaeger", "get_dependency_graph", result, ssid)
     
     return result
+
+
+def create_jaeger_mcp(jaeger_base_url: str | None = None, tool_cfg=None) -> FastMCP:
+    jaeger_mcp = FastMCP("Jaeger MCP Server")
+
+    @jaeger_mcp.tool(name="get_services")
+    def get_services(ctx: Context) -> str:
+        logger.debug("[ob_mcp] get_services called, getting jaeger services")
+
+        # Noise Injection Hook (Pre-execution)
+        noise_manager = get_noise_manager()
+        ssid = None
+        try:
+            ssid = ctx.request_context.request.headers.get("sregym_ssid")
+        except:
+            pass
+        noise_manager.on_tool_call("jaeger", "get_services", ssid)
+
+        url_base = jaeger_base_url
+        if not url_base and tool_cfg is not None:
+            url_base = getattr(tool_cfg, "jaeger_base_url", None)
+        if not url_base:
+            url_base = os.environ.get("JAEGER_BASE_URL", None)
+        if url_base is None:
+            err_msg = "JAEGER_BASE_URL environment variable is not set!"
+            logger.error(err_msg)
+            raise RuntimeError(err_msg)
+        jaeger_client = ObservabilityClient(url_base)
+        try:
+            url = f"{url_base}/api/services"
+            response = jaeger_client.make_request("GET", url)
+            logger.debug(f"[ob_mcp] get_services status code: {response.status_code}")
+            logger.debug(f"[ob_mcp] get_services result: {response}")
+            logger.debug(f"[ob_mcp] result: {response.json()}")
+            services = str(response.json()["data"])
+            result = services if services else "None"
+
+            # Noise Injection Hook (Post-execution)
+            result = noise_manager.on_tool_result("jaeger", "get_services", result, ssid)
+
+            return result
+        except Exception as e:
+            err_str = f"[ob_mcp] Error querying get_services: {str(e)}"
+            logger.error(err_str)
+            return err_str
+
+    @jaeger_mcp.tool(name="get_operations")
+    def get_operations(service: str, ctx: Context) -> str:
+        logger.debug("[ob_mcp] get_operations called, getting jaeger operations")
+
+        # Noise Injection Hook (Pre-execution)
+        noise_manager = get_noise_manager()
+        ssid = None
+        try:
+            ssid = ctx.request_context.request.headers.get("sregym_ssid")
+        except:
+            pass
+        noise_manager.on_tool_call("jaeger", f"get_operations {service}", ssid)
+
+        url_base = jaeger_base_url
+        if not url_base and tool_cfg is not None:
+            url_base = getattr(tool_cfg, "jaeger_base_url", None)
+        if not url_base:
+            url_base = os.environ.get("JAEGER_BASE_URL", None)
+        if url_base is None:
+            err_msg = "JAEGER_BASE_URL environment variable is not set!"
+            logger.error(err_msg)
+            raise RuntimeError(err_msg)
+        jaeger_client = ObservabilityClient(url_base)
+        try:
+            url = f"{url_base}/api/operations"
+            params = {"service": service}
+            response = jaeger_client.make_request("GET", url, params=params)
+            logger.debug(f"[ob_mcp] get_operations: {response.status_code}")
+            operations = str(response.json()["data"])
+            result = operations if operations else "None"
+
+            # Noise Injection Hook (Post-execution)
+            result = noise_manager.on_tool_result("jaeger", f"get_operations {service}", result, ssid)
+
+            return result
+        except Exception as e:
+            err_str = f"[ob_mcp] Error querying get_operations: {str(e)}"
+            logger.error(err_str)
+            return err_str
+
+    @jaeger_mcp.tool(name="get_traces")
+    def get_traces(service: str, last_n_minutes: int, ctx: Context) -> str:
+        logger.debug("[ob_mcp] get_traces called, getting jaeger traces")
+
+        # Noise Injection Hook (Pre-execution)
+        noise_manager = get_noise_manager()
+        ssid = None
+        try:
+            ssid = ctx.request_context.request.headers.get("sregym_ssid")
+        except:
+            pass
+        noise_manager.on_tool_call("jaeger", f"get_traces {service}", ssid)
+
+        url_base = jaeger_base_url
+        if not url_base and tool_cfg is not None:
+            url_base = getattr(tool_cfg, "jaeger_base_url", None)
+        if not url_base:
+            url_base = os.environ.get("JAEGER_BASE_URL", None)
+        if url_base is None:
+            err_msg = "JAEGER_BASE_URL environment variable is not set!"
+            logger.error(err_msg)
+            raise RuntimeError(err_msg)
+        jaeger_client = ObservabilityClient(url_base)
+        try:
+            url = f"{url_base}/api/traces"
+            start_time = datetime.now() - timedelta(minutes=last_n_minutes)
+            start_time = int(start_time.timestamp() * 1_000_000)
+            end_time = int(datetime.now().timestamp() * 1_000_000)
+            logger.debug(f"[ob_mcp] get_traces start_time: {start_time}, end_time: {end_time}")
+            params = {
+                "service": service,
+                "start": start_time,
+                "end": end_time,
+                "limit": 20,
+            }
+            response = jaeger_client.make_request("GET", url, params=params)
+            logger.debug(f"[ob_mcp] get_traces: {response.status_code}")
+            traces = str(response.json()["data"])
+            result = traces if traces else "None"
+
+            # Noise Injection Hook (Post-execution)
+            result = noise_manager.on_tool_result("jaeger", f"get_traces {service}", result, ssid)
+
+            return result
+        except Exception as e:
+            err_str = f"[ob_mcp] Error querying get_traces: {str(e)}"
+            logger.error(err_str)
+            return err_str
+
+    @jaeger_mcp.tool(name="get_dependency_graph")
+    def get_dependency_graph(ctx: Context, last_n_minutes: int = 30) -> str:
+        # Noise Injection Hook (Pre-execution)
+        noise_manager = get_noise_manager()
+        ssid = None
+        try:
+            ssid = ctx.request_context.request.headers.get("sregym_ssid")
+        except:
+            pass
+        noise_manager.on_tool_call("jaeger", "get_dependency_graph", ssid)
+
+        url_base = jaeger_base_url
+        if not url_base and tool_cfg is not None:
+            url_base = getattr(tool_cfg, "jaeger_base_url", None)
+        if not url_base:
+            url_base = os.environ.get("JAEGER_BASE_URL")
+        if not url_base:
+            raise RuntimeError("JAEGER_BASE_URL environment variable is not set!")
+
+        client = ObservabilityClient(url_base)
+        end_time = int(datetime.now().timestamp() * 1000)
+        start_time = int((datetime.now() - timedelta(minutes=last_n_minutes)).timestamp() * 1000)
+
+        url = f"{url_base}/api/dependencies"
+        params = {"endTs": end_time, "lookback": last_n_minutes * 60 * 1000}
+
+        response = client.make_request("GET", url, params=params)
+        logger.info(f"[ob_mcp] get_dependency_graph: {response.status_code}")
+        result = str(response.json())
+
+        # Noise Injection Hook (Post-execution)
+        result = noise_manager.on_tool_result("jaeger", "get_dependency_graph", result, ssid)
+
+        return result
+
+    return jaeger_mcp

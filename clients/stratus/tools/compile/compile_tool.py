@@ -27,11 +27,12 @@ def compile_postgresql_server(
     logger.info(f"State: {state}")
 
     # Ensure exp_env directory exists
-    os.makedirs("exp_env", exist_ok=True)
+    exp_env_dir = os.environ.get("EXP_ENV_DIR", "exp_env")
+    os.makedirs(exp_env_dir, exist_ok=True)
 
     workdir_val = state.get("workdir", "")
     if not workdir_val:
-        workdir_val = "exp_env"
+        workdir_val = exp_env_dir
     workdir = Path(workdir_val).resolve()
     logger.info(f"Work directory: {workdir}")
 

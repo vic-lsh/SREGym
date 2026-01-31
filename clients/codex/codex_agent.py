@@ -255,7 +255,7 @@ class CodexAgent:
             logger.info(f"Executing command: {' '.join(command)}")
 
             # Ensure exp_env directory exists
-            exp_env_dir = Path("exp_env")
+            exp_env_dir = Path(os.environ.get("EXP_ENV_DIR", "exp_env"))
             exp_env_dir.mkdir(exist_ok=True)
 
             # Set environment variables

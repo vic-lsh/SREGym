@@ -17,9 +17,10 @@ class AgentProcess:
 
 
 class AgentLauncher:
-    def __init__(self):
+    def __init__(self, clean_exp_env: bool = True):
         self._procs: Dict[str, AgentProcess] = {}
         self._agent_kubeconfig_path: Optional[str] = None
+        self._clean_exp_env_on_exit = clean_exp_env
 
     def set_agent_kubeconfig(self, kubeconfig_path: Optional[str]):
         """
@@ -28,7 +29,9 @@ class AgentLauncher:
         """
         self._agent_kubeconfig_path = kubeconfig_path
 
-    async def ensure_started(self, reg: AgentRegistration, extra_args: str = "") -> Optional[AgentProcess]:
+    async def ensure_started(
+        self, reg: AgentRegistration, extra_args: str = "", extra_env: Optional[dict] = None
+    ) -> Optional[AgentProcess]:
         if not reg or not reg.kickoff_command:
             return None
         existing = self._procs.get(reg.name)
@@ -41,6 +44,8 @@ class AgentLauncher:
         env = os.environ.copy()
         if reg.kickoff_env:
             env.update(reg.kickoff_env)
+        if extra_env:
+            env.update(extra_env)
 
         # Use filtered kubeconfig if set (hides chaos engineering namespaces)
         if self._agent_kubeconfig_path:
@@ -51,7 +56,8 @@ class AgentLauncher:
             command += f" {extra_args}"
 
         # Ensure exp_env directory exists
-        os.makedirs("exp_env", exist_ok=True)
+        exp_env_dir = os.environ.get("EXP_ENV_DIR", "exp_env")
+        os.makedirs(exp_env_dir, exist_ok=True)
 
         proc = subprocess.Popen(
             command,
@@ -119,7 +125,9 @@ class AgentLauncher:
 
     def _clean_exp_env(self):
         """Clean up all files in exp_env directory by deleting and recreating it."""
-        exp_env = "exp_env"
+        if not self._clean_exp_env_on_exit:
+            return
+        exp_env = os.environ.get("EXP_ENV_DIR", "exp_env")
         try:
             if os.path.exists(exp_env):
                 shutil.rmtree(exp_env)

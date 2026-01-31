@@ -60,3 +60,49 @@ def get_metrics(query: str, ctx: Context) -> str:
         err_str = f"[prom_mcp] Error querying get_metrics: {str(e)}"
         logger.error(err_str)
         return err_str
+
+
+def create_prometheus_mcp(prometheus_url: str | None = None, tool_cfg=None) -> FastMCP:
+    prom_mcp = FastMCP("Prometheus MCP Server")
+
+    @prom_mcp.tool(name="get_metrics")
+    def get_metrics(query: str, ctx: Context) -> str:
+        logger.info("[prom_mcp] get_metrics called, getting prometheus metrics")
+
+        # Noise Injection Hook (Pre-execution)
+        noise_manager = get_noise_manager()
+        ssid = None
+        try:
+            ssid = ctx.request_context.request.headers.get("sregym_ssid")
+        except:
+            pass
+
+        noise_manager.on_tool_call("prometheus", query, ssid)
+
+        url_base = prometheus_url
+        if not url_base and tool_cfg is not None:
+            url_base = getattr(tool_cfg, "prometheus_url", None)
+        if not url_base:
+            prometheus_port = os.environ.get("PROMETHEUS_PORT", "9090")
+            url_base = f"http://localhost:{prometheus_port}"
+
+        observability_client = ObservabilityClient(url_base)
+        try:
+            url = f"{url_base}/api/v1/query"
+            param = {"query": query}
+            response = observability_client.make_request("GET", url, params=param)
+            logger.info(f"[prom_mcp] get_metrics status code: {response.status_code}")
+            logger.info(f"[prom_mcp] get_metrics result: {response}")
+            metrics = str(response.json()["data"])
+            result = metrics if metrics else "None"
+
+            # Noise Injection Hook (Post-execution)
+            result = noise_manager.on_tool_result("prometheus", query, result, ssid)
+
+            return result
+        except Exception as e:
+            err_str = f"[prom_mcp] Error querying get_metrics: {str(e)}"
+            logger.error(err_str)
+            return err_str
+
+    return prom_mcp

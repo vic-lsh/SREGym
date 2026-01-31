@@ -116,3 +116,65 @@ def get_previous_rollbackable_cmd(ctx: Context) -> str:
     logger.debug(f'session {ssid} is using tool "get_previous_rollbackable_cmd".')
     cmds = kubctl_tool.rollback_tool.get_previous_rollbackable_cmds()
     return "\n".join([f"{i + 1}. {cmd}" for i, cmd in enumerate(cmds)])
+
+
+def create_kubectl_mcp() -> FastMCP:
+    session_cache = SlidingLRUSessionCache(
+        max_size=kubectl_session_cfg.session_cache_size, ttl_seconds=kubectl_session_cfg.session_ttl
+    )
+    mcp_instance = FastMCP("Kubectl MCP Server")
+
+    def _extract_session_id(ctx: Context):
+        ssid = ctx.request_context.request.headers.get("sregym_ssid")
+        if ssid is None:
+            str_url = str(ctx.request_context.request.url)
+            url = URL(str_url)
+            ssid = url.query.get("session_id")
+        return ssid
+
+    def _get_tools(session_id: str) -> KubectlToolSet:
+        tool = session_cache.get(session_id)
+        if tool is not None:
+            return tool
+
+        logger.debug(f"Creating a new kubectl tool for session {session_id}.")
+        tool = KubectlToolSet(session_id)
+        session_cache[session_id] = tool
+        return tool
+
+    @mcp_instance.tool()
+    def exec_kubectl_cmd_safely(cmd: str, ctx: Context) -> str:
+        ssid = _extract_session_id(ctx)
+        kubctl_tool = _get_tools(ssid)
+        logger.debug(f'session {ssid} is using tool "exec_kubectl_cmd_safely"; Command: {cmd}.')
+
+        # Noise Injection Hook (Pre-execution)
+        noise_manager = get_noise_manager()
+        noise_manager.on_tool_call("kubectl", cmd, ssid)
+
+        result = kubctl_tool.cmd_runner.exec_kubectl_cmd_safely(cmd)
+        assert isinstance(result, str)
+
+        # Noise Injection Hook (Post-execution)
+        result = noise_manager.on_tool_result("kubectl", cmd, result, ssid)
+
+        return result
+
+    @mcp_instance.tool()
+    def rollback_command(ctx: Context) -> str:
+        ssid = _extract_session_id(ctx)
+        kubectl_tool = _get_tools(ssid)
+        logger.debug(f'session {ssid} is using tool "rollback_command".')
+        result = kubectl_tool.rollback_tool.rollback()
+        assert isinstance(result, str)
+        return f"{result}, action_stack: {kubectl_tool.rollback_tool.action_stack}"
+
+    @mcp_instance.tool()
+    def get_previous_rollbackable_cmd(ctx: Context) -> str:
+        ssid = _extract_session_id(ctx)
+        kubctl_tool = _get_tools(ssid)
+        logger.debug(f'session {ssid} is using tool "get_previous_rollbackable_cmd".')
+        cmds = kubctl_tool.rollback_tool.get_previous_rollbackable_cmds()
+        return "\n".join([f"{i + 1}. {cmd}" for i, cmd in enumerate(cmds)])
+
+    return mcp_instance
