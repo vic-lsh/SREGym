@@ -643,6 +643,15 @@ async def mitigation_task_main(diagnosis_summary):
 
 
 async def main():
+    # Determine output directory from SREGYM_LOG_FILE if available (defaulting to current dir)
+    # This places logs in logs/<timestamp>/
+    output_dir = Path(".")
+    env_log_file = os.environ.get("SREGYM_LOG_FILE")
+    if env_log_file:
+        output_dir = Path(env_log_file).parent
+    
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     # run diagnosis agent 2 times
     # here, running the file's main function should suffice.
     # 1 for noop diagnosis
@@ -783,9 +792,10 @@ async def main():
     agent_output_df["rollback_stack"] = agent_rollback_stack
     agent_output_df["oracle_results"] = agent_oracle_results
     current_datetime = get_current_datetime_formatted()
-    agent_output_df.to_csv(f"./{current_datetime}_{current_problem}_stratus_output.csv", index=False, header=True)
+    csv_path = output_dir / f"{current_datetime}_{current_problem}_stratus_output.csv"
+    agent_output_df.to_csv(csv_path, index=False, header=True)
 
-    save_combined_trajectory(all_trajectories, current_problem)
+    save_combined_trajectory(all_trajectories, current_problem, output_dir=output_dir)
 
     logger.info("*" * 25 + f" Finished Testing {current_problem} ! " + "*" * 25)
     logger.info("*" * 25 + f" Finished Testing {current_problem} ! " + "*" * 25)
