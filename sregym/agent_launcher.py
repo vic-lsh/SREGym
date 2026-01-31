@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -96,6 +97,7 @@ class AgentLauncher:
         if existing.proc.returncode is not None:
             # Already terminated, just remove from cache
             del self._procs[agent_name]
+            self._clean_exp_env()
             return
 
         # Try graceful termination
@@ -113,3 +115,14 @@ class AgentLauncher:
             # Remove from cache
             if agent_name in self._procs:
                 del self._procs[agent_name]
+            self._clean_exp_env()
+
+    def _clean_exp_env(self):
+        """Clean up all files in exp_env directory by deleting and recreating it."""
+        exp_env = "exp_env"
+        try:
+            if os.path.exists(exp_env):
+                shutil.rmtree(exp_env)
+            os.makedirs(exp_env, exist_ok=True)
+        except Exception:
+            pass
