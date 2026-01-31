@@ -85,6 +85,20 @@ class Conductor:
         if isinstance(getattr(self.app, "helm_configs", None), dict):
             self.app.helm_configs["namespace"] = new_namespace
 
+        # Update problem namespace and injectors to match the new suffixed namespace
+        if self.problem:
+            self.problem.namespace = new_namespace
+
+            # Update injector namespace if it exists and has a namespace attribute
+            injector = getattr(self.problem, "injector", None)
+            if injector and hasattr(injector, "namespace"):
+                injector.namespace = new_namespace
+
+            # Update injector_for_scale if it exists (specific to workload_imbalance)
+            injector_for_scale = getattr(self.problem, "injector_for_scale", None)
+            if injector_for_scale and hasattr(injector_for_scale, "namespace"):
+                injector_for_scale.namespace = new_namespace
+
     def register_agent(self, name="agent"):
         self.agent_name = name
 
@@ -483,7 +497,7 @@ class Conductor:
         )
         self.kubectl.wait_for_ready("openebs")
 
-        print("Setting up OpenEBS LocalPV-Device…")
+        self.logger.info("Setting up OpenEBS LocalPV-Device…")
         device_sc_yaml = """
         apiVersion: storage.k8s.io/v1
         kind: StorageClass

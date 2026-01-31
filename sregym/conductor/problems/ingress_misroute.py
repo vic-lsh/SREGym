@@ -29,13 +29,13 @@ class IngressMisroute(Problem):
         """Misroute /api to wrong backend"""
 
         try:
-            ingress = self.networking_v1.read_namespaced_ingress(name=self.ingress_name, namespace=self.namespace)
+            ingress = self.networking_v1.read_namespaced_ingress(name=self.ingress_name, namespace=self.app.namespace)
         except client.exceptions.ApiException as e:
             if e.status == 404:
                 ingress_manifest = {
                     "apiVersion": "networking.k8s.io/v1",
                     "kind": "Ingress",
-                    "metadata": {"name": self.ingress_name, "namespace": self.namespace},
+                    "metadata": {"name": self.ingress_name, "namespace": self.app.namespace},
                     "spec": {
                         "rules": [
                             {
@@ -54,8 +54,8 @@ class IngressMisroute(Problem):
                         ]
                     },
                 }
-                self.networking_v1.create_namespaced_ingress(namespace=self.namespace, body=ingress_manifest)
-                ingress = self.networking_v1.read_namespaced_ingress(name=self.ingress_name, namespace=self.namespace)
+                self.networking_v1.create_namespaced_ingress(namespace=self.app.namespace, body=ingress_manifest)
+                ingress = self.networking_v1.read_namespaced_ingress(name=self.ingress_name, namespace=self.app.namespace)
             else:
                 raise
 
@@ -64,14 +64,14 @@ class IngressMisroute(Problem):
             for path in rule.http.paths:
                 if path.path == self.path:
                     path.backend.service.name = self.wrong_service
-        self.networking_v1.replace_namespaced_ingress(name=self.ingress_name, namespace=self.namespace, body=ingress)
+        self.networking_v1.replace_namespaced_ingress(name=self.ingress_name, namespace=self.app.namespace, body=ingress)
 
     @mark_fault_injected
     def recover_fault(self):
         """Revert misroute to correct backend"""
-        ingress = self.networking_v1.read_namespaced_ingress(name=self.ingress_name, namespace=self.namespace)
+        ingress = self.networking_v1.read_namespaced_ingress(name=self.ingress_name, namespace=self.app.namespace)
         for rule in ingress.spec.rules:
             for path in rule.http.paths:
                 if path.path == self.path:
                     path.backend.service.name = self.correct_service
-        self.networking_v1.replace_namespaced_ingress(name=self.ingress_name, namespace=self.namespace, body=ingress)
+        self.networking_v1.replace_namespaced_ingress(name=self.ingress_name, namespace=self.app.namespace, body=ingress)

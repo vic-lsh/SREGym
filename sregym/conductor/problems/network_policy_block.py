@@ -35,7 +35,7 @@ class NetworkPolicyBlock(Problem):
         policy = {
             "apiVersion": "networking.k8s.io/v1",
             "kind": "NetworkPolicy",
-            "metadata": {"name": self.policy_name, "namespace": self.namespace},
+            "metadata": {"name": self.policy_name, "namespace": self.app.namespace},
             "spec": {
                 "podSelector": {"matchLabels": {"app": self.faulty_service}},
                 "policyTypes": ["Ingress", "Egress"],
@@ -43,9 +43,9 @@ class NetworkPolicyBlock(Problem):
                 "egress": [],
             },
         }
-        self.networking_v1.create_namespaced_network_policy(namespace=self.namespace, body=policy)
+        self.networking_v1.create_namespaced_network_policy(namespace=self.app.namespace, body=policy)
 
     @mark_fault_injected
     def recover_fault(self):
         """Remove the NetworkPolicy"""
-        self.networking_v1.delete_namespaced_network_policy(name=self.policy_name, namespace=self.namespace)
+        self.networking_v1.delete_namespaced_network_policy(name=self.policy_name, namespace=self.app.namespace)
