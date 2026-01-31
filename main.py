@@ -16,6 +16,8 @@ from pathlib import Path
 
 import uvicorn
 from rich.console import Console
+from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, TimeElapsedColumn
+from rich.text import Text
 
 from logger import init_logger
 from mcp_server.configs.load_all_cfg import mcp_server_cfg
@@ -39,6 +41,102 @@ def get_current_datetime_formatted():
     return formatted_datetime
 
 
+class ParallelProgressManager:
+    def __init__(self, total_runs: int):
+        self._lock = threading.Lock()
+        self._progress = Progress(
+            TextColumn("{task.description}"),
+            BarColumn(bar_width=None),
+            TaskProgressColumn(),
+            TextColumn("{task.fields[stage]}"),
+            TimeElapsedColumn(),
+            refresh_per_second=4,
+        )
+        self._overall_task = self._progress.add_task("Experiments", total=total_runs, stage="running")
+        self._run_tasks: dict[str, int] = {}
+        self._run_stage_order: dict[str, list[str]] = {}
+        self._run_stage_label: dict[str, str] = {}
+
+    def start(self):
+        self._progress.start()
+
+    def stop(self):
+        self._progress.stop()
+
+    def add_run(self, run_id: str, description: str, stage_order: list[str] | None = None):
+        if stage_order is None:
+            stage_order = ["setup", "diagnosis", "mitigation", "done"]
+        with self._lock:
+            task_id = self._progress.add_task(description, total=len(stage_order), stage=self._label_stage(stage_order[0]))
+            self._run_tasks[run_id] = task_id
+            self._run_stage_order[run_id] = stage_order
+            self._run_stage_label[run_id] = stage_order[0]
+
+    def set_stage_order(self, run_id: str, stage_order: list[str]):
+        if not stage_order:
+            stage_order = ["done"]
+        with self._lock:
+            self._run_stage_order[run_id] = stage_order
+            task_id = self._run_tasks.get(run_id)
+            if task_id is None:
+                return
+            current_stage = self._run_stage_label.get(run_id, stage_order[0])
+            completed = self._stage_index(stage_order, current_stage)
+            self._progress.update(task_id, total=len(stage_order), completed=completed)
+
+    def update_stage(self, run_id: str, stage: str):
+        stage = stage or "setup"
+        with self._lock:
+            task_id = self._run_tasks.get(run_id)
+            if task_id is None:
+                return
+            stage_order = self._run_stage_order.get(run_id, ["setup", "diagnosis", "mitigation", "done"])
+            self._run_stage_label[run_id] = stage
+            completed = self._stage_index(stage_order, stage)
+            self._progress.update(task_id, completed=completed, stage=self._label_stage(stage))
+
+    def mark_done(self, run_id: str):
+        with self._lock:
+            task_id = self._run_tasks.get(run_id)
+            if task_id is not None:
+                stage_order = self._run_stage_order.get(run_id, ["done"])
+                self._progress.update(task_id, completed=len(stage_order), stage=self._label_stage("done"))
+            self._progress.update(self._overall_task, advance=1)
+
+    def mark_failed(self, run_id: str):
+        with self._lock:
+            task_id = self._run_tasks.get(run_id)
+            if task_id is not None:
+                stage_order = self._run_stage_order.get(run_id, ["done"])
+                self._progress.update(task_id, completed=len(stage_order), stage=Text("failed", style="bold red"))
+            self._progress.update(self._overall_task, advance=1)
+
+    def _stage_index(self, stage_order: list[str], stage: str) -> int:
+        try:
+            idx = stage_order.index(stage)
+        except ValueError:
+            return 0
+        return min(idx + 1, len(stage_order))
+
+    def _label_stage(self, stage: str):
+        labels = {
+            "setup": "deployment",
+            "diagnosis": "diagnose",
+            "mitigation": "mitigation",
+            "done": "done",
+        }
+        return labels.get(stage, stage)
+
+
+def _disable_console_logging():
+    root_logger = logging.getLogger("all")
+    for handler in list(root_logger.handlers):
+        if isinstance(handler, logging.FileHandler):
+            continue
+        if getattr(handler, "stream", None) in (sys.stdout, sys.stderr):
+            root_logger.removeHandler(handler)
+
+
 def driver_loop(
     conductor: Conductor,
     experiment_log_dir: str,
@@ -52,6 +150,8 @@ def driver_loop(
     run_id: str | None = None,
     mcp_tool_cfg: McpToolCfg | None = None,
     agent_env: dict | None = None,
+    progress_mgr: ParallelProgressManager | None = None,
+    quiet: bool = False,
 ):
     """
     Deploy each problem and wait for HTTP grading via POST /submit.
@@ -68,6 +168,9 @@ def driver_loop(
 
     async def driver():
         console = Console()
+        def _log(msg: str):
+            if not quiet:
+                console.log(msg)
         # give the API a moment to bind
         await asyncio.sleep(1)
 
@@ -75,14 +178,17 @@ def driver_loop(
         if not use_external_harness:
             available_agents = list_agents(path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml").keys()
             if agent_to_run not in available_agents:
-                console.log(f"⚠️ Agent '{agent_to_run}' not found in registry. Available agents: {available_agents}")
+                msg = f"Agent '{agent_to_run}' not found in registry. Available agents: {available_agents}"
+                if quiet:
+                    raise RuntimeError(msg)
+                console.log(f"⚠️ {msg}")
                 sys.exit(1)
 
-            console.log(f"Starting agent now: {agent_to_run}")
+            _log(f"Starting agent now: {agent_to_run}")
             conductor.register_agent(agent_to_run)
 
             # Start K8s API proxy to hide chaos engineering namespaces from the agent
-            console.log("🔒 Starting Kubernetes API proxy to hide chaos namespaces...")
+            _log("🔒 Starting Kubernetes API proxy to hide chaos namespaces...")
             conductor.start_k8s_proxy()
             (launcher or LAUNCHER).set_agent_kubeconfig(conductor.get_agent_kubeconfig_path())
 
@@ -112,14 +218,19 @@ def driver_loop(
 
         for pid in problem_ids:
             for iteration in range(repeat):
-                console.log(f"\n🔍 Starting problem: {pid} (Run {iteration+1}/{repeat})")
+                _log(f"\n🔍 Starting problem: {pid} (Run {iteration+1}/{repeat})")
 
                 conductor.problem_id = pid
 
                 result = await conductor.start_problem()
                 if result == StartProblemResult.SKIPPED_KHAOS_REQUIRED:
-                    console.log(f"⏭️  Skipping problem '{pid}': requires Khaos but running on emulated cluster")
+                    _log(f"⏭️  Skipping problem '{pid}': requires Khaos but running on emulated cluster")
                     continue
+
+                if progress_mgr and run_id:
+                    stage_order = ["setup"] + [stage["name"] for stage in conductor.stage_sequence] + ["done"]
+                    progress_mgr.set_stage_order(run_id, stage_order)
+                    progress_mgr.update_stage(run_id, conductor.submission_stage or "setup")
 
                 if mcp_tool_cfg is not None:
                     prometheus_port = getattr(conductor.prometheus, "port", None)
@@ -131,7 +242,7 @@ def driver_loop(
 
                 # If using external harness, fault is injected - exit now
                 if use_external_harness:
-                    console.log(f"✅ Fault injected for problem '{pid}'. Exiting for external harness.")
+                    _log(f"✅ Fault injected for problem '{pid}'. Exiting for external harness.")
                     return []
 
                 # Define agent log directory
@@ -155,35 +266,41 @@ def driver_loop(
                         )
 
                 # Poll until grading completes or agent exits
+                last_stage = None
                 while conductor.submission_stage != "done":
+                    if progress_mgr and run_id:
+                        current_stage = conductor.submission_stage or "setup"
+                        if current_stage != last_stage:
+                            progress_mgr.update_stage(run_id, current_stage)
+                            last_stage = current_stage
                     # Check if agent process has exited
                     agent_proc = (launcher or LAUNCHER)._procs.get(agent_to_run)
                     if agent_proc:
                         agent_proc.proc.poll()
                         if agent_proc.proc.returncode is not None:
-                            console.log(f"⚠️  Agent process exited with return code {agent_proc.proc.returncode}")
+                            _log(f"⚠️  Agent process exited with return code {agent_proc.proc.returncode}")
                             break
                     await asyncio.sleep(1)
 
-                console.log(f"✅ Completed {pid}: results={conductor.results}")
+                _log(f"✅ Completed {pid}: results={conductor.results}")
 
                 # Wait for agent process to complete naturally before cleanup
                 # This allows the agent to finish saving trajectories and other cleanup tasks
                 if not use_external_harness:
                     agent_proc = (launcher or LAUNCHER)._procs.get(agent_to_run)
                     if agent_proc:
-                        console.log(f"⏳ Waiting for agent process to complete...")
+                        _log(f"⏳ Waiting for agent process to complete...")
                         timeout = 30  # seconds
                         elapsed = 0
                         while elapsed < timeout:
                             agent_proc.proc.poll()
                             if agent_proc.proc.returncode is not None:
-                                console.log(f"✅ Agent process completed with return code {agent_proc.proc.returncode}")
+                                _log(f"✅ Agent process completed with return code {agent_proc.proc.returncode}")
                                 break
                             await asyncio.sleep(1)
                             elapsed += 1
                         else:
-                            console.log(f"⚠️  Agent process did not complete within {timeout}s, will force cleanup")
+                            _log(f"⚠️  Agent process did not complete within {timeout}s, will force cleanup")
 
                 snapshot = {"problem_id": pid}
                 for stage, outcome in conductor.results.items():
@@ -211,11 +328,11 @@ def driver_loop(
                 # Cleanup agent process so a fresh one can be started for the next problem
                 if not use_external_harness:
                     (launcher or LAUNCHER).cleanup_agent(agent_to_run)
-                    console.log(f"🧹 Cleaned up agent process for {agent_to_run}")
+                    _log(f"🧹 Cleaned up agent process for {agent_to_run}")
 
                     # Run summarization if enabled (specifically for gemini_cli)
                     if enable_summary and agent_to_run == "gemini_cli":
-                        console.log("📝 Running external summarization for Gemini CLI...")
+                        _log("📝 Running external summarization for Gemini CLI...")
                         try:
                             # Run summarization script
                             summarize_cmd = [
@@ -230,16 +347,16 @@ def driver_loop(
                                 text=True
                             )
                             if result.returncode == 0:
-                                console.log("✅ External summarization step completed.")
+                                _log("✅ External summarization step completed.")
                             else:
-                                console.log(f"⚠️ External summarization failed (exit code {result.returncode}):")
-                                console.log(result.stderr)
+                                _log(f"⚠️ External summarization failed (exit code {result.returncode}):")
+                                _log(result.stderr)
                         except Exception as e:
-                            console.log(f"⚠️ External summarization failed to launch: {e}")
+                            _log(f"⚠️ External summarization failed to launch: {e}")
 
         # Stop K8s API proxy when all problems are done
         if not use_external_harness:
-            console.log("🔓 Stopping Kubernetes API proxy...")
+            _log("🔓 Stopping Kubernetes API proxy...")
             conductor.stop_k8s_proxy()
 
         return [{agent_to_run: all_results_for_agent}]
@@ -292,7 +409,13 @@ class McpServer:
             self._server.should_exit = True
 
 
-def _run_problem(ctx: RunContext, args, experiment_log_dir: str):
+def _run_problem(
+    ctx: RunContext,
+    args,
+    experiment_log_dir: str,
+    progress_mgr: ParallelProgressManager | None = None,
+    quiet: bool = False,
+):
     run_log_dir = ctx.log_dir
     os.makedirs(run_log_dir, exist_ok=True)
 
@@ -338,6 +461,8 @@ def _run_problem(ctx: RunContext, args, experiment_log_dir: str):
             run_id=ctx.run_id,
             mcp_tool_cfg=mcp_cfg,
             agent_env=agent_env,
+            progress_mgr=progress_mgr,
+            quiet=quiet,
         )
         return results
     finally:
@@ -427,13 +552,37 @@ def main(args):
         )
 
     max_workers = max(1, args.parallel)
+    progress_mgr = None
+    quiet = False
+    if args.parallel > 1:
+        progress_mgr = ParallelProgressManager(total_runs=len(run_contexts))
+        progress_mgr.start()
+        _disable_console_logging()
+        quiet = True
     results = []
+    errors: list[tuple[RunContext, Exception]] = []
     try:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(_run_problem, ctx, args, experiment_log_dir) for ctx in run_contexts]
+            futures = {}
+            for ctx in run_contexts:
+                if progress_mgr:
+                    progress_mgr.add_run(ctx.run_id, f"{ctx.problem_id} ({ctx.run_id})")
+                future = executor.submit(_run_problem, ctx, args, experiment_log_dir, progress_mgr, quiet)
+                futures[future] = ctx
             for future in as_completed(futures):
-                results.append(future.result())
+                ctx = futures[future]
+                try:
+                    results.append(future.result())
+                    if progress_mgr:
+                        progress_mgr.mark_done(ctx.run_id)
+                except Exception as e:
+                    errors.append((ctx, e))
+                    logger.error(f"❌ Run {ctx.run_id} failed: {e}")
+                    if progress_mgr:
+                        progress_mgr.mark_failed(ctx.run_id)
     finally:
+        if progress_mgr:
+            progress_mgr.stop()
         if nm:
             try:
                 logger.info("Stopping noise manager...")
@@ -443,6 +592,10 @@ def main(args):
 
     if not results:
         logger.warning("⚠️ No results to write.")
+    if errors:
+        console = Console()
+        for ctx, err in errors:
+            console.print(f"[red]Run {ctx.run_id} ({ctx.problem_id}) failed:[/red] {err}")
 
     if __name__ == "__main__":
         # separate run, use exit
