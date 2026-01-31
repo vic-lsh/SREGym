@@ -171,7 +171,7 @@ def driver_loop(
                         snapshot[stage] = outcome
                 all_results_for_agent.append(snapshot)
 
-                fieldnames = sorted({key for row in all_results_for_agent for key in row.keys()})
+                fieldnames = sorted(snapshot.keys())
                 current_date_time = get_current_datetime_formatted()
                 
                 # Write results to experiment_log_dir
@@ -179,7 +179,7 @@ def driver_loop(
                 with open(csv_path, "w", newline="") as csvfile:
                     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                     writer.writeheader()
-                    writer.writerows(all_results_for_agent)
+                    writer.writerows([snapshot])
                 logger.info(f"✅ Problem {pid} for agent {agent_to_run} complete! Results written to {csv_path}")
 
                 # Cleanup agent process so a fresh one can be started for the next problem
