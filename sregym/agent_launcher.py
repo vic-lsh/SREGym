@@ -51,7 +51,8 @@ class AgentLauncher:
             command += f" {extra_args}"
 
         # Ensure exp_env directory exists
-        os.makedirs("exp_env", exist_ok=True)
+        exp_env_dir = os.getenv("SREGYM_EXP_ENV", "exp_env")
+        os.makedirs(exp_env_dir, exist_ok=True)
 
         proc = subprocess.Popen(
             command,
@@ -119,7 +120,7 @@ class AgentLauncher:
 
     def _clean_exp_env(self):
         """Clean up all files in exp_env directory by deleting and recreating it."""
-        exp_env = "exp_env"
+        exp_env = os.getenv("SREGYM_EXP_ENV", "exp_env")
         try:
             if os.path.exists(exp_env):
                 shutil.rmtree(exp_env)

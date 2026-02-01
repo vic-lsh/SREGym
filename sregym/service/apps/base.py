@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 
 from sregym.paths import TARGET_MICROSERVICES
 
@@ -28,6 +29,12 @@ class Application:
 
         self.name = metadata["Name"]
         self.namespace = metadata["Namespace"]
+        
+        # Support parallel execution by appending worker ID to namespace
+        worker_id = os.getenv("SREGYM_WORKER_ID")
+        if worker_id:
+            self.namespace = f"{self.namespace}-w{worker_id}"
+
         if "Helm Config" in metadata:
             self.helm_configs = metadata["Helm Config"]
             chart_path = self.helm_configs.get("chart_path")

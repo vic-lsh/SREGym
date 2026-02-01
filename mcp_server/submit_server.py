@@ -13,8 +13,6 @@ from clients.stratus.tools.localization import get_resource_uid
 logger = get_logger()
 logger.info("Starting Submission MCP Server")
 
-langgraph_tool_config = LanggraphToolConfig()
-
 mcp = FastMCP("Submission MCP Server")
 
 
@@ -28,6 +26,7 @@ def submit(ans: str) -> dict[str, str]:
     Returns:
         dict[str]: http response code and response text of benchmark submission server
     """
+    langgraph_tool_config = LanggraphToolConfig()
 
     logger.info("[submit_mcp] submit mcp called")
     # FIXME: reference url from config file, remove hard coding

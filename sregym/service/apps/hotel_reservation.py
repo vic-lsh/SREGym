@@ -98,8 +98,9 @@ class HotelReservation(Application):
         self.kubectl.delete_namespace(self.namespace)
 
         self.kubectl.wait_for_namespace_deletion(self.namespace)
+        # Only delete PVs belonging to this specific namespace
         pvs = self.kubectl.exec_command(
-            "kubectl get pv --no-headers | grep 'hotel-reservation' | awk '{print $1}'"
+            f"kubectl get pv --no-headers | grep '{self.namespace}/' | awk '{{print $1}}'"
         ).splitlines()
 
         for pv in pvs:

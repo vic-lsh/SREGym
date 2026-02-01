@@ -10,9 +10,20 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+import tempfile
 
 import uvicorn
 from rich.console import Console
+from rich.live import Live
+from rich.table import Table
+
+# Ensure multiprocessing uses a local filesystem for temp files (fixes NFS busy errors)
+# We use the current working directory if it's on /mnt/data (local disk), otherwise fallback to default
+if os.getcwd().startswith("/mnt/data"):
+    local_tmp = os.path.join(os.getcwd(), ".local_tmp")
+    os.makedirs(local_tmp, exist_ok=True)
+    os.environ["TMPDIR"] = local_tmp
+    tempfile.tempdir = local_tmp
 
 from logger import init_logger
 from mcp_server.configs.load_all_cfg import mcp_server_cfg
@@ -41,6 +52,8 @@ def driver_loop(
     use_external_harness: bool = False,
     repeat: int = 1,
     enable_summary: bool = False,
+    problem_list: list = None,
+    status_dict=None,
 ):
     """
     Deploy each problem and wait for HTTP grading via POST /submit.
@@ -53,10 +66,16 @@ def driver_loop(
         agent_to_run: Agent name to run (required unless use_external_harness is True).
         use_external_harness: If True, inject fault and exit without running evaluation logic.
         enable_summary: If True, pass --enable-summary to the agent.
+        problem_list: Optional list of problem IDs to run.
+        status_dict: Shared dictionary for status updates (used in parallel mode).
     """
 
     async def driver():
-        console = Console()
+        # In parallel mode, we don't want the console to output to stdout directly
+        # because it will be interleaved. We only use console for local logging
+        # which will be redirected to a file.
+        console = Console(force_terminal=True) if status_dict is None else Console(file=sys.stdout)
+        
         # give the API a moment to bind
         await asyncio.sleep(1)
 
@@ -89,6 +108,10 @@ def driver_loop(
                 sys.exit(1)
             problem_ids = [problem_filter]
             console.log(f"🎯 Running single problem: {problem_filter}")
+        elif problem_list:
+            # Filter to intersection of available and requested
+            problem_ids = [p for p in problem_ids if p in problem_list]
+            console.log(f"🎯 Running {len(problem_ids)} problems from list")
 
         # sanity check: are there any specified problem ids that do not exist in the registry?
         unknown_problem_ids = set(problem_ids) - set(all_problem_ids)
@@ -100,116 +123,197 @@ def driver_loop(
             problem_ids.remove(unknown_problem_id)
 
         for pid in problem_ids:
-            for iteration in range(repeat):
-                console.log(f"\n🔍 Starting problem: {pid} (Run {iteration+1}/{repeat})")
+            # Prepare for logging redirection if in parallel mode
+            redirect_ctx = open(os.path.join(experiment_log_dir, f"{pid}.log"), "w") if status_dict is not None else None
+            original_stdout = sys.stdout
+            original_stderr = sys.stderr
 
-                conductor.problem_id = pid
+            if status_dict is not None:
+                sys.stdout = redirect_ctx
+                sys.stderr = redirect_ctx
+                
+                # Redirect logging handler to the file so logs don't go to the original stderr (which might be console or worker log)
+                root_logger = logging.getLogger("all")
+                for handler in root_logger.handlers:
+                    if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+                        handler.setStream(redirect_ctx)
 
-                result = await conductor.start_problem()
-                if result == StartProblemResult.SKIPPED_KHAOS_REQUIRED:
-                    console.log(f"⏭️  Skipping problem '{pid}': requires Khaos but running on emulated cluster")
-                    continue
+                # Update status to starting
+                status_dict[pid] = {
+                    "status": "Deploying",
+                    "start_time": time.time(),
+                    "elapsed": 0.0
+                }
 
-                # If using external harness, fault is injected - exit now
-                if use_external_harness:
-                    console.log(f"✅ Fault injected for problem '{pid}'. Exiting for external harness.")
-                    return []
+            try:
+                for iteration in range(repeat):
+                    console.log(f"\n🔍 Starting problem: {pid} (Run {iteration+1}/{repeat})")
 
-                # Define agent log directory
-                agent_log_dir = os.path.join(experiment_log_dir, agent_to_run)
+                    conductor.problem_id = pid
 
-                if not use_external_harness:
-                    reg = get_agent(agent_to_run, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
-                    if reg:
-                        extra_args = ""
-                        # Pass explicit log dir to supported agents (e.g. gemini_cli)
-                        if agent_to_run == "gemini_cli":
-                             extra_args += f" --logs-dir {agent_log_dir}"
-                        
-                        if enable_summary:
-                             extra_args += " --enable-summary"
-                             
-                        await LAUNCHER.ensure_started(reg, extra_args=extra_args.strip())
+                    result = await conductor.start_problem()
+                    if result == StartProblemResult.SKIPPED_KHAOS_REQUIRED:
+                        console.log(f"⏭️  Skipping problem '{pid}': requires Khaos but running on emulated cluster")
+                        if status_dict is not None:
+                            status_dict[pid] = {
+                                "status": "Skipped (Khaos Req)",
+                                "start_time": status_dict[pid]["start_time"],
+                                "elapsed": time.time() - status_dict[pid]["start_time"]
+                            }
+                        continue
 
-                # Poll until grading completes or agent exits
-                while conductor.submission_stage != "done":
-                    # Check if agent process has exited
-                    agent_proc = LAUNCHER._procs.get(agent_to_run)
-                    if agent_proc:
-                        agent_proc.proc.poll()
-                        if agent_proc.proc.returncode is not None:
-                            console.log(f"⚠️  Agent process exited with return code {agent_proc.proc.returncode}")
-                            break
-                    await asyncio.sleep(1)
+                    # If using external harness, fault is injected - exit now
+                    if use_external_harness:
+                        console.log(f"✅ Fault injected for problem '{pid}'. Exiting for external harness.")
+                        return []
 
-                console.log(f"✅ Completed {pid}: results={conductor.results}")
+                    # Define agent log directory
+                    agent_log_dir = os.path.join(experiment_log_dir, agent_to_run)
 
-                # Wait for agent process to complete naturally before cleanup
-                # This allows the agent to finish saving trajectories and other cleanup tasks
-                if not use_external_harness:
-                    agent_proc = LAUNCHER._procs.get(agent_to_run)
-                    if agent_proc:
-                        console.log(f"⏳ Waiting for agent process to complete...")
-                        timeout = 30  # seconds
-                        elapsed = 0
-                        while elapsed < timeout:
+                    if not use_external_harness:
+                        if status_dict is not None:
+                            status_dict[pid] = {
+                                "status": "Agent Running",
+                                "start_time": status_dict[pid]["start_time"],
+                                "elapsed": time.time() - status_dict[pid]["start_time"]
+                            }
+
+                        reg = get_agent(agent_to_run, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
+                        if reg:
+                            extra_args = ""
+                            # Pass explicit log dir to supported agents (e.g. gemini_cli)
+                            if agent_to_run == "gemini_cli":
+                                 extra_args += f" --logs-dir {agent_log_dir}"
+                            
+                            if enable_summary:
+                                 extra_args += " --enable-summary"
+                                 
+                            await LAUNCHER.ensure_started(reg, extra_args=extra_args.strip())
+
+                    # Poll until grading completes or agent exits
+                    while conductor.submission_stage != "done":
+                        if status_dict is not None:
+                            # Update stage
+                            current_stage = conductor.submission_stage or "Running"
+                            status_dict[pid] = {
+                                "status": f"Agent: {current_stage}",
+                                "start_time": status_dict[pid]["start_time"],
+                                "elapsed": time.time() - status_dict[pid]["start_time"]
+                            }
+
+                        # Check if agent process has exited
+                        agent_proc = LAUNCHER._procs.get(agent_to_run)
+                        if agent_proc:
                             agent_proc.proc.poll()
                             if agent_proc.proc.returncode is not None:
-                                console.log(f"✅ Agent process completed with return code {agent_proc.proc.returncode}")
+                                console.log(f"⚠️  Agent process exited with return code {agent_proc.proc.returncode}")
                                 break
-                            await asyncio.sleep(1)
-                            elapsed += 1
-                        else:
-                            console.log(f"⚠️  Agent process did not complete within {timeout}s, will force cleanup")
+                        await asyncio.sleep(1)
 
-                snapshot = {"problem_id": pid}
-                for stage, outcome in conductor.results.items():
-                    if isinstance(outcome, dict):
-                        for k, v in outcome.items():
-                            snapshot[f"{stage}.{k}"] = v
-                    else:
-                        snapshot[stage] = outcome
-                all_results_for_agent.append(snapshot)
+                    if status_dict is not None:
+                        status_dict[pid] = {
+                            "status": "Cleaning Up",
+                            "start_time": status_dict[pid]["start_time"],
+                            "elapsed": time.time() - status_dict[pid]["start_time"]
+                        }
 
-                fieldnames = sorted(snapshot.keys())
-                current_date_time = get_current_datetime_formatted()
-                
-                # Write results to experiment_log_dir
-                csv_path = os.path.join(experiment_log_dir, f"{current_date_time}_{pid}_{agent_to_run}_results.csv")
-                with open(csv_path, "w", newline="") as csvfile:
-                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                    writer.writeheader()
-                    writer.writerows([snapshot])
-                logger.info(f"✅ Problem {pid} for agent {agent_to_run} complete! Results written to {csv_path}")
+                    console.log(f"✅ Completed {pid}: results={conductor.results}")
 
-                # Cleanup agent process so a fresh one can be started for the next problem
-                if not use_external_harness:
-                    LAUNCHER.cleanup_agent(agent_to_run)
-                    console.log(f"🧹 Cleaned up agent process for {agent_to_run}")
-
-                    # Run summarization if enabled (specifically for gemini_cli)
-                    if enable_summary and agent_to_run == "gemini_cli":
-                        console.log("📝 Running external summarization for Gemini CLI...")
-                        try:
-                            # Run summarization script
-                            summarize_cmd = [
-                                sys.executable,
-                                "clients/gemini_cli/summarize_results.py",
-                                "--logs-dir", agent_log_dir,
-                                "--model", os.environ.get("MODEL_ID", "gemini-2.0-flash")
-                            ]
-                            result = subprocess.run(
-                                summarize_cmd,
-                                capture_output=True,
-                                text=True
-                            )
-                            if result.returncode == 0:
-                                console.log("✅ External summarization step completed.")
+                    # Wait for agent process to complete naturally before cleanup
+                    # This allows the agent to finish saving trajectories and other cleanup tasks
+                    if not use_external_harness:
+                        agent_proc = LAUNCHER._procs.get(agent_to_run)
+                        if agent_proc:
+                            console.log(f"⏳ Waiting for agent process to complete...")
+                            timeout = 30  # seconds
+                            elapsed = 0
+                            while elapsed < timeout:
+                                agent_proc.proc.poll()
+                                if agent_proc.proc.returncode is not None:
+                                    console.log(f"✅ Agent process completed with return code {agent_proc.proc.returncode}")
+                                    break
+                                await asyncio.sleep(1)
+                                elapsed += 1
                             else:
-                                console.log(f"⚠️ External summarization failed (exit code {result.returncode}):")
-                                console.log(result.stderr)
-                        except Exception as e:
-                            console.log(f"⚠️ External summarization failed to launch: {e}")
+                                console.log(f"⚠️  Agent process did not complete within {timeout}s, will force cleanup")
+
+                    snapshot = {"problem_id": pid}
+                    for stage, outcome in conductor.results.items():
+                        if isinstance(outcome, dict):
+                            for k, v in outcome.items():
+                                snapshot[f"{stage}.{k}"] = v
+                        else:
+                            snapshot[stage] = outcome
+                    all_results_for_agent.append(snapshot)
+
+                    fieldnames = sorted(snapshot.keys())
+                    current_date_time = get_current_datetime_formatted()
+                    
+                    # Write results to experiment_log_dir
+                    csv_path = os.path.join(experiment_log_dir, f"{current_date_time}_{pid}_{agent_to_run}_results.csv")
+                    with open(csv_path, "w", newline="") as csvfile:
+                        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                        writer.writeheader()
+                        writer.writerows([snapshot])
+                    logger.info(f"✅ Problem {pid} for agent {agent_to_run} complete! Results written to {csv_path}")
+
+                    # Cleanup agent process so a fresh one can be started for the next problem
+                    if not use_external_harness:
+                        LAUNCHER.cleanup_agent(agent_to_run)
+                        console.log(f"🧹 Cleaned up agent process for {agent_to_run}")
+
+                        # Run summarization if enabled (specifically for gemini_cli)
+                        if enable_summary and agent_to_run == "gemini_cli":
+                            console.log("📝 Running external summarization for Gemini CLI...")
+                            try:
+                                # Run summarization script
+                                summarize_cmd = [
+                                    sys.executable,
+                                    "clients/gemini_cli/summarize_results.py",
+                                    "--logs-dir", agent_log_dir,
+                                    "--model", os.environ.get("MODEL_ID", "gemini-2.0-flash")
+                                ]
+                                result = subprocess.run(
+                                    summarize_cmd,
+                                    capture_output=True,
+                                    text=True
+                                )
+                                if result.returncode == 0:
+                                    console.log("✅ External summarization step completed.")
+                                else:
+                                    console.log(f"⚠️ External summarization failed (exit code {result.returncode}):")
+                                    console.log(result.stderr)
+                            except Exception as e:
+                                console.log(f"⚠️ External summarization failed to launch: {e}")
+            
+            except Exception as e:
+                console.log(f"❌ Error running problem {pid}: {e}")
+                if status_dict is not None:
+                    status_dict[pid] = {
+                        "status": "Error",
+                        "start_time": status_dict[pid]["start_time"],
+                        "elapsed": time.time() - status_dict[pid]["start_time"]
+                    }
+                raise e
+            finally:
+                if status_dict is not None:
+                    if status_dict[pid]["status"] != "Error":
+                        status_dict[pid] = {
+                            "status": "Completed",
+                            "start_time": status_dict[pid]["start_time"],
+                            "elapsed": time.time() - status_dict[pid]["start_time"]
+                        }
+                    sys.stdout = original_stdout
+                    sys.stderr = original_stderr
+                    
+                    # Restore logging handler
+                    root_logger = logging.getLogger("all")
+                    for handler in root_logger.handlers:
+                        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+                            handler.setStream(original_stderr)
+                    
+                    if redirect_ctx:
+                        redirect_ctx.close()
 
         # Stop K8s API proxy when all problems are done
         if not use_external_harness:
@@ -226,7 +330,7 @@ def start_mcp_server_after_api():
     time.sleep(1.0)
 
     host = "0.0.0.0" if mcp_server_cfg.expose_server else "127.0.0.1"
-    port = mcp_server_cfg.mcp_server_port
+    port = int(os.getenv("MCP_SERVER_PORT", mcp_server_cfg.mcp_server_port))
 
     config = uvicorn.Config(
         app=mcp_app,
@@ -250,6 +354,8 @@ def _run_driver_and_shutdown(
     use_external_harness: bool = False,
     repeat: int = 1,
     enable_summary: bool = False,
+    problem_list: list = None,
+    status_dict=None,
 ):
     """Run the benchmark driver, stash results, then tell the API to exit."""
     results = driver_loop(
@@ -260,24 +366,141 @@ def _run_driver_and_shutdown(
         use_external_harness=use_external_harness,
         repeat=repeat,
         enable_summary=enable_summary,
+        problem_list=problem_list,
+        status_dict=status_dict,
     )
     setattr(main, "results", results)
     # ⬇️ Ask the API server (running in main thread) to stop so we can write CSV
     request_shutdown()
 
 
-def main(args):
+def worker_main(args, worker_id, problem_list, experiment_log_dir, status_dict):
+    """Worker function for parallel execution."""
+    os.environ["SREGYM_WORKER_ID"] = str(worker_id)
+    os.environ["API_PORT"] = str(8000 + worker_id)
+    os.environ["MCP_SERVER_PORT"] = str(9000 + worker_id)
+    os.environ["SREGYM_EXP_ENV"] = f"exp_env_{worker_id}"
+    
+    # Append worker ID to log file to avoid conflicts
+    session_timestamp = get_current_datetime_formatted()
+    os.environ["SREGYM_LOG_FILE"] = os.path.join(experiment_log_dir, f"sregym_{session_timestamp}_w{worker_id}.log")
+    
+    # In parallel mode, redirect all output to a worker log file to prevent console interleaving
+    worker_log_path = os.path.join(experiment_log_dir, f"worker_{worker_id}.log")
+    with open(worker_log_path, "w") as f:
+        sys.stdout = f
+        sys.stderr = f
+        
+        # Redirect inherited logger handlers to the file
+        # This prevents logs from writing to the original TTY
+        for logger_name in [None, "all"]:  # None is root logger
+            logger = logging.getLogger(logger_name)
+            for handler in logger.handlers:
+                if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+                    handler.setStream(f)
+        
+        # Run main with the specific list of problems
+        main(args, problem_list=problem_list, experiment_log_dir=experiment_log_dir, status_dict=status_dict)
+
+
+def run_parallel(args):
+    """Split problems and run in parallel workers."""
+    from sregym.conductor.problems.registry import ProblemRegistry
+    import math
+
+    registry = ProblemRegistry()
+    # Use the same logic as conductor to get problem IDs
+    # If args.problem is set, run only that (but parallel doesn't make much sense unless repeat > 1)
+    if args.problem:
+        all_problems = [args.problem]
+    else:
+        all_problems = registry.get_problem_ids()
+
+    # Create shared experiment log directory
+    session_timestamp = get_current_datetime_formatted()
+    os.makedirs("logs", exist_ok=True)
+    experiment_log_dir = os.path.abspath(f"logs/{session_timestamp}")
+    os.makedirs(experiment_log_dir, exist_ok=True)
+    logger.info(f"Parallel experiment logs will be stored in: {experiment_log_dir}")
+
+    # Split problems
+    chunk_size = math.ceil(len(all_problems) / args.parallel)
+    if chunk_size == 0 and len(all_problems) > 0:
+        chunk_size = 1
+        
+    processes = []
+    logger.info(f"Running {len(all_problems)} problems with {args.parallel} workers.")
+    
+    manager = multiprocessing.Manager()
+    status_dict = manager.dict()
+    
+    for i in range(args.parallel):
+        start = i * chunk_size
+        end = start + chunk_size
+        chunk = all_problems[start:end]
+        
+        if not chunk:
+            continue
+            
+        p = multiprocessing.Process(target=worker_main, args=(args, i, chunk, experiment_log_dir, status_dict))
+        p.start()
+        processes.append(p)
+        
+    # Monitoring loop
+    with Live(refresh_per_second=4) as live:
+        while any(p.is_alive() for p in processes) or status_dict:
+            table = Table(title=f"Parallel Execution ({len(all_problems)} problems)")
+            table.add_column("Problem ID", style="cyan")
+            table.add_column("Status", style="magenta")
+            table.add_column("Elapsed", style="green")
+            
+            completed_count = 0
+            
+            sorted_keys = sorted(status_dict.keys())
+            for pid in sorted_keys:
+                info = status_dict[pid]
+                status = info.get("status", "Unknown")
+                start_time = info.get("start_time", 0)
+                
+                if status == "Completed":
+                    completed_count += 1
+                    elapsed = info.get("elapsed", 0)
+                elif status == "Error":
+                    completed_count += 1 # Count error as done for progress
+                    elapsed = info.get("elapsed", 0)
+                else:
+                    elapsed = time.time() - start_time
+                
+                table.add_row(pid, status, f"{elapsed:.1f}s")
+            
+            table.caption = f"Progress: {completed_count}/{len(all_problems)}"
+            live.update(table)
+            
+            if not any(p.is_alive() for p in processes) and completed_count == len(status_dict):
+                 break
+                 
+            time.sleep(0.5)
+        
+    for p in processes:
+        p.join()
+
+
+def main(args, problem_list=None, experiment_log_dir=None, status_dict=None):
     # Generate session ID and log directory
     session_timestamp = get_current_datetime_formatted()
     # Ensure logs root exists
     os.makedirs("logs", exist_ok=True)
-    # Create experiment directory
-    experiment_log_dir = os.path.abspath(f"logs/{session_timestamp}")
+    
+    if experiment_log_dir is None:
+        # Create experiment directory
+        experiment_log_dir = os.path.abspath(f"logs/{session_timestamp}")
+    
     os.makedirs(experiment_log_dir, exist_ok=True)
     
-    # Set log file path for init_logger
-    log_file_path = os.path.join(experiment_log_dir, f"sregym_{session_timestamp}.log")
-    os.environ["SREGYM_LOG_FILE"] = log_file_path
+    # Set log file path for init_logger if not already set by worker
+    if "SREGYM_LOG_FILE" not in os.environ:
+        log_file_path = os.path.join(experiment_log_dir, f"sregym_{session_timestamp}.log")
+        os.environ["SREGYM_LOG_FILE"] = log_file_path
 
     # set up the logger
     init_logger()
@@ -309,7 +532,7 @@ def main(args):
     # Start the driver in the background; it will call request_shutdown() when finished
     driver_thread = threading.Thread(
         target=_run_driver_and_shutdown,
-        args=(conductor, experiment_log_dir, args.problem, args.agent, args.use_external_harness, args.repeat, args.enable_summary),
+        args=(conductor, experiment_log_dir, args.problem, args.agent, args.use_external_harness, args.repeat, args.enable_summary, problem_list, status_dict),
         name="driver",
         daemon=True,
     )
@@ -393,9 +616,15 @@ if __name__ == "__main__":
         help="Number of times to repeat each problem",
     )
     parser.add_argument(
+        "--parallel",
+        type=int,
+        default=1,
+        help="Number of parallel workers to run",
+    )
+    parser.add_argument(
         "--enable-summary",
         action="store_true",
-        help="Enable summarization of agent runs (only supported by gemini_cli)",
+        help="Enable summarization of results using an LLM",
     )
     args = parser.parse_args()
 
@@ -403,4 +632,7 @@ if __name__ == "__main__":
     if not args.use_external_harness and args.agent is None:
         parser.error("--agent is required when --use-external-harness is not set")
 
-    main(args)
+    if args.parallel > 1:
+        run_parallel(args)
+    else:
+        main(args)

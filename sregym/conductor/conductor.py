@@ -1,4 +1,5 @@
 import logging
+import os
 import shutil
 import time
 from pathlib import Path
@@ -39,9 +40,14 @@ class Conductor:
         self._baseline_captured = False
 
         # Kubernetes API proxy to hide chaos engineering namespaces from agents
+        proxy_port = 16443
+        worker_id = os.getenv("SREGYM_WORKER_ID")
+        if worker_id:
+             proxy_port += int(worker_id)
+        
         self.k8s_proxy = KubernetesAPIProxy(
             hidden_namespaces={"chaos-mesh", "khaos"},
-            listen_port=16443,
+            listen_port=proxy_port,
         )
         self._agent_kubeconfig_path: str | None = None
 

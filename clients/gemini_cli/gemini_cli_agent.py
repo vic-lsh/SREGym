@@ -244,7 +244,7 @@ class GeminiCliAgent:
         logger.info(f"Executing command: {' '.join(command)}")
 
         # Ensure exp_env directory exists
-        exp_env_dir = Path("exp_env")
+        exp_env_dir = Path(os.getenv("SREGYM_EXP_ENV", "exp_env"))
         exp_env_dir.mkdir(exist_ok=True)
 
         try:
