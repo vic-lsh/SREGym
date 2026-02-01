@@ -10,6 +10,8 @@ if str(sregym_core_path) not in sys.path:
 import asyncio
 import json
 import time
+import urllib3
+from urllib3.exceptions import MaxRetryError
 
 # for parsing return values from benchmark app info as python dict
 from ast import literal_eval
@@ -576,10 +578,17 @@ async def mitigation_task_main(diagnosis_summary):
             rollback_stack_lst.append("N/A, mitigation agent")
 
             # getting oracle result
+            is_infra_failure = False
             try:
                 oracle_results = await validate_oracles(oracles)
                 oracle_results_lst.append(str(oracle_results))
                 has_succeeded = oracle_results[0]
+            except (ConnectionRefusedError, MaxRetryError) as e:
+                logger.error(f"Infrastructure failure detected during oracle validation: {e}. Aborting retries.")
+                oracle_results = [False, []]
+                oracle_results_lst.append(f"Infra error: {str(e)}")
+                has_succeeded = False
+                is_infra_failure = True
             except Exception as e:
                 logger.error(f"Oracle validation failed with error: {e}", exc_info=True)
                 oracle_results = [False, []]
@@ -594,7 +603,11 @@ async def mitigation_task_main(diagnosis_summary):
                 # return agent_exec_stats
             else:
                 # here the agent fails, we make decision if we should retry
-                should_retry = curr_attempt + 1 < mitigation_agent_max_retry_attempts
+                if is_infra_failure:
+                    should_retry = False
+                else:
+                    should_retry = curr_attempt + 1 < mitigation_agent_max_retry_attempts
+                
                 logger.info(f"agent failed, should we retry? {'Yes!' if should_retry else 'No!'}")
                 if should_retry:
                     # we should retry as we have more trials left

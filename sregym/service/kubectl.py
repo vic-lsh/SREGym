@@ -143,18 +143,40 @@ class KubeCtl:
 
             while wait < max_wait:
                 try:
-                    pod_list = self.list_pods(namespace)
+                    deployments_list = self.list_deployments(namespace)
+                    deployments = deployments_list.items if deployments_list else []
 
-                    if pod_list.items:
+                    pod_list = self.list_pods(namespace)
+                    pods = pod_list.items if pod_list else []
+
+                    # If no resources found, wait (maybe too early)
+                    if not deployments and not pods:
+                        time.sleep(sleep)
+                        wait += sleep
+                        continue
+
+                    deployments_ready = True
+                    for d in deployments:
+                        spec_replicas = d.spec.replicas if d.spec.replicas is not None else 1
+                        ready_replicas = d.status.ready_replicas if d.status.ready_replicas is not None else 0
+                        if ready_replicas < spec_replicas:
+                            deployments_ready = False
+                            break
+
+                    pods_ready = True
+                    if pods:
                         ready_pods = [
                             pod
-                            for pod in pod_list.items
+                            for pod in pods
                             if pod.status.container_statuses and all(cs.ready for cs in pod.status.container_statuses)
                         ]
 
-                        if len(ready_pods) == len(pod_list.items):
-                            console.log(f"[bold green]All pods in namespace '{namespace}' are ready.")
-                            return
+                        if len(ready_pods) != len(pods):
+                            pods_ready = False
+
+                    if deployments_ready and pods_ready:
+                        console.log(f"[bold green]All pods in namespace '{namespace}' are ready.")
+                        return
 
                 except Exception as e:
                     console.log(f"[red]Error checking pod statuses: {e}")

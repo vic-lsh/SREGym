@@ -11,6 +11,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 import tempfile
+import queue
 
 import uvicorn
 from rich.console import Console
@@ -54,6 +55,8 @@ def driver_loop(
     enable_summary: bool = False,
     problem_list: list = None,
     status_dict=None,
+    problem_queue=None,
+    worker_id=None,
 ):
     """
     Deploy each problem and wait for HTTP grading via POST /submit.
@@ -68,6 +71,8 @@ def driver_loop(
         enable_summary: If True, pass --enable-summary to the agent.
         problem_list: Optional list of problem IDs to run.
         status_dict: Shared dictionary for status updates (used in parallel mode).
+        problem_queue: Optional multiprocessing.Queue to fetch problems from.
+        worker_id: Optional ID of the worker process (for logging).
     """
 
     async def driver():
@@ -97,32 +102,42 @@ def driver_loop(
         all_results_for_agent = []
         # session_timestamp = get_current_datetime_formatted()
 
-        # Get all problem IDs and filter if needed
-        problem_ids = conductor.problems.get_problem_ids()
+        if problem_queue:
+            def problem_gen():
+                while True:
+                    try:
+                        yield problem_queue.get_nowait()
+                    except queue.Empty:
+                        return
+            problem_iterator = problem_gen()
+        else:
+            # Get all problem IDs and filter if needed
+            problem_ids = conductor.problems.get_problem_ids()
 
+            all_problem_ids = conductor.problems.get_problem_ids(all=True)
+            if problem_filter:
+                if problem_filter not in all_problem_ids:
+                    console.log(f"⚠️  Problem '{problem_filter}' not found in registry. Available problems: {problem_ids}")
+                    sys.exit(1)
+                problem_ids = [problem_filter]
+                console.log(f"🎯 Running single problem: {problem_filter}")
+            elif problem_list:
+                # Filter to intersection of available and requested
+                problem_ids = [p for p in problem_ids if p in problem_list]
+                console.log(f"🎯 Running {len(problem_ids)} problems from list")
 
-        all_problem_ids = conductor.problems.get_problem_ids(all=True)
-        if problem_filter:
-            if problem_filter not in all_problem_ids:
-                console.log(f"⚠️  Problem '{problem_filter}' not found in registry. Available problems: {problem_ids}")
-                sys.exit(1)
-            problem_ids = [problem_filter]
-            console.log(f"🎯 Running single problem: {problem_filter}")
-        elif problem_list:
-            # Filter to intersection of available and requested
-            problem_ids = [p for p in problem_ids if p in problem_list]
-            console.log(f"🎯 Running {len(problem_ids)} problems from list")
+            # sanity check: are there any specified problem ids that do not exist in the registry?
+            unknown_problem_ids = set(problem_ids) - set(all_problem_ids)
+            if unknown_problem_ids:
+                console.log(
+                    f"⚠️  These problem ids do not exist in the registry and they will be skipped: {unknown_problem_ids}"
+                )
+            for unknown_problem_id in unknown_problem_ids:
+                problem_ids.remove(unknown_problem_id)
+            
+            problem_iterator = problem_ids
 
-        # sanity check: are there any specified problem ids that do not exist in the registry?
-        unknown_problem_ids = set(problem_ids) - set(all_problem_ids)
-        if unknown_problem_ids:
-            console.log(
-                f"⚠️  These problem ids do not exist in the registry and they will be skipped: {unknown_problem_ids}"
-            )
-        for unknown_problem_id in unknown_problem_ids:
-            problem_ids.remove(unknown_problem_id)
-
-        for pid in problem_ids:
+        for pid in problem_iterator:
             # Prepare for logging redirection if in parallel mode
             redirect_ctx = open(os.path.join(experiment_log_dir, f"{pid}.log"), "w") if status_dict is not None else None
             original_stdout = sys.stdout
@@ -142,7 +157,8 @@ def driver_loop(
                 status_dict[pid] = {
                     "status": "Deploying",
                     "start_time": time.time(),
-                    "elapsed": 0.0
+                    "elapsed": 0.0,
+                    "worker_id": worker_id
                 }
 
             try:
@@ -294,8 +310,12 @@ def driver_loop(
                         "start_time": status_dict[pid]["start_time"],
                         "elapsed": time.time() - status_dict[pid]["start_time"]
                     }
-                raise e
+                # Do not raise e; continue to next problem
             finally:
+                # Ensure agent is cleaned up even if an error occurred
+                if not use_external_harness:
+                    LAUNCHER.cleanup_agent(agent_to_run)
+                
                 if status_dict is not None:
                     if status_dict[pid]["status"] != "Error":
                         status_dict[pid] = {
@@ -356,25 +376,33 @@ def _run_driver_and_shutdown(
     enable_summary: bool = False,
     problem_list: list = None,
     status_dict=None,
+    problem_queue=None,
+    worker_id=None,
 ):
     """Run the benchmark driver, stash results, then tell the API to exit."""
-    results = driver_loop(
-        conductor,
-        experiment_log_dir,
-        problem_filter=problem_filter,
-        agent_to_run=agent_to_run,
-        use_external_harness=use_external_harness,
-        repeat=repeat,
-        enable_summary=enable_summary,
-        problem_list=problem_list,
-        status_dict=status_dict,
-    )
-    setattr(main, "results", results)
-    # ⬇️ Ask the API server (running in main thread) to stop so we can write CSV
-    request_shutdown()
+    try:
+        results = driver_loop(
+            conductor,
+            experiment_log_dir,
+            problem_filter=problem_filter,
+            agent_to_run=agent_to_run,
+            use_external_harness=use_external_harness,
+            repeat=repeat,
+            enable_summary=enable_summary,
+            problem_list=problem_list,
+            status_dict=status_dict,
+            problem_queue=problem_queue,
+            worker_id=worker_id,
+        )
+        setattr(main, "results", results)
+    except Exception as e:
+        logger.error(f"Driver loop crashed: {e}")
+    finally:
+        # ⬇️ Ask the API server (running in main thread) to stop so we can write CSV
+        request_shutdown()
 
 
-def worker_main(args, worker_id, problem_list, experiment_log_dir, status_dict):
+def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict):
     """Worker function for parallel execution."""
     os.environ["SREGYM_WORKER_ID"] = str(worker_id)
     os.environ["API_PORT"] = str(8000 + worker_id)
@@ -400,7 +428,7 @@ def worker_main(args, worker_id, problem_list, experiment_log_dir, status_dict):
                     handler.setStream(f)
         
         # Run main with the specific list of problems
-        main(args, problem_list=problem_list, experiment_log_dir=experiment_log_dir, status_dict=status_dict)
+        main(args, problem_queue=problem_queue, experiment_log_dir=experiment_log_dir, status_dict=status_dict, worker_id=worker_id)
 
 
 def run_parallel(args):
@@ -423,32 +451,43 @@ def run_parallel(args):
     os.makedirs(experiment_log_dir, exist_ok=True)
     logger.info(f"Parallel experiment logs will be stored in: {experiment_log_dir}")
 
-    # Split problems
-    chunk_size = math.ceil(len(all_problems) / args.parallel)
-    if chunk_size == 0 and len(all_problems) > 0:
-        chunk_size = 1
-        
-    processes = []
-    logger.info(f"Running {len(all_problems)} problems with {args.parallel} workers.")
-    
     manager = multiprocessing.Manager()
     status_dict = manager.dict()
+    problem_queue = manager.Queue()
+    
+    for pid in all_problems:
+        problem_queue.put(pid)
+        
+    processes = []
+    worker_map = {} # Map process to worker ID
+    logger.info(f"Running {len(all_problems)} problems with {args.parallel} workers.")
     
     for i in range(args.parallel):
-        start = i * chunk_size
-        end = start + chunk_size
-        chunk = all_problems[start:end]
-        
-        if not chunk:
-            continue
-            
-        p = multiprocessing.Process(target=worker_main, args=(args, i, chunk, experiment_log_dir, status_dict))
+        p = multiprocessing.Process(target=worker_main, args=(args, i, problem_queue, experiment_log_dir, status_dict))
         p.start()
         processes.append(p)
+        worker_map[p] = i
         
     # Monitoring loop
     with Live(refresh_per_second=4) as live:
         while any(p.is_alive() for p in processes) or status_dict:
+            # Check for dead workers and update status
+            for p in processes:
+                if not p.is_alive():
+                    # Worker died
+                    wid = worker_map.get(p)
+                    # Find problems assigned to this worker that are not terminal
+                    for pid, info in status_dict.items():
+                        if info.get("worker_id") == wid:
+                            status = info.get("status")
+                            if status not in ["Completed", "Error", "Skipped (Khaos Req)", "Error (Worker Died)"]:
+                                status_dict[pid] = {
+                                    "status": "Error (Worker Died)",
+                                    "start_time": info["start_time"],
+                                    "elapsed": time.time() - info["start_time"],
+                                    "worker_id": wid
+                                }
+
             table = Table(title=f"Parallel Execution ({len(all_problems)} problems)")
             table.add_column("Problem ID", style="cyan")
             table.add_column("Status", style="magenta")
@@ -465,9 +504,12 @@ def run_parallel(args):
                 if status == "Completed":
                     completed_count += 1
                     elapsed = info.get("elapsed", 0)
-                elif status == "Error":
+                elif status == "Error" or status == "Error (Worker Died)":
                     completed_count += 1 # Count error as done for progress
                     elapsed = info.get("elapsed", 0)
+                elif status == "Skipped (Khaos Req)":
+                     completed_count += 1
+                     elapsed = info.get("elapsed", 0)
                 else:
                     elapsed = time.time() - start_time
                 
@@ -476,7 +518,8 @@ def run_parallel(args):
             table.caption = f"Progress: {completed_count}/{len(all_problems)}"
             live.update(table)
             
-            if not any(p.is_alive() for p in processes) and completed_count == len(status_dict):
+            # If all workers are dead, we are done.
+            if not any(p.is_alive() for p in processes):
                  break
                  
             time.sleep(0.5)
@@ -485,7 +528,7 @@ def run_parallel(args):
         p.join()
 
 
-def main(args, problem_list=None, experiment_log_dir=None, status_dict=None):
+def main(args, problem_list=None, experiment_log_dir=None, status_dict=None, problem_queue=None, worker_id=None):
     # Generate session ID and log directory
     session_timestamp = get_current_datetime_formatted()
     # Ensure logs root exists
@@ -532,7 +575,7 @@ def main(args, problem_list=None, experiment_log_dir=None, status_dict=None):
     # Start the driver in the background; it will call request_shutdown() when finished
     driver_thread = threading.Thread(
         target=_run_driver_and_shutdown,
-        args=(conductor, experiment_log_dir, args.problem, args.agent, args.use_external_harness, args.repeat, args.enable_summary, problem_list, status_dict),
+        args=(conductor, experiment_log_dir, args.problem, args.agent, args.use_external_harness, args.repeat, args.enable_summary, problem_list, status_dict, problem_queue, worker_id),
         name="driver",
         daemon=True,
     )
