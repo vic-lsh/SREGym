@@ -768,9 +768,9 @@ class VirtualizationFaultInjector(FaultInjector):
     def inject_missing_configmap(self, microservices: list[str]):
         for microservice in microservices:
             configmap_name = None
-            if self.namespace == "social-network":
+            if self.namespace.startswith("social-network"):
                 configmap_name = "media-mongodb"
-            elif self.namespace == "hotel-reservation":
+            elif self.namespace.startswith("hotel-reservation"):
                 configmap_name = "mongo-geo-script"
             else:
                 raise ValueError(f"Unknown namespace: {self.namespace}")
@@ -1162,7 +1162,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
             shadow_vars = None
 
-            if self.namespace == "astronomy-shop":
+            if self.namespace.startswith("astronomy-shop"):
                 if service == "frontend-proxy":
                     shadow_vars = {"FRONTEND_HOST": "localhost"}
 
