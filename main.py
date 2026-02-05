@@ -685,13 +685,20 @@ def run_parallel(args):
         logger.info("\n🛑 Interrupted by user. Terminating workers...")
 
     logger.info("Waiting for workers to cleanup...")
+    # Wait for workers to cleanup (parallel wait)
+    start_wait = time.time()
+    while time.time() - start_wait < 5:
+        if not any(p.is_alive() for p in processes):
+            break
+        time.sleep(0.1)
+
     for p in processes:
         if p.is_alive():
-            p.join(timeout=5)
-            if p.is_alive():
-                logger.warning(f"Worker {worker_map.get(p)} did not exit, forcing termination...")
-                p.terminate()
-                p.join()
+            logger.warning(f"Worker {worker_map.get(p)} did not exit, forcing termination...")
+            p.terminate()
+            p.join(timeout=1)
+        else:
+            p.join()
 
 
 def main(args, problem_list=None, experiment_log_dir=None, status_dict=None, problem_queue=None, worker_id=None):
