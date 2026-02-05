@@ -154,6 +154,15 @@ class FleetCast(Application):
             "ingress.hosts[0].paths[1].backend.servicePort=5000",
         ]
 
+        # Support parallel execution by pointing to the correct TiDB cluster
+        worker_id = os.getenv("SREGYM_WORKER_ID")
+        if worker_id:
+             tidb_ns = f"tidb-cluster-w{worker_id}"
+             tidb_host = f"basic-tidb.{tidb_ns}.svc.cluster.local"
+             ingress_args.extend([
+                 "--set", f"tidb.host={tidb_host}"
+             ])
+
         extra = self.helm_configs.get("extra_args", [])
         if isinstance(extra, str):
             extra = [extra]

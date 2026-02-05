@@ -6,6 +6,10 @@ import subprocess
 from sregym.service.telemetry.prometheus import Prometheus
 
 FLEETCAST_NS = "fleetcast"
+worker_id = os.getenv("SREGYM_WORKER_ID")
+if worker_id:
+    FLEETCAST_NS = f"fleetcast-w{worker_id}"
+
 FLEETCAST_DEP = "fleetcast-satellite-app-backend"
 FLEETCAST_METRICS_PORT = "5000"
 

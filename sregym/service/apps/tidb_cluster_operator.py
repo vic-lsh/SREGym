@@ -16,10 +16,15 @@ class TiDBClusterDeployer:
             self.metadata = json.load(f)
 
         self.name = self.metadata["Name"]
-        self.namespace_tidb_cluster = self.metadata["K8S Config"]["namespace"]
+        
+        # Support parallel execution
+        worker_id = os.getenv("SREGYM_WORKER_ID")
+        suffix = f"-w{worker_id}" if worker_id else ""
+
+        self.namespace_tidb_cluster = self.metadata["K8S Config"]["namespace"] + suffix
         self.cluster_config_url = self.metadata["K8S Config"]["config_url"]
 
-        self.operator_namespace = self.metadata["Helm Operator Config"]["namespace"]
+        self.operator_namespace = self.metadata["Helm Operator Config"]["namespace"] + suffix
         self.operator_release_name = self.metadata["Helm Operator Config"]["release_name"]
         self.operator_chart = self.metadata["Helm Operator Config"]["chart_path"]
         self.operator_version = self.metadata["Helm Operator Config"]["version"]
