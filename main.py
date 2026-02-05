@@ -581,7 +581,8 @@ def run_parallel(args):
         
     # Monitoring loop
     try:
-        with Live(refresh_per_second=4) as live:
+        console = Console(force_terminal=True)
+        with Live(console=console, auto_refresh=False) as live:
             while any(p.is_alive() for p in processes) or (status_dict and any(info.get("worker_id") is not None for info in status_dict.values())):
                 # Check for dead workers and update status
                 for p in processes:
@@ -672,7 +673,7 @@ def run_parallel(args):
                     
                     renderable = Group(table, error_table)
 
-                live.update(renderable)
+                live.update(renderable, refresh=True)
                 
                 # If all workers are dead, we are done.
                 if not any(p.is_alive() for p in processes):
