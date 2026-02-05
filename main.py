@@ -580,8 +580,18 @@ def run_parallel(args):
         worker_map[p] = i
         
     # Monitoring loop
+    # Suppress console logging in main process during live display to prevent interference
+    root_logger = logging.getLogger("all")
+    saved_handlers = []
+    for handler in root_logger.handlers:
+        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+            saved_handlers.append(handler)
+            
+    for handler in saved_handlers:
+        root_logger.removeHandler(handler)
+
     try:
-        console = Console(force_terminal=True)
+        console = Console()
         with Live(console=console, auto_refresh=False) as live:
             while any(p.is_alive() for p in processes) or (status_dict and any(info.get("worker_id") is not None for info in status_dict.values())):
                 # Check for dead workers and update status
@@ -683,6 +693,11 @@ def run_parallel(args):
 
     except KeyboardInterrupt:
         logger.info("\n🛑 Interrupted by user. Terminating workers...")
+
+    finally:
+        # Restore logging handlers
+        for handler in saved_handlers:
+            root_logger.addHandler(handler)
 
     logger.info("Waiting for workers to cleanup...")
     # Wait for workers to cleanup (parallel wait)
