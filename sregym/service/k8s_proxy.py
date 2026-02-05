@@ -349,7 +349,18 @@ class KubernetesAPIProxy:
     def stop(self):
         """Stop the proxy server."""
         if self.server:
-            self.server.shutdown()
+            # Shutdown in a thread to avoid blocking forever if something is stuck
+            t = threading.Thread(target=self.server.shutdown)
+            t.start()
+            t.join(timeout=2.0)
+            
+            if t.is_alive():
+                logger.warning("Proxy server shutdown timed out, forcing close")
+                try:
+                    self.server.server_close()
+                except Exception as e:
+                    logger.warning(f"Error forcing proxy server close: {e}")
+            
             self.server = None
             self.server_thread = None
             logger.info("Kubernetes API filtering proxy stopped")
