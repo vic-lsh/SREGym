@@ -104,9 +104,29 @@ async def submit_tool(
 
         logger.info("we don't set submitted to True, to force agent retry submission. \n")
         logger.info("giving agent another change by decrementing step count")
+
+        # Check for retry limit to avoid infinite loop
+        submission_retries = state.get("submission_retries", 0)
+        # Assuming a reasonable default limit if not available in config context
+        # 5 retries is generous enough to try to fix things
+        if submission_retries >= 5:
+            logger.warning("Max submission retries exceeded. Forcing submission to True to exit loop.")
+            return Command(
+                update={
+                    "submitted": True,
+                    "messages": [
+                        ToolMessage(
+                            content=f"Submission failed multiple times ({submission_retries}) and max retries exceeded. Agent exiting. Last error: {result}",
+                            tool_call_id=tool_call_id,
+                        ),
+                    ],
+                }
+            )
+
         return Command(
             update={
                 "num_steps": state["num_steps"] - 1,
+                "submission_retries": submission_retries + 1,
                 "messages": [
                     ToolMessage(content=f"HTTP submission failed: {result}", tool_call_id=tool_call_id),
                 ],

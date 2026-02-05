@@ -19,3 +19,4 @@ class State(TypedDict):
     # submit_tried: bool
     # ans: dict
     rollback_stack: str
+    submission_retries: int

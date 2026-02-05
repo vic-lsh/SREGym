@@ -239,6 +239,7 @@ class BaseAgent:
             "num_steps": 0,
             "submitted": False,
             "rollback_stack": "",
+            "submission_retries": 0,
         }
 
         return list(
@@ -289,6 +290,7 @@ class BaseAgent:
                     "submitted": False,
                     # "ans": dict(),
                     "rollback_stack": "",
+                    "submission_retries": 0,
                 }
 
             async for event in self.graph.astream(
