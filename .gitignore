@@ -772,3 +772,4 @@ python-database
 sregym/generators/noise/noise_config.yaml
 results/
 logs/
+.local_tmp/
