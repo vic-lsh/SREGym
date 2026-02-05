@@ -15,7 +15,7 @@ import tempfile
 import queue
 
 import uvicorn
-from rich.console import Console
+from rich.console import Console, Group
 from rich.live import Live
 from rich.table import Table
 
@@ -548,6 +548,7 @@ def run_parallel(args):
                 started_pids = set(status_dict.keys())
                 sorted_keys = sorted(status_dict.keys())
                 
+                erred_tasks = []
                 for pid in sorted_keys:
                     info = status_dict[pid]
                     status = info.get("status", "Unknown")
@@ -562,6 +563,7 @@ def run_parallel(args):
                     elif status in ["Error", "Error (Worker Died)"]:
                         error_count += 1
                         is_active = False
+                        erred_tasks.append((pid, status, start_time + info.get("elapsed", 0)))
                     elif status == "Skipped (Khaos Req)":
                          skipped_count += 1
                          is_active = False
@@ -593,7 +595,23 @@ def run_parallel(args):
                     summary_parts.append(f"[yellow]Skipped: {skipped_count}[/yellow]")
 
                 table.caption = " | ".join(summary_parts)
-                live.update(table)
+                
+                renderable = table
+                if erred_tasks:
+                    erred_tasks.sort(key=lambda x: x[2], reverse=True)
+                    latest_errors = erred_tasks[:5]
+                    error_table = Table(title="Latest Errors (Max 5)", show_header=True, header_style="bold red")
+                    error_table.add_column("Problem ID", style="cyan")
+                    error_table.add_column("Status", style="red")
+                    error_table.add_column("Time", style="dim")
+                    
+                    for pid, status, end_time in latest_errors:
+                         t_str = datetime.fromtimestamp(end_time).strftime("%H:%M:%S")
+                         error_table.add_row(pid, status, t_str)
+                    
+                    renderable = Group(table, error_table)
+
+                live.update(renderable)
                 
                 # If all workers are dead, we are done.
                 if not any(p.is_alive() for p in processes):
