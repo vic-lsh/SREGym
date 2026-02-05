@@ -72,7 +72,7 @@ class BHotelWrk:
                 api_instance.delete_namespaced_job(
                     name=job_name,
                     namespace=namespace,
-                    body=client.V1DeleteOptions(propagation_policy="Foreground"),
+                    body=client.V1DeleteOptions(propagation_policy="Background"),  # Changed from Foreground to avoid blocking on stuck pods
                 )
                 self.wait_for_job_deletion(job_name, namespace)
         except client.exceptions.ApiException as e:
@@ -124,8 +124,26 @@ class BHotelWrk:
                 else:
                     console.log(f"[red]Error checking job deletion: {e}")
                     raise
+            except Exception as e:
+                console.log(f"[red]Unexpected error waiting for job deletion: {e}")
+                # Don't raise, just retry until timeout to be safe?
+                # Actually unexpected error might be connection related, let's keep retrying but log it.
+                time.sleep(sleep)
+                waited += sleep
 
-        raise TimeoutError(f"[red]Timed out waiting for job '{job_name}' to be deleted.")
+        # If we time out, try to force delete via background propagation just in case it was stuck in foreground
+        try:
+             logger.warning(f"Timed out waiting for job '{job_name}' deletion. Attempting background delete.")
+             api_instance.delete_namespaced_job(
+                name=job_name,
+                namespace=namespace,
+                body=client.V1DeleteOptions(propagation_policy="Background", grace_period_seconds=0),
+            )
+        except Exception as e:
+             logger.error(f"Force delete failed (ignoring): {e}")
+
+        # Don't crash, just log error and proceed. The next create might fail or succeed if it was just a lagging read.
+        logger.error(f"Timed out waiting for job '{job_name}' to be deleted. Proceeding anyway.")
 
 
 class BHotelWrkWorkloadManager(StreamWorkloadManager):
