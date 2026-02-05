@@ -16,8 +16,14 @@ import queue
 
 import uvicorn
 from rich.console import Console, Group
-from rich.live import Live
-from rich.table import Table
+from rich.progress import (
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    BarColumn,
+    TaskProgressColumn,
+    TimeElapsedColumn,
+)
 
 # Ensure multiprocessing uses a local filesystem for temp files (fixes NFS busy errors)
 # We use the current working directory if it's on /mnt/data (local disk), otherwise fallback to default
@@ -587,7 +593,7 @@ def run_parallel(args):
         
     # Monitoring loop
     try:
-        # Redirect stdout/stderr to suppress unwanted output during Live display
+        # Redirect stdout/stderr to suppress unwanted output during Progress display
         # We keep a reference to the original stdout for the Console to use
         original_stdout = sys.stdout
         original_stderr = sys.stderr
@@ -599,11 +605,32 @@ def run_parallel(args):
         
         try:
             console = Console(file=original_stdout, force_terminal=True)
-            with Live(console=console, auto_refresh=False) as live:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                TimeElapsedColumn(),
+                console=console
+            ) as progress:
+                # Main overall progress
+                total_problems = len(all_problems)
+                main_task = progress.add_task("[bold green]Overall Progress", total=total_problems)
+                
+                # Worker tasks - one per worker
+                worker_tasks = {}
+                for i in range(args.parallel):
+                    # Initial state for workers
+                    t_id = progress.add_task(f"Worker {i}: Idle", total=None, visible=True) 
+                    worker_tasks[i] = t_id
+                
                 while any(p.is_alive() for p in processes) or (status_dict and any(info.get("worker_id") is not None for info in status_dict.values())):
                     # Check for dead workers and update status
+                    active_workers = set()
                     for p in processes:
-                        if not p.is_alive():
+                        if p.is_alive():
+                            active_workers.add(worker_map.get(p))
+                        else:
                             # Worker died
                             wid = worker_map.get(p)
                             # Find problems assigned to this worker that are not terminal
@@ -618,81 +645,55 @@ def run_parallel(args):
                                             "worker_id": wid
                                         }
 
-                    total_problems = len(all_problems)
                     completed_count = 0
                     error_count = 0
                     skipped_count = 0
-                    active_tasks = []
                     
-                    started_pids = set(status_dict.keys())
-                    sorted_keys = sorted(status_dict.keys())
+                    # Track what each worker is doing
+                    # Initialize with None
+                    current_worker_status = {i: None for i in range(args.parallel)} 
                     
-                    erred_tasks = []
-                    for pid in sorted_keys:
-                        info = status_dict[pid]
+                    for pid, info in status_dict.items():
                         status = info.get("status", "Unknown")
-                        start_time = info.get("start_time", 0)
-                        elapsed = 0
+                        wid = info.get("worker_id")
                         
-                        is_active = True
-                        
+                        # Counts for overall
                         if status.startswith("Completed"):
                             completed_count += 1
-                            is_active = False
                         elif status in ["Error", "Error (Worker Died)"]:
                             error_count += 1
-                            is_active = False
-                            erred_tasks.append((pid, status, start_time + info.get("elapsed", 0)))
                         elif status == "Skipped (Khaos Req)":
                             skipped_count += 1
-                            is_active = False
-                        else:
-                            elapsed = time.time() - start_time
                         
-                        if is_active:
-                            active_tasks.append((pid, status, elapsed))
+                        # Worker status (if active)
+                        if wid is not None:
+                            # Check if this is an active state
+                            is_active = not (status.startswith("Completed") or status in ["Error", "Skipped (Khaos Req)", "Error (Worker Died)"])
+                            if is_active:
+                                current_worker_status[wid] = (status, pid)
 
-                    queued_count = total_problems - len(started_pids)
-                    running_count = len(active_tasks)
-
-                    table = Table(title=f"Parallel Execution ({total_problems} problems)")
-                    table.add_column("Problem ID", style="cyan")
-                    table.add_column("Status", style="magenta")
-                    table.add_column("Elapsed", style="green")
-                    
-                    for pid, status, elapsed in active_tasks:
-                        table.add_row(pid, status, f"{elapsed:.1f}s")
-                    
-                    summary_parts = [
-                        f"Progress: {completed_count + error_count + skipped_count}/{total_problems}",
-                        f"Running: {running_count}",
-                        f"Queued: {queued_count}",
-                        f"[green]Completed: {completed_count}[/green]",
-                        f"[red]Errors: {error_count}[/red]",
-                    ]
+                    # Update main task
+                    finished_count = completed_count + error_count + skipped_count
+                    status_text = f"[bold green]Overall Progress[/bold green] (Completed: [green]{completed_count}[/green], Errors: [red]{error_count}[/red]"
                     if skipped_count > 0:
-                        summary_parts.append(f"[yellow]Skipped: {skipped_count}[/yellow]")
-
-                    table.caption = " | ".join(summary_parts)
+                        status_text += f", Skipped: [yellow]{skipped_count}[/yellow]"
+                    status_text += ")"
+                    progress.update(main_task, completed=finished_count, description=status_text)
                     
-                    renderable = table
-                    if erred_tasks:
-                        erred_tasks.sort(key=lambda x: x[2], reverse=True)
-                        latest_errors = erred_tasks[:5]
-                        error_table = Table(title="Latest Errors (Max 5)", show_header=True, header_style="bold red")
-                        error_table.add_column("Problem ID", style="cyan")
-                        error_table.add_column("Status", style="red")
-                        error_table.add_column("Time", style="dim")
-                        
-                        for pid, status, end_time in latest_errors:
-                            t_str = datetime.fromtimestamp(end_time).strftime("%H:%M:%S")
-                            error_table.add_row(pid, status, t_str)
-                        
-                        renderable = Group(table, error_table)
-
-                    live.update(renderable, refresh=True)
+                    # Update worker tasks
+                    for i in range(args.parallel):
+                        if i not in active_workers:
+                             # Worker is dead or finished
+                             progress.update(worker_tasks[i], description=f"Worker {i}: [dim]Finished[/dim]", total=1, completed=1)
+                        elif current_worker_status[i]:
+                            status, pid = current_worker_status[i]
+                            desc = f"Worker {i}: [cyan]{pid}[/cyan] - {status}"
+                            # Make it look active (pulse)
+                            progress.update(worker_tasks[i], description=desc, total=None)
+                        else:
+                            # Worker is alive but idle (or between tasks)
+                            progress.update(worker_tasks[i], description=f"Worker {i}: Idle", total=0, completed=0)
                     
-                    # If all workers are dead, we are done.
                     if not any(p.is_alive() for p in processes):
                         break
                         
