@@ -42,7 +42,7 @@ class TraceAPI:
         self._instance_lock = threading.Lock()
 
         # Decide service/port/prefix based on namespace
-        self._is_astronomy = self.namespace == "astronomy-shop"
+        self._is_astronomy = self.namespace.startswith("astronomy-shop")
         self._svc_name = "frontend-proxy" if self._is_astronomy else "jaeger"
         self._remote_port = "8080" if self._is_astronomy else "16686"
         self._url_prefix = "/jaeger/ui" if self._is_astronomy else ""

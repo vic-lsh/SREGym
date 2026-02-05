@@ -37,6 +37,8 @@ class Application:
 
         if "Helm Config" in metadata:
             self.helm_configs = metadata["Helm Config"]
+            if worker_id:
+                 self.helm_configs["namespace"] = self.namespace
             chart_path = self.helm_configs.get("chart_path")
 
             if chart_path and not self.helm_configs.get("remote_chart", False):
