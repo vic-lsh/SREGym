@@ -519,89 +519,99 @@ def run_parallel(args):
         worker_map[p] = i
         
     # Monitoring loop
-    with Live(refresh_per_second=4) as live:
-        while any(p.is_alive() for p in processes) or status_dict:
-            # Check for dead workers and update status
-            for p in processes:
-                if not p.is_alive():
-                    # Worker died
-                    wid = worker_map.get(p)
-                    # Find problems assigned to this worker that are not terminal
-                    for pid, info in status_dict.items():
-                        if info.get("worker_id") == wid:
-                            status = info.get("status")
-                            if not (status.startswith("Completed") or status in ["Error", "Skipped (Khaos Req)", "Error (Worker Died)"]):
-                                status_dict[pid] = {
-                                    "status": "Error (Worker Died)",
-                                    "start_time": info["start_time"],
-                                    "elapsed": time.time() - info["start_time"],
-                                    "worker_id": wid
-                                }
+    try:
+        with Live(refresh_per_second=4) as live:
+            while any(p.is_alive() for p in processes) or status_dict:
+                # Check for dead workers and update status
+                for p in processes:
+                    if not p.is_alive():
+                        # Worker died
+                        wid = worker_map.get(p)
+                        # Find problems assigned to this worker that are not terminal
+                        for pid, info in status_dict.items():
+                            if info.get("worker_id") == wid:
+                                status = info.get("status")
+                                if not (status.startswith("Completed") or status in ["Error", "Skipped (Khaos Req)", "Error (Worker Died)"]):
+                                    status_dict[pid] = {
+                                        "status": "Error (Worker Died)",
+                                        "start_time": info["start_time"],
+                                        "elapsed": time.time() - info["start_time"],
+                                        "worker_id": wid
+                                    }
 
-            total_problems = len(all_problems)
-            completed_count = 0
-            error_count = 0
-            skipped_count = 0
-            active_tasks = []
-            
-            started_pids = set(status_dict.keys())
-            sorted_keys = sorted(status_dict.keys())
-            
-            for pid in sorted_keys:
-                info = status_dict[pid]
-                status = info.get("status", "Unknown")
-                start_time = info.get("start_time", 0)
-                elapsed = 0
+                total_problems = len(all_problems)
+                completed_count = 0
+                error_count = 0
+                skipped_count = 0
+                active_tasks = []
                 
-                is_active = True
+                started_pids = set(status_dict.keys())
+                sorted_keys = sorted(status_dict.keys())
                 
-                if status.startswith("Completed"):
-                    completed_count += 1
-                    is_active = False
-                elif status in ["Error", "Error (Worker Died)"]:
-                    error_count += 1
-                    is_active = False
-                elif status == "Skipped (Khaos Req)":
-                     skipped_count += 1
-                     is_active = False
-                else:
-                    elapsed = time.time() - start_time
+                for pid in sorted_keys:
+                    info = status_dict[pid]
+                    status = info.get("status", "Unknown")
+                    start_time = info.get("start_time", 0)
+                    elapsed = 0
+                    
+                    is_active = True
+                    
+                    if status.startswith("Completed"):
+                        completed_count += 1
+                        is_active = False
+                    elif status in ["Error", "Error (Worker Died)"]:
+                        error_count += 1
+                        is_active = False
+                    elif status == "Skipped (Khaos Req)":
+                         skipped_count += 1
+                         is_active = False
+                    else:
+                        elapsed = time.time() - start_time
+                    
+                    if is_active:
+                        active_tasks.append((pid, status, elapsed))
+
+                queued_count = total_problems - len(started_pids)
+                running_count = len(active_tasks)
+
+                table = Table(title=f"Parallel Execution ({total_problems} problems)")
+                table.add_column("Problem ID", style="cyan")
+                table.add_column("Status", style="magenta")
+                table.add_column("Elapsed", style="green")
                 
-                if is_active:
-                    active_tasks.append((pid, status, elapsed))
+                for pid, status, elapsed in active_tasks:
+                    table.add_row(pid, status, f"{elapsed:.1f}s")
+                
+                summary_parts = [
+                    f"Progress: {completed_count + error_count + skipped_count}/{total_problems}",
+                    f"Running: {running_count}",
+                    f"Queued: {queued_count}",
+                    f"[green]Completed: {completed_count}[/green]",
+                    f"[red]Errors: {error_count}[/red]",
+                ]
+                if skipped_count > 0:
+                    summary_parts.append(f"[yellow]Skipped: {skipped_count}[/yellow]")
 
-            queued_count = total_problems - len(started_pids)
-            running_count = len(active_tasks)
+                table.caption = " | ".join(summary_parts)
+                live.update(table)
+                
+                # If all workers are dead, we are done.
+                if not any(p.is_alive() for p in processes):
+                     break
+                     
+                time.sleep(0.5)
 
-            table = Table(title=f"Parallel Execution ({total_problems} problems)")
-            table.add_column("Problem ID", style="cyan")
-            table.add_column("Status", style="magenta")
-            table.add_column("Elapsed", style="green")
-            
-            for pid, status, elapsed in active_tasks:
-                table.add_row(pid, status, f"{elapsed:.1f}s")
-            
-            summary_parts = [
-                f"Progress: {completed_count + error_count + skipped_count}/{total_problems}",
-                f"Running: {running_count}",
-                f"Queued: {queued_count}",
-                f"[green]Completed: {completed_count}[/green]",
-                f"[red]Errors: {error_count}[/red]",
-            ]
-            if skipped_count > 0:
-                summary_parts.append(f"[yellow]Skipped: {skipped_count}[/yellow]")
+    except KeyboardInterrupt:
+        logger.info("\n🛑 Interrupted by user. Terminating workers...")
 
-            table.caption = " | ".join(summary_parts)
-            live.update(table)
-            
-            # If all workers are dead, we are done.
-            if not any(p.is_alive() for p in processes):
-                 break
-                 
-            time.sleep(0.5)
-        
+    logger.info("Waiting for workers to cleanup...")
     for p in processes:
-        p.join()
+        if p.is_alive():
+            p.join(timeout=5)
+            if p.is_alive():
+                logger.warning(f"Worker {worker_map.get(p)} did not exit, forcing termination...")
+                p.terminate()
+                p.join()
 
 
 def main(args, problem_list=None, experiment_log_dir=None, status_dict=None, problem_queue=None, worker_id=None):
