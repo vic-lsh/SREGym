@@ -450,18 +450,19 @@ def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict)
     
     # In parallel mode, redirect all output to a worker log file to prevent console interleaving
     worker_log_path = os.path.join(experiment_log_dir, f"worker_{worker_id}.log")
+
+    # Use os.dup2 to redirect ALL output (stdout/stderr) to the file descriptor of the log file.
+    # This captures output from subprocesses (like kubectl) and C libraries that would otherwise
+    # bypass sys.stdout and print to the terminal, causing mangled output in the parallel view.
     with open(worker_log_path, "w") as f:
-        sys.stdout = f
-        sys.stderr = f
-        
-        # Redirect inherited logger handlers to the file
-        # This prevents logs from writing to the original TTY
-        for logger_name in [None, "all"]:  # None is root logger
-            logger = logging.getLogger(logger_name)
-            for handler in logger.handlers:
-                if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
-                    handler.setStream(f)
-        
+        # Flush python buffers before redirecting
+        sys.stdout.flush()
+        sys.stderr.flush()
+
+        # Redirect FD 1 (stdout) and FD 2 (stderr) to the file
+        os.dup2(f.fileno(), 1)
+        os.dup2(f.fileno(), 2)
+
         # Run main with the specific list of problems
         main(args, problem_queue=problem_queue, experiment_log_dir=experiment_log_dir, status_dict=status_dict, worker_id=worker_id)
 

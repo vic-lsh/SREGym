@@ -62,31 +62,33 @@ class Wrk:
 
         job_template["metadata"]["name"] = job_name
         container = job_template["spec"]["template"]["spec"]["containers"][0]
-        container["args"] = [
+        
+        # Override image to avoid Docker Hub rate limits and use apt-installed wrk
+        container["image"] = "yinfangchen/hotelreservation:latest"
+        container["command"] = ["/bin/sh", "-c"]
+        
+        # Construct wrk command (standard wrk, not wrk2)
+        wrk_cmd = [
+            "apt-get update > /dev/null && apt-get install -y wrk > /dev/null &&",
             "wrk",
-            "-D",
-            self.dist,
-            "-t",
-            str(self.threads),
-            "-c",
-            str(self.connections),
-            "-d",
-            f"{self.duration}s",
-            "-L",
-            "-s",
-            f"/scripts/{payload_script}",
-            url,
-            "-R",
-            str(self.rate),
+            "-t", str(self.threads),
+            "-c", str(self.connections),
+            "-d", f"{self.duration}s",
+            "-s", f"/scripts/{payload_script}",
         ]
-
+        
         if self.latency:
-            container["args"].append("--latency")
+            wrk_cmd.append("--latency")
+            
+        wrk_cmd.append(url)
+        
+        # Join into a single shell command string
+        container["args"] = [" ".join(wrk_cmd)]
 
         job_template["spec"]["template"]["spec"]["volumes"] = [
             {
                 "name": "wrk2-scripts",
-                "configMap": {"name": "wrk2-payload-script"},
+                "configMap": {"name": f"wrk2-payload-script-{job_name}"},
             }
         ]
         job_template["spec"]["template"]["spec"]["containers"][0]["volumeMounts"] = [
@@ -200,9 +202,8 @@ class WorkloadOracle(BaseOracle):
         return False
 
     async def get_workload_result(self, job_name):
-        self.kubectl.wait_for_job_completion(job_name=job_name, namespace="default")
-
-        namespace = "default"
+        namespace = self.app.namespace
+        self.kubectl.wait_for_job_completion(job_name=job_name, namespace=namespace)
 
         logs = None
         try:
@@ -217,8 +218,8 @@ class WorkloadOracle(BaseOracle):
         return logs
 
     def start_workload(self, payload_script, url, job_name):
-        namespace = "default"
-        configmap_name = "wrk2-payload-script"
+        namespace = self.app.namespace
+        configmap_name = f"wrk2-payload-script-{job_name}"
 
         self.wrk.create_configmap(name=configmap_name, namespace=namespace, payload_script_path=payload_script)
 
