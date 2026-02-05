@@ -60,6 +60,34 @@ def get_latest_log_dir():
     return max(subdirs, key=os.path.getmtime)
 
 
+def is_result_complete(csv_path):
+    """Checks if a result CSV file contains evaluation results and is not just a header with problem_id."""
+    try:
+        with open(csv_path, "r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            if not reader.fieldnames:
+                return False
+
+            # We expect at least one of these columns to exist to consider the result "complete"
+            eval_columns = ["Diagnosis.success", "Mitigation.success", "Diagnosis.judgment", "Mitigation.judgment"]
+            has_eval_column = any(col in reader.fieldnames for col in eval_columns)
+            if not has_eval_column:
+                return False
+
+            # Also check if there's at least one data row and it has some values in these columns
+            try:
+                first_row = next(reader)
+                return any(
+                    first_row.get(col) is not None and first_row.get(col) != ""
+                    for col in eval_columns
+                    if col in reader.fieldnames
+                )
+            except StopIteration:
+                return False
+    except Exception:
+        return False
+
+
 def driver_loop(
     conductor: Conductor,
     experiment_log_dir: str,
@@ -156,22 +184,30 @@ def driver_loop(
             # Check for existing results (Resume capability)
             # We look for any timestamped file matching the pattern *_{pid}_{agent_to_run}_results.csv
             # Only checking if agent_to_run is specified (not external harness)
+            completed_iterations = 0
             if agent_to_run and not use_external_harness:
                 search_pattern = os.path.join(experiment_log_dir, f"*_{pid}_{agent_to_run}_results.csv")
                 existing_files = glob.glob(search_pattern)
-                
-                if existing_files:
-                    existing_file = os.path.basename(existing_files[0])
-                    console.log(f"⏭️  Skipping problem '{pid}': Found existing results in {existing_file}")
-                    
+
+                for f_path in existing_files:
+                    if is_result_complete(f_path):
+                        completed_iterations += 1
+
+                if completed_iterations >= repeat:
+                    console.log(f"⏭️  Skipping problem '{pid}': Found {completed_iterations}/{repeat} completed results.")
+
                     if status_dict is not None:
-                         status_dict[pid] = {
+                        status_dict[pid] = {
                             "status": "Completed (Resumed)",
                             "start_time": time.time(),
                             "elapsed": 0.0,
-                            "worker_id": worker_id
+                            "worker_id": worker_id,
                         }
                     continue
+                elif completed_iterations > 0:
+                    console.log(
+                        f"⏯️  Resuming problem '{pid}': {completed_iterations}/{repeat} iterations already completed."
+                    )
 
             # Prepare for logging redirection if in parallel mode
             redirect_ctx = open(os.path.join(experiment_log_dir, f"{pid}.log"), "w") if status_dict is not None else None
@@ -197,7 +233,7 @@ def driver_loop(
                 }
 
             try:
-                for iteration in range(repeat):
+                for iteration in range(completed_iterations, repeat):
                     console.log(f"\n🔍 Starting problem: {pid} (Run {iteration+1}/{repeat})")
 
                     conductor.problem_id = pid
@@ -505,12 +541,37 @@ def run_parallel(args):
     status_dict = manager.dict()
     problem_queue = manager.Queue()
     
-    for pid in all_problems:
+    # Filter problems if resuming
+    problems_to_run = []
+    if args.resume_last or args.resume_from:
+        agent_to_run = args.agent
+        for pid in all_problems:
+            completed_iterations = 0
+            if agent_to_run:
+                search_pattern = os.path.join(experiment_log_dir, f"*_{pid}_{agent_to_run}_results.csv")
+                existing_files = glob.glob(search_pattern)
+                for f_path in existing_files:
+                    if is_result_complete(f_path):
+                        completed_iterations += 1
+            
+            if completed_iterations < args.repeat:
+                problems_to_run.append(pid)
+            else:
+                status_dict[pid] = {
+                    "status": "Completed (Resumed)",
+                    "start_time": time.time(),
+                    "elapsed": 0.0,
+                    "worker_id": None
+                }
+    else:
+        problems_to_run = all_problems
+
+    for pid in problems_to_run:
         problem_queue.put(pid)
         
     processes = []
     worker_map = {} # Map process to worker ID
-    logger.info(f"Running {len(all_problems)} problems with {args.parallel} workers.")
+    logger.info(f"Running {len(problems_to_run)} problems with {args.parallel} workers.")
     
     for i in range(args.parallel):
         p = multiprocessing.Process(target=worker_main, args=(args, i, problem_queue, experiment_log_dir, status_dict))
@@ -521,7 +582,7 @@ def run_parallel(args):
     # Monitoring loop
     try:
         with Live(refresh_per_second=4) as live:
-            while any(p.is_alive() for p in processes) or status_dict:
+            while any(p.is_alive() for p in processes) or (status_dict and any(info.get("worker_id") is not None for info in status_dict.values())):
                 # Check for dead workers and update status
                 for p in processes:
                     if not p.is_alive():
