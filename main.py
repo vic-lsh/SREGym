@@ -488,34 +488,60 @@ def run_parallel(args):
                                     "worker_id": wid
                                 }
 
-            table = Table(title=f"Parallel Execution ({len(all_problems)} problems)")
-            table.add_column("Problem ID", style="cyan")
-            table.add_column("Status", style="magenta")
-            table.add_column("Elapsed", style="green")
-            
+            total_problems = len(all_problems)
             completed_count = 0
+            error_count = 0
+            skipped_count = 0
+            active_tasks = []
             
+            started_pids = set(status_dict.keys())
             sorted_keys = sorted(status_dict.keys())
+            
             for pid in sorted_keys:
                 info = status_dict[pid]
                 status = info.get("status", "Unknown")
                 start_time = info.get("start_time", 0)
+                elapsed = 0
+                
+                is_active = True
                 
                 if status == "Completed":
                     completed_count += 1
-                    elapsed = info.get("elapsed", 0)
-                elif status == "Error" or status == "Error (Worker Died)":
-                    completed_count += 1 # Count error as done for progress
-                    elapsed = info.get("elapsed", 0)
+                    is_active = False
+                elif status in ["Error", "Error (Worker Died)"]:
+                    error_count += 1
+                    is_active = False
                 elif status == "Skipped (Khaos Req)":
-                     completed_count += 1
-                     elapsed = info.get("elapsed", 0)
+                     skipped_count += 1
+                     is_active = False
                 else:
                     elapsed = time.time() - start_time
                 
+                if is_active:
+                    active_tasks.append((pid, status, elapsed))
+
+            queued_count = total_problems - len(started_pids)
+            running_count = len(active_tasks)
+
+            table = Table(title=f"Parallel Execution ({total_problems} problems)")
+            table.add_column("Problem ID", style="cyan")
+            table.add_column("Status", style="magenta")
+            table.add_column("Elapsed", style="green")
+            
+            for pid, status, elapsed in active_tasks:
                 table.add_row(pid, status, f"{elapsed:.1f}s")
             
-            table.caption = f"Progress: {completed_count}/{len(all_problems)}"
+            summary_parts = [
+                f"Progress: {completed_count + error_count + skipped_count}/{total_problems}",
+                f"Running: {running_count}",
+                f"Queued: {queued_count}",
+                f"[green]Completed: {completed_count}[/green]",
+                f"[red]Errors: {error_count}[/red]",
+            ]
+            if skipped_count > 0:
+                summary_parts.append(f"[yellow]Skipped: {skipped_count}[/yellow]")
+
+            table.caption = " | ".join(summary_parts)
             live.update(table)
             
             # If all workers are dead, we are done.
