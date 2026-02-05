@@ -1,0 +1,17 @@
+all:
+  problems:
+    resource_request_too_large:
+      - diagnosis
+      - mitigation
+    resource_request_too_small:
+      - diagnosis
+      - mitigation
+    namespace_memory_limit:
+      - diagnosis
+      - mitigation
+    duplicate_pvc_mounts_hotel_reservation:
+      - diagnosis
+      - mitigation
+    pvc_claim_mismatch:
+      - diagnosis
+      - mitigation

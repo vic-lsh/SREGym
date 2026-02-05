@@ -1,0 +1,11 @@
+all:
+  problems:
+    liveness_probe_misconfiguration_hotel_reservation:
+      - diagnosis
+      - mitigation
+    liveness_probe_too_aggressive_hotel_reservation:
+      - diagnosis
+      - mitigation
+    readiness_probe_misconfiguration_hotel_reservation:
+      - diagnosis
+      - mitigation

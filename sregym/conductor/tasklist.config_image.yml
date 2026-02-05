@@ -1,0 +1,23 @@
+all:
+  problems:
+    faulty_image_correlated:
+      - diagnosis
+      - mitigation
+    update_incompatible_correlated:
+      - diagnosis
+      - mitigation
+    misconfig_app_hotel_res:
+      - diagnosis
+      - mitigation
+    wrong_bin_usage:
+      - diagnosis
+      - mitigation
+    configmap_drift_hotel_reservation:
+      - diagnosis
+      - mitigation
+    missing_configmap_hotel_reservation:
+      - diagnosis
+      - mitigation
+    rolling_update_misconfigured_hotel_reservation:
+      - diagnosis
+      - mitigation

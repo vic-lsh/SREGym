@@ -1,0 +1,8 @@
+all:
+  problems:
+    latent_sector_error:
+      - diagnosis
+      - mitigation
+    silent_data_corruption:
+      - diagnosis
+      - mitigation

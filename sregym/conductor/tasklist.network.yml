@@ -1,0 +1,23 @@
+all:
+  problems:
+    ingress_misroute:
+      - diagnosis
+      - mitigation
+    network_policy_block:
+      - diagnosis
+      - mitigation
+    wrong_dns_policy_hotel_reservation:
+      - diagnosis
+      - mitigation
+    sidecar_port_conflict_hotel_reservation:
+      - diagnosis
+      - mitigation
+    service_port_conflict_hotel_reservation:
+      - diagnosis
+      - mitigation
+    wrong_service_selector_hotel_reservation:
+      - diagnosis
+      - mitigation
+    missing_service_hotel_reservation:
+      - diagnosis
+      - mitigation
