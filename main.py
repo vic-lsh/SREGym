@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import csv
+import glob
 import logging
 import multiprocessing
 import os
@@ -43,6 +44,20 @@ def get_current_datetime_formatted():
     now = datetime.now()
     formatted_datetime = now.strftime("%m%d_%H%M")
     return formatted_datetime
+
+
+def get_latest_log_dir():
+    """Finds the most recently modified directory in the logs/ folder."""
+    logs_root = os.path.abspath("logs")
+    if not os.path.exists(logs_root):
+        return None
+    
+    subdirs = [os.path.join(logs_root, d) for d in os.listdir(logs_root) if os.path.isdir(os.path.join(logs_root, d))]
+    if not subdirs:
+        return None
+    
+    # Sort by modification time
+    return max(subdirs, key=os.path.getmtime)
 
 
 def driver_loop(
@@ -138,6 +153,26 @@ def driver_loop(
             problem_iterator = problem_ids
 
         for pid in problem_iterator:
+            # Check for existing results (Resume capability)
+            # We look for any timestamped file matching the pattern *_{pid}_{agent_to_run}_results.csv
+            # Only checking if agent_to_run is specified (not external harness)
+            if agent_to_run and not use_external_harness:
+                search_pattern = os.path.join(experiment_log_dir, f"*_{pid}_{agent_to_run}_results.csv")
+                existing_files = glob.glob(search_pattern)
+                
+                if existing_files:
+                    existing_file = os.path.basename(existing_files[0])
+                    console.log(f"⏭️  Skipping problem '{pid}': Found existing results in {existing_file}")
+                    
+                    if status_dict is not None:
+                         status_dict[pid] = {
+                            "status": "Completed (Resumed)",
+                            "start_time": time.time(),
+                            "elapsed": 0.0,
+                            "worker_id": worker_id
+                        }
+                    continue
+
             # Prepare for logging redirection if in parallel mode
             redirect_ctx = open(os.path.join(experiment_log_dir, f"{pid}.log"), "w") if status_dict is not None else None
             original_stdout = sys.stdout
@@ -445,11 +480,25 @@ def run_parallel(args):
         all_problems = registry.get_problem_ids()
 
     # Create shared experiment log directory
-    session_timestamp = get_current_datetime_formatted()
-    os.makedirs("logs", exist_ok=True)
-    experiment_log_dir = os.path.abspath(f"logs/{session_timestamp}")
-    os.makedirs(experiment_log_dir, exist_ok=True)
-    logger.info(f"Parallel experiment logs will be stored in: {experiment_log_dir}")
+    if args.resume_last:
+        latest = get_latest_log_dir()
+        if not latest:
+             logger.error("No previous log directory found to resume from.")
+             sys.exit(1)
+        experiment_log_dir = latest
+        logger.info(f"Resuming experiment from latest: {experiment_log_dir}")
+    elif args.resume_from:
+        experiment_log_dir = os.path.abspath(args.resume_from)
+        if not os.path.exists(experiment_log_dir):
+            logger.error(f"Resume directory {experiment_log_dir} does not exist.")
+            sys.exit(1)
+        logger.info(f"Resuming experiment from: {experiment_log_dir}")
+    else:
+        session_timestamp = get_current_datetime_formatted()
+        os.makedirs("logs", exist_ok=True)
+        experiment_log_dir = os.path.abspath(f"logs/{session_timestamp}")
+        os.makedirs(experiment_log_dir, exist_ok=True)
+        logger.info(f"Parallel experiment logs will be stored in: {experiment_log_dir}")
 
     manager = multiprocessing.Manager()
     status_dict = manager.dict()
@@ -480,7 +529,7 @@ def run_parallel(args):
                     for pid, info in status_dict.items():
                         if info.get("worker_id") == wid:
                             status = info.get("status")
-                            if status not in ["Completed", "Error", "Skipped (Khaos Req)", "Error (Worker Died)"]:
+                            if not (status.startswith("Completed") or status in ["Error", "Skipped (Khaos Req)", "Error (Worker Died)"]):
                                 status_dict[pid] = {
                                     "status": "Error (Worker Died)",
                                     "start_time": info["start_time"],
@@ -505,7 +554,7 @@ def run_parallel(args):
                 
                 is_active = True
                 
-                if status == "Completed":
+                if status.startswith("Completed"):
                     completed_count += 1
                     is_active = False
                 elif status in ["Error", "Error (Worker Died)"]:
@@ -561,8 +610,22 @@ def main(args, problem_list=None, experiment_log_dir=None, status_dict=None, pro
     os.makedirs("logs", exist_ok=True)
     
     if experiment_log_dir is None:
-        # Create experiment directory
-        experiment_log_dir = os.path.abspath(f"logs/{session_timestamp}")
+        if args.resume_last:
+            latest = get_latest_log_dir()
+            if not latest:
+                 logger.error("No previous log directory found to resume from.")
+                 sys.exit(1)
+            experiment_log_dir = latest
+            logger.info(f"Resuming experiment from latest: {experiment_log_dir}")
+        elif getattr(args, "resume_from", None):
+            experiment_log_dir = os.path.abspath(args.resume_from)
+            if not os.path.exists(experiment_log_dir):
+                logger.error(f"Resume directory {experiment_log_dir} does not exist.")
+                sys.exit(1)
+            logger.info(f"Resuming experiment from: {experiment_log_dir}")
+        else:
+            # Create experiment directory
+            experiment_log_dir = os.path.abspath(f"logs/{session_timestamp}")
     
     os.makedirs(experiment_log_dir, exist_ok=True)
     
@@ -617,11 +680,14 @@ def main(args, problem_list=None, experiment_log_dir=None, status_dict=None, pro
         mcp_thread.start()
 
     # Start the Conductor HTTP API in the MAIN thread (blocking)
+    join_driver = True
     try:
         run_api(conductor)
     except KeyboardInterrupt:
-        # If interrupted, still try to shut down cleanly
+        # If interrupted, still try to shut down cleanly but quickly
+        logger.info("\n🛑 Interrupted by user. Exiting immediately...")
         request_shutdown()
+        join_driver = False
     finally:
         # Stop noise manager if it was initialized
         if nm:
@@ -631,8 +697,9 @@ def main(args, problem_list=None, experiment_log_dir=None, status_dict=None, pro
             except Exception as e:
                 logger.error(f"⚠️ Error stopping noise manager: {e}")
 
-        # Give driver a moment to finish setting results
-        driver_thread.join(timeout=5)
+        # Give driver a moment to finish setting results, unless interrupted
+        if join_driver:
+            driver_thread.join(timeout=5)
 
     # When API shuts down, collect results from driver
     results = getattr(main, "results", [])
@@ -694,6 +761,17 @@ if __name__ == "__main__":
         "--enable-summary",
         action="store_true",
         help="Enable summarization of results using an LLM",
+    )
+    parser.add_argument(
+        "--resume-from",
+        type=str,
+        default=None,
+        help="Resume experiment from an existing log directory (skips completed problems)",
+    )
+    parser.add_argument(
+        "--resume-last",
+        action="store_true",
+        help="Resume experiment from the most recent log directory",
     )
     args = parser.parse_args()
 

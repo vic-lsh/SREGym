@@ -1,6 +1,7 @@
 import logging
 import os
 import threading
+import time
 from typing import Optional
 
 import pyfiglet
@@ -129,6 +130,12 @@ def run_api(conductor):
         _shutdown_event.wait()
         logger.debug("API server shutdown event received")
         server.should_exit = True
+        
+        # Keep ensuring should_exit is True until the server actually stops
+        # (check global _server which is cleared in finally block)
+        while _server is not None:
+            server.should_exit = True
+            time.sleep(0.1)
 
     threading.Thread(target=_watch, name="api-shutdown-watcher", daemon=True).start()
 
