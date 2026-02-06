@@ -154,14 +154,13 @@ class FleetCast(Application):
             "ingress.hosts[0].paths[1].backend.servicePort=5000",
         ]
 
-        # Support parallel execution by pointing to the correct TiDB cluster
+        # Support per-worker TiDB namespaces when explicitly enabled.
         worker_id = os.getenv("SREGYM_WORKER_ID")
-        if worker_id:
-             tidb_ns = f"tidb-cluster-w{worker_id}"
-             tidb_host = f"basic-tidb.{tidb_ns}.svc.cluster.local"
-             ingress_args.extend([
-                 "--set", f"tidb.host={tidb_host}"
-             ])
+        per_worker_tidb_ns = os.getenv("SREGYM_TIDB_PER_WORKER_NS", "").lower() in {"1", "true", "yes"}
+        if worker_id and per_worker_tidb_ns:
+            tidb_ns = f"tidb-cluster-w{worker_id}"
+            tidb_host = f"basic-tidb.{tidb_ns}.svc.cluster.local"
+            ingress_args.extend(["--set", f"tidb.host={tidb_host}"])
 
         extra = self.helm_configs.get("extra_args", [])
         if isinstance(extra, str):

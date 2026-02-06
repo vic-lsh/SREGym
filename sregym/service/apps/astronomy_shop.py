@@ -1,5 +1,7 @@
 """Interface to the OpenTelemetry Astronomy Shop application"""
 
+import contextlib
+import fcntl
 import time
 
 from sregym.generators.workload.locust import LocustWorkloadManager
@@ -28,19 +30,23 @@ class AstronomyShop(Application):
 
     def deploy(self):
         """Deploy the Helm configurations."""
-        self.kubectl.create_namespace_if_not_exist(self.namespace)
+        with self._deployment_lock():
+            self.kubectl.create_namespace_if_not_exist(self.namespace)
 
-        self.helm_configs["extra_args"] = [
-            "--set-string",
-            "components.load-generator.envOverrides[0].name=LOCUST_BROWSER_TRAFFIC_ENABLED",
-            "--set-string",
-            "components.load-generator.envOverrides[0].value=false",
-        ]
+            # Ensure stale failed release state is cleared before a fresh install.
+            Helm.uninstall(**self.helm_configs)
 
-        Helm.install(**self.helm_configs)
-        Helm.assert_if_deployed(self.helm_configs["namespace"])
-        self.trace_api = TraceAPI(self.namespace)
-        self.trace_api.start_port_forward()
+            self.helm_configs["extra_args"] = [
+                "--set-string",
+                "components.load-generator.envOverrides[0].name=LOCUST_BROWSER_TRAFFIC_ENABLED",
+                "--set-string",
+                "components.load-generator.envOverrides[0].value=false",
+            ]
+
+            Helm.install(**self.helm_configs)
+            Helm.assert_if_deployed(self.helm_configs["namespace"])
+            self.trace_api = TraceAPI(self.namespace)
+            self.trace_api.start_port_forward()
 
     def delete(self):
         """Delete the Helm configurations."""
@@ -49,14 +55,27 @@ class AstronomyShop(Application):
         self.kubectl.wait_for_namespace_deletion(self.namespace)
 
     def cleanup(self):
-        if self.trace_api:
-            self.trace_api.stop_port_forward()
-        Helm.uninstall(**self.helm_configs)
-        self.kubectl.delete_namespace(self.helm_configs["namespace"])
+        with self._deployment_lock():
+            if self.trace_api:
+                self.trace_api.stop_port_forward()
+            Helm.uninstall(**self.helm_configs)
+            self.kubectl.delete_namespace(self.helm_configs["namespace"])
 
         if hasattr(self, "wrk"):
             # self.wrk.stop()
             self.kubectl.delete_job(label="job=workload", namespace=self.namespace)
+
+    @contextlib.contextmanager
+    def _deployment_lock(self):
+        """Serialize astronomy-shop Helm operations across workers."""
+        lock_path = "/tmp/sregym-astronomy-shop.lock"
+        lock_fd = open(lock_path, "w")
+        try:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+            lock_fd.close()
 
     def create_workload(self):
         self.wrk = LocustWorkloadManager(

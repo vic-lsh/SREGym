@@ -1,3 +1,5 @@
+import contextlib
+import fcntl
 import json
 import os
 import socket
@@ -18,9 +20,11 @@ class TiDBClusterDeployer:
 
         self.name = self.metadata["Name"]
         
-        # Support parallel execution
+        # FleetCast operator resources are cluster-scoped; use shared namespaces by default.
+        # Set SREGYM_TIDB_PER_WORKER_NS=1 to restore worker-suffixed namespaces.
         worker_id = os.getenv("SREGYM_WORKER_ID")
-        suffix = f"-w{worker_id}" if worker_id else ""
+        per_worker_ns = os.getenv("SREGYM_TIDB_PER_WORKER_NS", "").lower() in {"1", "true", "yes"}
+        suffix = f"-w{worker_id}" if worker_id and per_worker_ns else ""
 
         self.namespace_tidb_cluster = self.metadata["K8S Config"]["namespace"] + suffix
         self.cluster_config_url = self.metadata["K8S Config"]["config_url"]
@@ -304,16 +308,29 @@ SQL"
             time.sleep(1.0)
 
     def deploy_all(self):
-        print(f"----------Starting deployment: {self.name}")
-        self.create_namespace(self.namespace_tidb_cluster)
-        self.install_local_path_provisioner()
-        self.install_crds()
-        self.install_operator_with_values()
-        self.wait_for_operator_ready()
-        self.deploy_tidb_cluster()
-        self.wait_for_basic_workloads()
-        self.init_schema_and_seed()
-        print("-------------TiDB cluster deployment complete.")
+        with self._deployment_lock():
+            print(f"----------Starting deployment: {self.name}")
+            self.create_namespace(self.namespace_tidb_cluster)
+            self.install_local_path_provisioner()
+            self.install_crds()
+            self.install_operator_with_values()
+            self.wait_for_operator_ready()
+            self.deploy_tidb_cluster()
+            self.wait_for_basic_workloads()
+            self.init_schema_and_seed()
+            print("-------------TiDB cluster deployment complete.")
+
+    @contextlib.contextmanager
+    def _deployment_lock(self):
+        """Serialize TiDB operator installation across workers."""
+        lock_path = "/tmp/sregym-tidb-operator.lock"
+        lock_fd = open(lock_path, "w")
+        try:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+            lock_fd.close()
 
 
 if __name__ == "__main__":

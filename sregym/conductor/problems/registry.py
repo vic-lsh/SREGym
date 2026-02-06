@@ -159,6 +159,7 @@ class ProblemRegistry:
             "astronomy_shop_product_catalog_service_failure": ProductCatalogServiceFailure,
             "astronomy_shop_recommendation_service_cache_failure": RecommendationServiceCacheFailure,
             "kafka_queue_problems": KafkaQueueProblems,
+            "kafka_queue_problems_hotel_reservation": KafkaQueueProblems,
             "loadgenerator_flood_homepage": LoadGeneratorFloodHomepage,
             # ==================== TRAIN TICKET FAULT INJECTOR ====================
             "trainticket_f17_nested_sql_select_clause_error": TrainTicketF17,

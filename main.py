@@ -150,6 +150,23 @@ def driver_loop(
             LAUNCHER.set_agent_kubeconfig(conductor.get_agent_kubeconfig_path())
 
         all_results_for_agent = []
+
+        def write_error_result(problem_id: str, error_message: str):
+            """Write a structured result row even when execution fails before grading."""
+            if not agent_to_run:
+                return
+            current_date_time = get_current_datetime_formatted()
+            csv_path = os.path.join(experiment_log_dir, f"{current_date_time}_{problem_id}_{agent_to_run}_results.csv")
+            snapshot = {
+                "problem_id": problem_id,
+                "run_status": "Error",
+                "error": str(error_message),
+            }
+            with open(csv_path, "w", newline="") as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=sorted(snapshot.keys()))
+                writer.writeheader()
+                writer.writerow(snapshot)
+            logger.info(f"❌ Problem {problem_id} for agent {agent_to_run} failed. Error result written to {csv_path}")
         # session_timestamp = get_current_datetime_formatted()
 
         if problem_queue:
@@ -386,6 +403,8 @@ def driver_loop(
             
             except Exception as e:
                 console.log(f"❌ Error running problem {pid}: {e}")
+                if not use_external_harness:
+                    write_error_result(pid, str(e))
                 if status_dict is not None:
                     status_dict[pid] = {
                         "status": "Error",
@@ -533,6 +552,12 @@ def run_parallel(args):
         all_problems = [args.problem]
     else:
         all_problems = registry.get_problem_ids()
+        # tasklist.yml may contain stale problem IDs; filter early to avoid runtime failures in workers
+        all_problem_ids = set(registry.get_problem_ids(all=True))
+        unknown_problem_ids = sorted(set(all_problems) - all_problem_ids)
+        if unknown_problem_ids:
+            logger.warning(f"These problem IDs are not in the registry and will be skipped: {unknown_problem_ids}")
+            all_problems = [pid for pid in all_problems if pid in all_problem_ids]
 
     if not all_problems:
         logger.error("No problems found to run.")
