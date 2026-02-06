@@ -199,6 +199,15 @@ class KubeCtl:
         while wait < max_wait:
             try:
                 self.core_v1_api.read_namespace(name=namespace)
+                
+                # If waiting too long, try to force cleanup finalizers
+                if wait > 60:
+                    console.log(f"[bold red]Namespace '{namespace}' is stuck terminating. Attempting to remove finalizers...")
+                    try:
+                        self.exec_command(f"kubectl get namespace {namespace} -o json | jq '.spec = {{\"finalizers\":[]}}' > /tmp/{namespace}.json && kubectl replace --raw \"/api/v1/namespaces/{namespace}/finalize\" -f /tmp/{namespace}.json")
+                    except Exception as e:
+                        console.log(f"[red]Failed to remove finalizers: {e}")
+                        
             except Exception as e:
                 console.log(f"[bold green]Namespace '{namespace}' has been deleted.")
                 return

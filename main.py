@@ -523,6 +523,10 @@ def run_parallel(args):
     else:
         all_problems = registry.get_problem_ids()
 
+    if not all_problems:
+        logger.error("No problems found to run.")
+        sys.exit(1)
+
     # Create shared experiment log directory
     if args.resume_last:
         latest = get_latest_log_dir()

@@ -37,12 +37,32 @@ class Prometheus:
         self.name = metadata.get("Name")
         self.namespace = metadata.get("Namespace")
 
-        self.helm_configs = metadata.get("Helm Config", {})
+        # Handle worker ID for parallel execution
+        worker_id = os.getenv("SREGYM_WORKER_ID")
+        if worker_id:
+            self.namespace = f"{self.namespace}-w{worker_id}"
 
-        self.name = metadata["Name"]
-        self.namespace = metadata["Namespace"]
-        if "Helm Config" in metadata:
-            self.helm_configs = metadata["Helm Config"]
+        self.helm_configs = metadata.get("Helm Config", {})
+        
+        # Override namespace in helm config
+        if self.helm_configs:
+            self.helm_configs["namespace"] = self.namespace
+            
+            if worker_id and "release_name" in self.helm_configs:
+                 self.helm_configs["release_name"] = f"{self.helm_configs['release_name']}-w{worker_id}"
+                 
+                 # Initialize extra_args if not present
+                 if "extra_args" not in self.helm_configs:
+                     self.helm_configs["extra_args"] = []
+                 
+                 # Force ClusterIP to avoid nodePort conflicts
+                 # Disable node-exporter to avoid host port 9100 conflicts
+                 self.helm_configs["extra_args"].extend([
+                     "--set", "server.service.type=ClusterIP",
+                     "--set", "server.service.nodePort=null",
+                     "--set", "prometheus-node-exporter.enabled=false"
+                 ])
+
             if "chart_path" in self.helm_configs:
                 chart_path = self.helm_configs["chart_path"]
                 self.helm_configs["chart_path"] = str(BASE_DIR / chart_path)
@@ -80,6 +100,9 @@ class Prometheus:
         self._delete_pvc()
         Helm.uninstall(**self.helm_configs)
 
+        # Ensure namespace exists
+        KubeCtl().create_namespace_if_not_exist(self.namespace)
+
         if self.pvc_config_file:
             pvc_name = self._get_pvc_name_from_file(self.pvc_config_file)
             if not self._pvc_exists(pvc_name):
@@ -104,6 +127,8 @@ class Prometheus:
             self.logger.warning("Port-forwarding already active.")
             return
 
+        service_name = f"{self.helm_configs['release_name']}-server"
+
         for attempt in range(3):
             self.logger.debug(f"Attempt {attempt + 1} of 3 in starting port-forwarding.")
             if self.is_port_in_use(self.port):
@@ -113,7 +138,7 @@ class Prometheus:
                 time.sleep(3)
                 continue
 
-            command = f"kubectl port-forward svc/prometheus-server {self.port}:80 -n observe"
+            command = f"kubectl port-forward svc/{service_name} {self.port}:80 -n {self.namespace}"
             self.port_forward_process = subprocess.Popen(
                 command,
                 shell=True,

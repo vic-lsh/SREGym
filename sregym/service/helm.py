@@ -110,7 +110,7 @@ class Helm:
         Returns:
             bool: True if release exists
         """
-        command = f"helm list -n {namespace}"
+        command = f"helm list -n {namespace} -a -q"
         process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
         output, error = process.communicate()
 
@@ -118,7 +118,7 @@ class Helm:
             logger.error(error.decode("utf-8"))
             return False
         else:
-            return release_name in output.decode("utf-8")
+            return release_name in output.decode("utf-8").splitlines()
 
     @staticmethod
     def assert_if_deployed(namespace: str):
