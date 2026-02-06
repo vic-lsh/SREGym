@@ -133,10 +133,9 @@ class Prometheus:
             self.logger.debug(f"Attempt {attempt + 1} of 3 in starting port-forwarding.")
             if self.is_port_in_use(self.port):
                 self.logger.debug(
-                    f"Port {self.port} is already in use. Attempt {attempt + 1} of 3. Retrying in 3 seconds..."
+                    f"Port {self.port} is already in use. Picking a new one..."
                 )
-                time.sleep(3)
-                continue
+                self.port = self.find_free_port()
 
             command = f"kubectl port-forward svc/{service_name} {self.port}:80 -n {self.namespace}"
             self.port_forward_process = subprocess.Popen(
@@ -180,12 +179,11 @@ class Prometheus:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             return s.connect_ex(("127.0.0.1", port)) == 0
 
-    def find_free_port(self, start=32000, end=32100):
-        for port in range(start, end):
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                if s.connect_ex(("127.0.0.1", port)) != 0:
-                    return port
-        raise RuntimeError("No free ports available in the range.")
+    def find_free_port(self):
+        """Pick a free local TCP port."""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("", 0))
+            return s.getsockname()[1]
 
     def _apply_pvc(self):
         """Apply the PersistentVolumeClaim configuration."""

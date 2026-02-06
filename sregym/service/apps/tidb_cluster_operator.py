@@ -1,5 +1,6 @@
 import json
 import os
+import socket
 import subprocess
 import time
 from pathlib import Path
@@ -69,8 +70,14 @@ class TiDBClusterDeployer:
             'kubectl patch storageclass local-path -p \'{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}\''
         )
 
-    def apply_prometheus(self):
-        ns = "observe"
+    def _pick_free_port(self) -> int:
+        """Pick a free local TCP port."""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("", 0))
+            return s.getsockname()[1]
+
+    def apply_prometheus(self, namespace: str = "observe"):
+        ns = namespace
         prom_yml_path = BASE_DIR / "SREGym-applications/FleetCast/prometheus/prometheus.yaml"
 
         prom_yml_path = str(prom_yml_path.resolve())
@@ -83,9 +90,10 @@ class TiDBClusterDeployer:
             f"-o yaml --dry-run=client | kubectl apply -f -"
         )
 
+        port = self._pick_free_port()
         self.run_cmd(
-            "kubectl -n observe port-forward svc/prometheus-server 9090:80 >/dev/null 2>&1 & "
-            "PF=$!; sleep 1; curl -s -X POST http://127.0.0.1:9090/-/reload >/dev/null; kill $PF || true"
+            f"kubectl -n {ns} port-forward svc/prometheus-server {port}:80 >/dev/null 2>&1 & "
+            f"PF=$!; sleep 1; curl -s -X POST http://127.0.0.1:{port}/-/reload >/dev/null; kill $PF || true"
         )
 
         print(f"[ok] Prometheus config applied from {prom_yml_path}")
@@ -287,7 +295,6 @@ SQL"
                     )
                     .decode()
                     .strip()
-                    .strip("'")
                 )
                 if eps:
                     print(f"[ok] Service {svc_name} has endpoints:\n{eps}")

@@ -252,7 +252,8 @@ def driver_loop(
                             status_dict[pid] = {
                                 "status": "Skipped (Khaos Req)",
                                 "start_time": status_dict[pid]["start_time"],
-                                "elapsed": time.time() - status_dict[pid]["start_time"]
+                                "elapsed": time.time() - status_dict[pid]["start_time"],
+                                "worker_id": worker_id
                             }
                         continue
 
@@ -269,7 +270,8 @@ def driver_loop(
                             status_dict[pid] = {
                                 "status": "Agent Running",
                                 "start_time": status_dict[pid]["start_time"],
-                                "elapsed": time.time() - status_dict[pid]["start_time"]
+                                "elapsed": time.time() - status_dict[pid]["start_time"],
+                                "worker_id": worker_id
                             }
 
                         reg = get_agent(agent_to_run, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
@@ -292,7 +294,8 @@ def driver_loop(
                             status_dict[pid] = {
                                 "status": f"Agent: {current_stage}",
                                 "start_time": status_dict[pid]["start_time"],
-                                "elapsed": time.time() - status_dict[pid]["start_time"]
+                                "elapsed": time.time() - status_dict[pid]["start_time"],
+                                "worker_id": worker_id
                             }
 
                         # Check if agent process has exited
@@ -308,7 +311,8 @@ def driver_loop(
                         status_dict[pid] = {
                             "status": "Cleaning Up",
                             "start_time": status_dict[pid]["start_time"],
-                            "elapsed": time.time() - status_dict[pid]["start_time"]
+                            "elapsed": time.time() - status_dict[pid]["start_time"],
+                            "worker_id": worker_id
                         }
 
                     console.log(f"✅ Completed {pid}: results={conductor.results}")
@@ -386,7 +390,8 @@ def driver_loop(
                     status_dict[pid] = {
                         "status": "Error",
                         "start_time": status_dict[pid]["start_time"],
-                        "elapsed": time.time() - status_dict[pid]["start_time"]
+                        "elapsed": time.time() - status_dict[pid]["start_time"],
+                        "worker_id": worker_id
                     }
                 # Do not raise e; continue to next problem
             finally:
@@ -399,7 +404,8 @@ def driver_loop(
                         status_dict[pid] = {
                             "status": "Completed",
                             "start_time": status_dict[pid]["start_time"],
-                            "elapsed": time.time() - status_dict[pid]["start_time"]
+                            "elapsed": time.time() - status_dict[pid]["start_time"],
+                            "worker_id": worker_id
                         }
                     sys.stdout = original_stdout
                     sys.stderr = original_stderr
@@ -441,7 +447,12 @@ def start_mcp_server_after_api():
 
     server = uvicorn.Server(config)
     # This call blocks *this* thread; it's fine because we're daemonizing the thread
-    server.run()
+    try:
+        logger.info(f"Starting MCP server on {host}:{port}")
+        server.run()
+    except Exception as e:
+        logger.error(f"Failed to start MCP server: {e}")
+        raise e
 
 
 def _run_driver_and_shutdown(
@@ -625,7 +636,7 @@ def run_parallel(args):
                 worker_tasks = {}
                 for i in range(args.parallel):
                     # Initial state for workers
-                    t_id = progress.add_task(f"Worker {i}: Idle", total=None, visible=True) 
+                    t_id = progress.add_task(f"Worker {i}: Idle", total=100, visible=True) 
                     worker_tasks[i] = t_id
                 
                 while any(p.is_alive() for p in processes) or (status_dict and any(info.get("worker_id") is not None for info in status_dict.values())):
@@ -674,7 +685,8 @@ def run_parallel(args):
                             # Check if this is an active state
                             is_active = not (status.startswith("Completed") or status in ["Error", "Skipped (Khaos Req)", "Error (Worker Died)"])
                             if is_active:
-                                current_worker_status[wid] = (status, pid)
+                                start_t = info.get("start_time", time.time())
+                                current_worker_status[wid] = (status, pid, start_t)
 
                     # Update main task
                     finished_count = completed_count + error_count + skipped_count
@@ -688,15 +700,37 @@ def run_parallel(args):
                     for i in range(args.parallel):
                         if i not in active_workers:
                              # Worker is dead or finished
-                             progress.update(worker_tasks[i], description=f"Worker {i}: [dim]Finished[/dim]", total=1, completed=1)
+                             progress.update(worker_tasks[i], description=f"Worker {i}: [dim]Finished[/dim]", completed=100)
                         elif current_worker_status[i]:
-                            status, pid = current_worker_status[i]
-                            desc = f"Worker {i}: [cyan]{pid}[/cyan] - {status}"
-                            # Make it look active (pulse)
-                            progress.update(worker_tasks[i], description=desc, total=None)
+                            status, pid, start_t = current_worker_status[i]
+                            elapsed = int(time.time() - start_t)
+                            
+                            # Map status to approximate progress
+                            completed_pct = 0
+                            if status == "Deploying":
+                                completed_pct = 10
+                            elif status == "Agent Running":
+                                completed_pct = 30
+                            elif status.startswith("Agent:"):
+                                if "diagnosis" in status.lower():
+                                    completed_pct = 50
+                                elif "mitigation" in status.lower():
+                                    completed_pct = 70
+                                else:
+                                    completed_pct = 40
+                                
+                                if "verifying" in status.lower():
+                                    completed_pct += 10
+                            elif status == "Cleaning Up":
+                                completed_pct = 90
+                            elif status.startswith("Completed") or status.startswith("Error"):
+                                completed_pct = 100
+                                
+                            desc = f"Worker {i}: [cyan]{pid}[/cyan] - {status} [yellow]({elapsed}s)[/yellow]"
+                            progress.update(worker_tasks[i], description=desc, completed=completed_pct)
                         else:
                             # Worker is alive but idle (or between tasks)
-                            progress.update(worker_tasks[i], description=f"Worker {i}: Idle", total=0, completed=0)
+                            progress.update(worker_tasks[i], description=f"Worker {i}: Idle", completed=0)
                     
                     if not any(p.is_alive() for p in processes):
                         break
@@ -908,7 +942,6 @@ if __name__ == "__main__":
     if not args.use_external_harness and args.agent is None:
         parser.error("--agent is required when --use-external-harness is not set")
 
-    if args.parallel > 1:
-        run_parallel(args)
-    else:
-        main(args)
+    # Always run through the parallel wrapper to ensure consistent logging and behavior
+    # even for single-worker runs (capture stdout/stderr, etc.)
+    run_parallel(args)

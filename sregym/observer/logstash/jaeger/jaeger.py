@@ -6,13 +6,19 @@ from pathlib import Path
 
 
 class Jaeger:
-    def __init__(self):
-        self.namespace = "observe"
+    def __init__(self, namespace="observe"):
+        self.namespace = namespace
         base_dir = Path(__file__).parent
         self.config_file = base_dir / "jaeger.yaml"
-        self.port = 16686  # local port for Jaeger UI
+        self.port = self._pick_free_port()
         self.port_forward_process = None
         os.environ["JAEGER_BASE_URL"] = f"http://localhost:{self.port}"
+
+    def _pick_free_port(self) -> int:
+        """Pick a free local TCP port."""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("", 0))
+            return s.getsockname()[1]
 
     def run_cmd(self, cmd: str) -> str:
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
@@ -22,6 +28,8 @@ class Jaeger:
 
     def deploy(self):
         """Deploy Jaeger with TiDB as the storage backend."""
+        # Ensure namespace exists before deploying
+        self.run_cmd(f"kubectl create ns {self.namespace} --dry-run=client -o yaml | kubectl apply -f -")
         self.run_cmd(f"kubectl apply -f {self.config_file} -n {self.namespace}")
         self.wait_for_service("jaeger-out", timeout=120)
         self.start_port_forward()
@@ -58,11 +66,11 @@ class Jaeger:
 
         for attempt in range(3):
             if self.is_port_in_use(self.port):
-                print(f"Port {self.port} is already in use. Attempt {attempt + 1} of 3. Retrying in 3 seconds...")
-                time.sleep(3)
-                continue
+                print(f"Port {self.port} is already in use. Picking a new one...")
+                self.port = self._pick_free_port()
+                os.environ["JAEGER_BASE_URL"] = f"http://localhost:{self.port}"
 
-            command = f"kubectl port-forward svc/jaeger-out {self.port}:16686 -n observe"
+            command = f"kubectl port-forward svc/jaeger-out {self.port}:16686 -n {self.namespace}"
             self.port_forward_process = subprocess.Popen(
                 command,
                 shell=True,
@@ -79,6 +87,8 @@ class Jaeger:
                 break
             else:
                 print("Port forwarding failed. Retrying...")
+                # Kill process if it failed but didn't exit cleanly?
+                # poll() is None means it is running. Here it is NOT None, so it exited.
         else:
             print("Failed to establish port forwarding after multiple attempts.")
 

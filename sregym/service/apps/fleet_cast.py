@@ -177,7 +177,11 @@ class FleetCast(Application):
         print("\n FleetCast deployment is complete and ready.")
         tidb_prometheus.main()
         print("PROMETHEUS: deployed TiDB monitoring stack.")
-        Jaeger().deploy()
+
+        # Determine namespace for Jaeger
+        worker_id = os.getenv("SREGYM_WORKER_ID")
+        jaeger_ns = f"observe-w{worker_id}" if worker_id else "observe"
+        Jaeger(namespace=jaeger_ns).deploy()
 
     def _get_ingress_svc_info(self) -> dict:
         """Return info about ingress-nginx-controller Service (type, external ip/hostname, nodePort for http/https)."""

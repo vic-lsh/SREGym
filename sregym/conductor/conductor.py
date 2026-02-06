@@ -399,6 +399,9 @@ class Conductor:
         stage_name = current_stage.get("name")
         self.logger.info(f"Evaluating stage '{stage_name}'", extra={"sol": sol})
 
+        # Indicate verification in progress (this allows UI to show "Verifying" state)
+        self.submission_stage = f"{stage_name} (verifying)"
+
         # Stop noise before evaluation to ensure clean environment
         try:
             nm = get_noise_manager()
