@@ -1,6 +1,7 @@
 import logging
 import os
 import shutil
+import tempfile
 import time
 from pathlib import Path
 
@@ -20,16 +21,19 @@ from sregym.service.dm_dust_manager import DmDustManager
 from sregym.service.dm_flakey_manager import DmFlakeyManager
 from sregym.service.k8s_proxy import KubernetesAPIProxy
 from sregym.service.khaos import KhaosController
+from sregym.service.kubeconfig import require_kubeconfig_path
 from sregym.service.kubectl import KubeCtl
 from sregym.service.telemetry.prometheus import Prometheus
 
 
 class Conductor:
     def __init__(self):
+        self.base_kubeconfig = require_kubeconfig_path()
+
         # core services
         self.problems = ProblemRegistry()
-        self.kubectl = KubeCtl()
-        self.prometheus = Prometheus()
+        self.kubectl = KubeCtl(kubeconfig_path=self.base_kubeconfig)
+        self.prometheus = Prometheus(kubeconfig_path=self.base_kubeconfig)
         self.apps = AppRegistry()
         self.agent_name = None
 
@@ -48,6 +52,7 @@ class Conductor:
         self.k8s_proxy = KubernetesAPIProxy(
             hidden_namespaces={"chaos-mesh", "khaos"},
             listen_port=proxy_port,
+            kubeconfig_path=self.base_kubeconfig,
         )
         self._agent_kubeconfig_path: str | None = None
 
@@ -82,7 +87,11 @@ class Conductor:
         """
         self.logger.info("Starting Kubernetes API filtering proxy...")
         self.k8s_proxy.start()
-        self._agent_kubeconfig_path = self.k8s_proxy.generate_agent_kubeconfig()
+        worker_id = os.getenv("SREGYM_WORKER_ID", "main")
+        kubeconfig_path = os.path.join(
+            tempfile.gettempdir(), f"sregym-agent-kubeconfig-w{worker_id}-p{self.k8s_proxy.listen_port}"
+        )
+        self._agent_kubeconfig_path = self.k8s_proxy.generate_agent_kubeconfig(output_path=kubeconfig_path)
         self.logger.info(f"Agent kubeconfig generated at: {self._agent_kubeconfig_path}")
 
     def stop_k8s_proxy(self):
@@ -442,6 +451,45 @@ class Conductor:
         injector.recover_kubelet_crash()
         self.logger.info("Fix Kubernetes completed.")
 
+    def _configure_openebs_image_pull_secret(self):
+        """Attach a Docker Hub imagePullSecret to OpenEBS service accounts when available."""
+        enabled = os.getenv("SREGYM_ENABLE_DOCKERHUB_PULL_SECRET", "1").strip().lower()
+        if enabled in {"0", "false", "no"}:
+            self.logger.info("[DEPLOY] Docker Hub imagePullSecret injection disabled.")
+            return
+
+        docker_config_path = os.getenv("SREGYM_DOCKER_CONFIG_JSON", os.path.expanduser("~/.docker/config.json"))
+        if not os.path.exists(docker_config_path):
+            self.logger.warning(f"[DEPLOY] Docker config not found at {docker_config_path}; skipping OpenEBS imagePullSecret setup.")
+            return
+
+        secret_name = os.getenv("SREGYM_DOCKER_PULL_SECRET_NAME", "dockerhub-creds")
+        escaped_path = docker_config_path.replace("'", "'\"'\"'")
+
+        self.kubectl.exec_command(
+            "kubectl -n openebs create secret generic "
+            f"{secret_name} --type=kubernetes.io/dockerconfigjson "
+            f"--from-file=.dockerconfigjson='{escaped_path}' --dry-run=client -o yaml | kubectl apply -f -"
+        )
+
+        service_accounts = self.kubectl.exec_command(
+            "kubectl -n openebs get sa -o jsonpath='{.items[*].metadata.name}'"
+        ).strip()
+        if not service_accounts:
+            self.logger.warning("[DEPLOY] No OpenEBS service accounts found to patch imagePullSecrets.")
+            return
+
+        for sa_name in service_accounts.split():
+            self.kubectl.exec_command(
+                "kubectl -n openebs patch sa "
+                f"{sa_name} --type=merge -p "
+                f"'{{\"imagePullSecrets\":[{{\"name\":\"{secret_name}\"}}]}}'"
+            )
+
+        # Restart OpenEBS pods so existing replicas pick up patched service accounts.
+        self.kubectl.exec_command("kubectl -n openebs delete pod --all --ignore-not-found")
+        self.logger.info(f"[DEPLOY] Configured OpenEBS imagePullSecrets using '{secret_name}'.")
+
     def deploy_app(self):
         """Kubectl + Prometheus + problem.app deployment."""
         self.submission_stage = "setup"
@@ -470,6 +518,7 @@ class Conductor:
             "kubectl patch storageclass openebs-hostpath "
             '-p \'{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}\''
         )
+        self._configure_openebs_image_pull_secret()
         self.kubectl.wait_for_ready("openebs")
 
         print("Setting up OpenEBS LocalPV-Device…")

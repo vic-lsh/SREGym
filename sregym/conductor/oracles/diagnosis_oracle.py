@@ -3,9 +3,9 @@ from logging import getLogger
 from typing import Any
 
 from kubernetes import client, config
-from kubernetes.config.config_exception import ConfigException
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.service.kubeconfig import require_kubeconfig_path
 
 logger = getLogger("all.sregym.diagnosis_oracle")
 logger.propagate = True
@@ -58,10 +58,7 @@ class DiagnosisOracle(Oracle):
     def get_resource_uid(self, resource_type: str, resource_name: str, namespace: str) -> str | None:
         """Return the UID of a live resource using the Kubernetes API."""
         try:
-            try:
-                config.load_incluster_config()
-            except ConfigException:
-                config.load_kube_config()
+            config.load_kube_config(config_file=require_kubeconfig_path())
             if resource_type.lower() == "pod":
                 api = client.CoreV1Api()
                 obj = api.read_namespaced_pod(resource_name, namespace)
@@ -330,10 +327,7 @@ class DiagnosisOracle(Oracle):
             }
         """
         try:
-            try:
-                config.load_incluster_config()
-            except ConfigException:
-                config.load_kube_config()
+            config.load_kube_config(config_file=require_kubeconfig_path())
         except Exception as e:
             raise RuntimeError(f"Failed to load kube config: {e}")
 
@@ -456,10 +450,7 @@ class DiagnosisOracle(Oracle):
             ]
         """
         try:
-            try:
-                config.load_incluster_config()
-            except ConfigException:
-                config.load_kube_config()
+            config.load_kube_config(config_file=require_kubeconfig_path())
         except Exception as e:
             raise RuntimeError(f"Failed to load kube config: {e}")
 

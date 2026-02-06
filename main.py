@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import csv
+import fcntl
 import glob
 import logging
 import multiprocessing
@@ -42,6 +43,7 @@ from sregym.agent_registry import get_agent, list_agents
 from sregym.conductor.conductor import Conductor
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
+from sregym.service.kubeconfig import require_kubeconfig_path
 
 LAUNCHER = AgentLauncher()
 # Ensure logger inherits from 'all' so handlers are attached
@@ -49,6 +51,12 @@ logger = logging.getLogger("all.main")
 
 KIND_CLUSTER_PREFIX = "sregym-w"
 WORKER_META_KEY_PREFIX = "__worker_meta__"
+OPENEBS_PRELOAD_IMAGES = [
+    "openebs/node-disk-manager:2.1.0",
+    "openebs/node-disk-exporter:2.1.0",
+    "openebs/node-disk-operator:2.1.0",
+    "openebs/provisioner-localpv:3.4.0",
+]
 
 
 def get_current_datetime_formatted():
@@ -521,6 +529,92 @@ def _worker_kind_config_path() -> str:
     return os.path.abspath(os.path.join("kind", config_name))
 
 
+def _should_preload_infra_images() -> bool:
+    return os.getenv("SREGYM_PRELOAD_INFRA_IMAGES", "1").strip().lower() not in {"0", "false", "no"}
+
+
+def _get_preload_images() -> list[str]:
+    override = os.getenv("SREGYM_PRELOAD_IMAGES", "").strip()
+    if not override:
+        return OPENEBS_PRELOAD_IMAGES
+    images = [img.strip() for img in override.split(",") if img.strip()]
+    return images if images else OPENEBS_PRELOAD_IMAGES
+
+
+def _docker_image_exists(image: str) -> bool:
+    result = subprocess.run(
+        ["docker", "image", "inspect", image],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def _docker_pull_with_retries(image: str) -> bool:
+    retries = int(os.getenv("SREGYM_IMAGE_PULL_RETRIES", "4"))
+    backoff = int(os.getenv("SREGYM_IMAGE_PULL_BACKOFF_SECONDS", "5"))
+
+    for attempt in range(1, retries + 1):
+        logger.info(f"Pulling image ({attempt}/{retries}): {image}")
+        result = subprocess.run(
+            ["docker", "pull", image],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return True
+        if attempt < retries:
+            time.sleep(backoff * attempt)
+
+    logger.warning(f"Failed to pre-pull image: {image}")
+    return False
+
+
+def _prefetch_infra_images_once() -> None:
+    if not _should_preload_infra_images():
+        logger.info("Infra image preloading disabled via SREGYM_PRELOAD_INFRA_IMAGES.")
+        return
+
+    images = _get_preload_images()
+    if not images:
+        return
+
+    # Cross-process lock to ensure only one process pulls shared images.
+    lock_path = os.path.join(tempfile.gettempdir(), "sregym-image-prefetch.lock")
+    with open(lock_path, "w") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        for image in images:
+            if _docker_image_exists(image):
+                logger.info(f"Image already cached: {image}")
+                continue
+            _docker_pull_with_retries(image)
+
+
+def _load_preloaded_images_into_cluster(cluster_name: str) -> None:
+    if not _should_preload_infra_images():
+        return
+
+    images = _get_preload_images()
+    for image in images:
+        if not _docker_image_exists(image):
+            logger.warning(f"Skipping kind load for missing local image: {image}")
+            continue
+        try:
+            subprocess.run(
+                ["kind", "load", "docker-image", "--name", cluster_name, image],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+            logger.info(f"Loaded cached image into {cluster_name}: {image}")
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"Failed to load image into {cluster_name}: {image} ({e})")
+
+
 def _create_worker_cluster(worker_id: int, experiment_log_dir: str) -> tuple[str, str]:
     """Create a dedicated kind cluster for one worker and return (cluster_name, kubeconfig_path)."""
     cluster_name = f"{KIND_CLUSTER_PREFIX}{worker_id}"
@@ -559,10 +653,21 @@ def _create_worker_cluster(worker_id: int, experiment_log_dir: str) -> tuple[str
         ],
         check=True,
     )
+    _load_preloaded_images_into_cluster(cluster_name)
 
     os.environ["KUBECONFIG"] = kubeconfig_path
     os.environ["SREGYM_BASE_KUBECONFIG"] = kubeconfig_path
     os.environ["SREGYM_KIND_CLUSTER_NAME"] = cluster_name
+
+    # Validate that the worker kubeconfig is immediately usable.
+    subprocess.run(
+        ["kubectl", "config", "current-context", "--kubeconfig", kubeconfig_path],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+
     logger.info(f"Worker {worker_id} cluster ready: {cluster_name}, kubeconfig={kubeconfig_path}")
     return cluster_name, kubeconfig_path
 
@@ -723,6 +828,8 @@ def run_parallel(args):
 
     for pid in problems_to_run:
         problem_queue.put(pid)
+
+    _prefetch_infra_images_once()
         
     processes = []
     worker_map = {} # Map process to worker ID
@@ -963,6 +1070,11 @@ def main(args, problem_list=None, experiment_log_dir=None, status_dict=None, pro
             logger.warning(f"⚠️ Failed to initialize noise manager: {e}")
 
     os.environ["MODEL_ID"] = args.model
+
+    # Enforce explicit kubeconfig selection for every process and worker.
+    base_kubeconfig = require_kubeconfig_path()
+    os.environ["KUBECONFIG"] = base_kubeconfig
+    os.environ["SREGYM_BASE_KUBECONFIG"] = base_kubeconfig
 
     conductor = Conductor()
 

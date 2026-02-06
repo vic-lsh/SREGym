@@ -70,10 +70,10 @@ class ClusterStateManager:
         self.baseline: ClusterBaseline | None = None
 
         # Initialize Kubernetes API clients
-        self.core_v1 = client.CoreV1Api()
-        self.rbac_v1 = client.RbacAuthorizationV1Api()
-        self.storage_v1 = client.StorageV1Api()
-        self.apiextensions_v1 = client.ApiextensionsV1Api()
+        self.core_v1 = client.CoreV1Api(self.kubectl.api_client)
+        self.rbac_v1 = client.RbacAuthorizationV1Api(self.kubectl.api_client)
+        self.storage_v1 = client.StorageV1Api(self.kubectl.api_client)
+        self.apiextensions_v1 = client.ApiextensionsV1Api(self.kubectl.api_client)
 
     def capture_baseline(self) -> ClusterBaseline:
         """

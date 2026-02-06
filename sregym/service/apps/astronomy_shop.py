@@ -2,6 +2,8 @@
 
 import contextlib
 import fcntl
+import logging
+import os
 import time
 
 from sregym.generators.workload.locust import LocustWorkloadManager
@@ -10,6 +12,8 @@ from sregym.paths import ASTRONOMY_SHOP_METADATA
 from sregym.service.apps.base import Application
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
+
+logger = logging.getLogger("all.service.apps.astronomy_shop")
 
 
 class AstronomyShop(Application):
@@ -32,6 +36,7 @@ class AstronomyShop(Application):
         """Deploy the Helm configurations."""
         with self._deployment_lock():
             self.kubectl.create_namespace_if_not_exist(self.namespace)
+            self.configure_dockerhub_pull_secret()
 
             # Ensure stale failed release state is cleared before a fresh install.
             Helm.uninstall(**self.helm_configs)
@@ -44,6 +49,7 @@ class AstronomyShop(Application):
             ]
 
             Helm.install(**self.helm_configs)
+            self.configure_dockerhub_pull_secret(patch_all_service_accounts=True, restart_pods=True)
             Helm.assert_if_deployed(self.helm_configs["namespace"])
             self.trace_api = TraceAPI(self.namespace)
             self.trace_api.start_port_forward()
@@ -67,11 +73,22 @@ class AstronomyShop(Application):
 
     @contextlib.contextmanager
     def _deployment_lock(self):
-        """Serialize astronomy-shop Helm operations across workers."""
-        lock_path = "/tmp/sregym-astronomy-shop.lock"
+        """
+        Serialize astronomy-shop Helm operations per worker cluster.
+
+        Parallel workers run in isolated kind clusters, so using a single global
+        lock causes unrelated workers to block each other unnecessarily.
+        """
+        cluster_name = os.getenv("SREGYM_KIND_CLUSTER_NAME") or f"pid-{os.getpid()}"
+        safe_cluster_name = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in cluster_name)
+        lock_path = f"/tmp/sregym-astronomy-shop-{safe_cluster_name}.lock"
+        start = time.monotonic()
         lock_fd = open(lock_path, "w")
         try:
             fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+            waited = time.monotonic() - start
+            if waited > 1:
+                logger.info(f"Astronomy shop deploy lock acquired after {waited:.1f}s: {lock_path}")
             yield
         finally:
             fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)

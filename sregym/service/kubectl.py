@@ -4,6 +4,7 @@ import json
 import logging
 import subprocess
 import time
+from typing import Optional
 
 logger = logging.getLogger("all.infra.kubectl")
 logger.propagate = True
@@ -22,21 +23,28 @@ from kubernetes.client import api_client
 from kubernetes.client.rest import ApiException
 from rich.console import Console
 
+from sregym.service.kubeconfig import require_kubeconfig_path
+
 dotenv.load_dotenv(override=True)
 
 WAIT_FOR_POD_READY_TIMEOUT = int(os.getenv("WAIT_FOR_POD_READY_TIMEOUT", "600"))
 
 
 class KubeCtl:
-    def __init__(self):
+    def __init__(self, kubeconfig_path: Optional[str] = None):
         """Initialize the KubeCtl object and load the Kubernetes configuration."""
+        self.kubeconfig_path = self._resolve_kubeconfig_path(kubeconfig_path)
         try:
-            config.load_kube_config()
+            self.api_client = config.new_client_from_config(config_file=self.kubeconfig_path)
         except Exception as e:
             logger.error("Missing kubeconfig. Please set up a cluster.")
             exit(1)
-        self.core_v1_api = client.CoreV1Api()
-        self.apps_v1_api = client.AppsV1Api()
+        self.core_v1_api = client.CoreV1Api(self.api_client)
+        self.apps_v1_api = client.AppsV1Api(self.api_client)
+        self.custom_api = client.CustomObjectsApi(self.api_client)
+
+    def _resolve_kubeconfig_path(self, kubeconfig_path: Optional[str]) -> str:
+        return require_kubeconfig_path(kubeconfig_path)
 
     def list_namespaces(self):
         """Return a list of all namespaces in the cluster."""
@@ -130,7 +138,7 @@ class KubeCtl:
 
     def get_service(self, name: str, namespace: str):
         """Fetch the service configuration."""
-        return client.CoreV1Api().read_namespaced_service(name=name, namespace=namespace)
+        return self.core_v1_api.read_namespaced_service(name=name, namespace=namespace)
 
     def wait_for_ready(self, namespace, sleep=2, max_wait=WAIT_FOR_POD_READY_TIMEOUT):
         """Wait for all pods in a namespace to be in a Ready state before proceeding."""
@@ -269,7 +277,7 @@ class KubeCtl:
     def delete_job(self, job_name: str = None, label: str = None, namespace: str = "default"):
         """Delete a Kubernetes Job."""
         console = Console()
-        api_instance = client.BatchV1Api()
+        api_instance = client.BatchV1Api(self.api_client)
         try:
             if job_name:
                 api_instance.delete_namespaced_job(
@@ -303,7 +311,7 @@ class KubeCtl:
 
     def wait_for_job_completion(self, job_name: str, namespace: str = "default", timeout: int = 600):
         """Wait for a Kubernetes Job to complete successfully within a specified timeout."""
-        api_instance = client.BatchV1Api()
+        api_instance = client.BatchV1Api(self.api_client)
         console = Console()
         start_time = time.time()
 
@@ -481,8 +489,11 @@ class KubeCtl:
         """Execute an arbitrary kubectl command."""
         if input_data is not None:
             input_data = input_data.encode("utf-8")
+        env = os.environ.copy()
+        env["KUBECONFIG"] = self.kubeconfig_path
+        env["SREGYM_BASE_KUBECONFIG"] = self.kubeconfig_path
         try:
-            out = subprocess.run(command, shell=True, check=True, capture_output=True, input=input_data)
+            out = subprocess.run(command, shell=True, check=True, capture_output=True, input=input_data, env=env)
             return out.stdout.decode("utf-8")
         except subprocess.CalledProcessError as e:
             return e.stderr.decode("utf-8")
@@ -605,8 +616,7 @@ class KubeCtl:
             raise RuntimeError(f"Failed to delete ReplicaSet {name} in {namespace}: {e}")
 
     def apply_resource(self, manifest: dict):
-
-        dyn_client = dynamic.DynamicClient(api_client.ApiClient())
+        dyn_client = dynamic.DynamicClient(self.api_client)
 
         gvk = {
             ("v1", "ResourceQuota"): dyn_client.resources.get(api_version="v1", kind="ResourceQuota"),

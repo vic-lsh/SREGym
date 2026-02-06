@@ -1,9 +1,11 @@
 """Interface for helm operations"""
 
 import logging
+import os
 import subprocess
 import time
 
+from sregym.service.kubeconfig import require_kubeconfig_path
 from sregym.service.kubectl import KubeCtl
 
 logger = logging.getLogger("all.infra.helm")
@@ -12,6 +14,18 @@ logger.setLevel(logging.DEBUG)
 
 
 class Helm:
+    @staticmethod
+    def _resolve_kubeconfig_path(kubeconfig_path: str | None = None) -> str:
+        return require_kubeconfig_path(kubeconfig_path)
+
+    @staticmethod
+    def _build_env(kubeconfig_path: str | None = None) -> dict:
+        resolved = Helm._resolve_kubeconfig_path(kubeconfig_path)
+        env = os.environ.copy()
+        env["KUBECONFIG"] = resolved
+        env["SREGYM_BASE_KUBECONFIG"] = resolved
+        return env
+
     @staticmethod
     def install(**args):
         """Install a helm chart
@@ -31,6 +45,8 @@ class Helm:
         version = args.get("version")
         extra_args = args.get("extra_args")
         remote_chart = args.get("remote_chart", False)
+        kubeconfig_path = args.get("kubeconfig_path")
+        env = Helm._build_env(kubeconfig_path)
 
         logger.info(f"Helm Install: {release_name} in namespace {namespace}")
 
@@ -42,6 +58,7 @@ class Helm:
                 shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                env=env,
             )
             dependency_output, dependency_error = dependency_process.communicate()
 
@@ -53,10 +70,10 @@ class Helm:
         if extra_args:
             command += " " + " ".join(extra_args)
 
-        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         output, error = process.communicate()
 
-        if error:
+        if process.returncode != 0:
             stderr = error.decode("utf-8").strip()
             stdout = output.decode("utf-8").strip()
             raise RuntimeError(
@@ -77,18 +94,20 @@ class Helm:
         """
         release_name = args.get("release_name")
         namespace = args.get("namespace")
+        kubeconfig_path = args.get("kubeconfig_path")
+        env = Helm._build_env(kubeconfig_path)
 
         logger.info(f"Helm Uninstall: {release_name} in namespace {namespace}")
 
-        if not Helm.exists_release(release_name, namespace):
+        if not Helm.exists_release(release_name, namespace, kubeconfig_path=kubeconfig_path):
             logger.warning(f"Release {release_name} does not exist. Skipping uninstall.")
             return
 
         command = f"helm uninstall {release_name} -n {namespace}"
-        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         output, error = process.communicate()
 
-        if error:
+        if process.returncode != 0:
             stderr = error.decode("utf-8").strip()
             stdout = output.decode("utf-8").strip()
             raise RuntimeError(
@@ -100,7 +119,7 @@ class Helm:
             logger.debug(output.decode("utf-8"))
 
     @staticmethod
-    def exists_release(release_name: str, namespace: str) -> bool:
+    def exists_release(release_name: str, namespace: str, kubeconfig_path: str | None = None) -> bool:
         """Check if a Helm release exists
 
         Args:
@@ -111,10 +130,16 @@ class Helm:
             bool: True if release exists
         """
         command = f"helm list -n {namespace} -a -q"
-        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
+        process = subprocess.Popen(
+            command,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=Helm._build_env(kubeconfig_path),
+        )
         output, error = process.communicate()
 
-        if error:
+        if process.returncode != 0:
             logger.error(error.decode("utf-8"))
             return False
         else:
@@ -133,7 +158,7 @@ class Helm:
         Raises:
             Exception: If not deployed
         """
-        kubectl = KubeCtl()
+        kubectl = KubeCtl(kubeconfig_path=Helm._resolve_kubeconfig_path())
         try:
             kubectl.wait_for_ready(namespace)
         except Exception as e:
@@ -158,6 +183,8 @@ class Helm:
         namespace = args.get("namespace")
         values_file = args.get("values_file")
         set_values = args.get("set_values", {})
+        kubeconfig_path = args.get("kubeconfig_path")
+        env = Helm._build_env(kubeconfig_path)
 
         logger.info(f"Helm Upgrade: {release_name} in namespace {namespace}")
 
@@ -177,10 +204,10 @@ class Helm:
             command.append("--set")
             command.append(f"{key}={value}")
 
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         output, error = process.communicate()
 
-        if error:
+        if process.returncode != 0:
             logger.error("Error during helm upgrade:")
             stderr = error.decode("utf-8").strip()
             stdout = output.decode("utf-8").strip()
@@ -210,7 +237,13 @@ class Helm:
         command = f"helm repo add {name} {url} || true"
 
         for attempt in range(max_retries):
-            process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            process = subprocess.Popen(
+                command,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=Helm._build_env(),
+            )
             output, error = process.communicate()
 
             # Check if the repo add was successful (return code 0) or repo already exists
@@ -257,7 +290,13 @@ class Helm:
         command = "helm repo update"
 
         for attempt in range(max_retries):
-            process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            process = subprocess.Popen(
+                command,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=Helm._build_env(),
+            )
             output, error = process.communicate()
 
             if process.returncode == 0:

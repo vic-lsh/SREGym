@@ -10,6 +10,7 @@ from kubernetes import client, config, stream
 from sregym.generators.workload.base import WorkloadEntry
 from sregym.generators.workload.stream import STREAM_WORKLOAD_EPS, StreamWorkloadManager
 from sregym.paths import BASE_DIR
+from sregym.service.kubeconfig import require_kubeconfig_path
 from sregym.service.kubectl import KubeCtl
 
 logger = logging.getLogger("all.infra.workload")
@@ -27,7 +28,7 @@ class LocustWorkloadManager(StreamWorkloadManager):
         self.log_pool = []
         self.last_log_line_time = None
 
-        config.load_kube_config()
+        config.load_kube_config(config_file=require_kubeconfig_path())
         self.core_v1_api = client.CoreV1Api()
 
         self.kubectl = KubeCtl()

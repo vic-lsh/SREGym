@@ -11,6 +11,7 @@ from kubernetes import config
 from pydantic.dataclasses import dataclass
 
 from mcp_server.kubectl_server_helper.utils import parse_text
+from sregym.service.kubeconfig import require_kubeconfig_path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ class KubeCtl:
 
     def __init__(self):
         """Initialize the KubeCtl object and load the Kubernetes configuration."""
-        config.load_kube_config()
+        config.load_kube_config(config_file=require_kubeconfig_path())
         # self.core_v1_api = client.CoreV1Api()
         # self.apps_v1_api = client.AppsV1Api()
 

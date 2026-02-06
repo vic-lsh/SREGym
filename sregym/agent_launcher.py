@@ -45,6 +45,7 @@ class AgentLauncher:
         # Use filtered kubeconfig if set (hides chaos engineering namespaces)
         if self._agent_kubeconfig_path:
             env["KUBECONFIG"] = self._agent_kubeconfig_path
+            env["SREGYM_BASE_KUBECONFIG"] = self._agent_kubeconfig_path
 
         command = reg.kickoff_command
         if extra_args:

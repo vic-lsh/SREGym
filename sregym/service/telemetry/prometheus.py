@@ -14,12 +14,13 @@ from sregym.service.kubectl import KubeCtl
 
 
 class Prometheus:
-    def __init__(self):
+    def __init__(self, kubeconfig_path: str | None = None):
         self.config_file = PROMETHEUS_METADATA
         self.name = None
         self.namespace = None
         self.helm_configs = {}
         self.pvc_config_file = None
+        self.kubectl = KubeCtl(kubeconfig_path=kubeconfig_path)
         self.port = self.find_free_port()
         self.port_forward_process = None
 
@@ -47,6 +48,7 @@ class Prometheus:
         # Override namespace in helm config
         if self.helm_configs:
             self.helm_configs["namespace"] = self.namespace
+            self.helm_configs["kubeconfig_path"] = self.kubectl.kubeconfig_path
             
             if worker_id and "release_name" in self.helm_configs:
                  self.helm_configs["release_name"] = f"{self.helm_configs['release_name']}-w{worker_id}"
@@ -101,7 +103,7 @@ class Prometheus:
         Helm.uninstall(**self.helm_configs)
 
         # Ensure namespace exists
-        KubeCtl().create_namespace_if_not_exist(self.namespace)
+        self.kubectl.create_namespace_if_not_exist(self.namespace)
 
         if self.pvc_config_file:
             pvc_name = self._get_pvc_name_from_file(self.pvc_config_file)
@@ -144,6 +146,7 @@ class Prometheus:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                env=Helm._build_env(self.kubectl.kubeconfig_path),
             )
             os.environ["PROMETHEUS_PORT"] = str(self.port)
             self.logger.debug(f"Set PROMETHEUS_PORT environment variable to {self.port}")
@@ -188,16 +191,16 @@ class Prometheus:
     def _apply_pvc(self):
         """Apply the PersistentVolumeClaim configuration."""
         self.logger.info(f"Applying PersistentVolumeClaim from {self.pvc_config_file}")
-        KubeCtl().exec_command(f"kubectl apply -f {self.pvc_config_file} -n {self.namespace}")
+        self.kubectl.exec_command(f"kubectl apply -f {self.pvc_config_file} -n {self.namespace}")
 
     def _delete_pvc(self):
         """Delete the PersistentVolume and associated PersistentVolumeClaim."""
         pvc_name = self._get_pvc_name_from_file(self.pvc_config_file)
-        result = KubeCtl().exec_command(f"kubectl get pvc {pvc_name} --ignore-not-found")
+        result = self.kubectl.exec_command(f"kubectl get pvc {pvc_name} --ignore-not-found")
 
         if result:
             self.logger.info(f"Deleting PersistentVolumeClaim {pvc_name}")
-            KubeCtl().exec_command(f"kubectl delete pvc {pvc_name}")
+            self.kubectl.exec_command(f"kubectl delete pvc {pvc_name}")
             self.logger.info(f"Successfully deleted PersistentVolumeClaim from {pvc_name}")
         else:
             self.logger.warning(f"PersistentVolumeClaim {pvc_name} not found. Skipping deletion.")
@@ -212,7 +215,7 @@ class Prometheus:
         """Check if the PersistentVolumeClaim exists."""
         command = f"kubectl get pvc {pvc_name}"
         try:
-            result = KubeCtl().exec_command(command)
+            result = self.kubectl.exec_command(command)
             if "No resources found" in result or "Error" in result:
                 return False
         except subprocess.CalledProcessError as e:
@@ -223,7 +226,7 @@ class Prometheus:
         """Check if Prometheus is already running in the cluster."""
         command = f"kubectl get pods -n {self.namespace} -l app.kubernetes.io/name=prometheus"
         try:
-            result = KubeCtl().exec_command(command)
+            result = self.kubectl.exec_command(command)
             if "Running" in result:
                 return True
         except subprocess.CalledProcessError:

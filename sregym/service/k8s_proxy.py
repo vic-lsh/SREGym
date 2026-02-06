@@ -15,7 +15,6 @@ The proxy:
 import base64
 import json
 import logging
-import os
 import ssl
 import tempfile
 import threading
@@ -25,6 +24,8 @@ from urllib.parse import urlparse
 
 import urllib3
 from kubernetes import config
+
+from sregym.service.kubeconfig import require_kubeconfig_path
 
 logger = logging.getLogger("all.infra.k8s_proxy")
 logger.propagate = True
@@ -40,7 +41,12 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 class KubernetesAPIProxy:
     """Manages the Kubernetes API filtering proxy."""
 
-    def __init__(self, hidden_namespaces: Set[str] | None = None, listen_port: int = 6443):
+    def __init__(
+        self,
+        hidden_namespaces: Set[str] | None = None,
+        listen_port: int = 6443,
+        kubeconfig_path: str | None = None,
+    ):
         self.hidden_namespaces: Set[str] = hidden_namespaces if hidden_namespaces is not None else HIDDEN_NAMESPACES
         self.listen_port = listen_port
         self.server: HTTPServer | None = None
@@ -48,24 +54,16 @@ class KubernetesAPIProxy:
         self._temp_files: list = []
 
         # Load Kubernetes config to get upstream API details.
-        # Prefer an explicitly provided base kubeconfig (worker-isolated cluster),
-        # then KUBECONFIG, then ~/.kube/config.
-        kubeconfig_path = os.getenv("SREGYM_BASE_KUBECONFIG") or os.getenv("KUBECONFIG")
-        if kubeconfig_path:
-            kubeconfig_path = kubeconfig_path.split(os.pathsep)[0]
-        else:
-            kubeconfig_path = os.path.expanduser("~/.kube/config")
+        self.kubeconfig_path = require_kubeconfig_path(kubeconfig_path)
 
-        config.load_kube_config(config_file=kubeconfig_path)
+        config.load_kube_config(config_file=self.kubeconfig_path)
         self.api_host, self.api_port, self.ca_cert, self.client_cert, self.client_key = self._load_cluster_config(
-            kubeconfig_path=kubeconfig_path
+            kubeconfig_path=self.kubeconfig_path
         )
 
     def _load_cluster_config(self, kubeconfig_path: str | None = None):
         """Extract API server connection details from kubeconfig."""
-        # Load full kubeconfig
-        if kubeconfig_path is None:
-            kubeconfig_path = os.path.expanduser("~/.kube/config")
+        kubeconfig_path = require_kubeconfig_path(kubeconfig_path)
 
         # Get the current context's cluster and user from the explicit config file
         _, active_context = config.list_kube_config_contexts(config_file=kubeconfig_path)

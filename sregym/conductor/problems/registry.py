@@ -230,13 +230,20 @@ class ProblemRegistry:
             "operator_wrong_update_strategy_fault": K8SOperatorWrongUpdateStrategyFault,
         }
 # fmt: on
-        self.kubectl = KubeCtl()
+        # KubeCtl requires a valid kubeconfig. In parallel mode, worker-specific
+        # kubeconfigs are created later, so avoid eager initialization here.
+        self.kubectl = None
         self.non_emulated_cluster_problems = []
+
+    def _ensure_kubectl(self):
+        if self.kubectl is None:
+            self.kubectl = KubeCtl()
 
     def get_problem_instance(self, problem_id: str):
         if problem_id not in self.PROBLEM_REGISTRY:
             raise ValueError(f"Problem ID {problem_id} not found in registry.")
 
+        self._ensure_kubectl()
         is_emulated_cluster = self.kubectl.is_emulated_cluster()
         if is_emulated_cluster and problem_id in self.non_emulated_cluster_problems:
             raise RuntimeError(f"Problem ID {problem_id} is not supported in emulated clusters.")

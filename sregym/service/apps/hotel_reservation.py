@@ -80,8 +80,10 @@ class HotelReservation(Application):
         """Deploy the Kubernetes configurations."""
         self.logger.info(f"Deploying Kubernetes configurations in namespace: {self.namespace}")
         self.create_namespace()
+        self.configure_dockerhub_pull_secret()
         self.create_configmaps()
         self.kubectl.apply_configs(self.namespace, self.k8s_deploy_path)
+        self.configure_dockerhub_pull_secret(patch_all_service_accounts=True, restart_pods=True)
         self.kubectl.wait_for_ready(self.namespace)
         self.trace_api = TraceAPI(self.namespace)
         self.trace_api.start_port_forward()
