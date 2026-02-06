@@ -47,13 +47,18 @@ class KubernetesAPIProxy:
         self.server_thread: threading.Thread | None = None
         self._temp_files: list = []
 
-        # Load kubernetes config to get API server details
-        # Always load from the default kubeconfig path, ignoring KUBECONFIG env var
-        # This prevents circular dependency if KUBECONFIG points to our proxy
-        default_kubeconfig = os.path.expanduser("~/.kube/config")
-        config.load_kube_config(config_file=default_kubeconfig)
+        # Load Kubernetes config to get upstream API details.
+        # Prefer an explicitly provided base kubeconfig (worker-isolated cluster),
+        # then KUBECONFIG, then ~/.kube/config.
+        kubeconfig_path = os.getenv("SREGYM_BASE_KUBECONFIG") or os.getenv("KUBECONFIG")
+        if kubeconfig_path:
+            kubeconfig_path = kubeconfig_path.split(os.pathsep)[0]
+        else:
+            kubeconfig_path = os.path.expanduser("~/.kube/config")
+
+        config.load_kube_config(config_file=kubeconfig_path)
         self.api_host, self.api_port, self.ca_cert, self.client_cert, self.client_key = self._load_cluster_config(
-            kubeconfig_path=default_kubeconfig
+            kubeconfig_path=kubeconfig_path
         )
 
     def _load_cluster_config(self, kubeconfig_path: str | None = None):

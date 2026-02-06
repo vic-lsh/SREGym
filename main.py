@@ -5,6 +5,7 @@ import glob
 import logging
 import multiprocessing
 import os
+import platform
 import subprocess
 import sys
 import threading
@@ -45,6 +46,9 @@ from sregym.conductor.constants import StartProblemResult
 LAUNCHER = AgentLauncher()
 # Ensure logger inherits from 'all' so handlers are attached
 logger = logging.getLogger("all.main")
+
+KIND_CLUSTER_PREFIX = "sregym-w"
+WORKER_META_KEY_PREFIX = "__worker_meta__"
 
 
 def get_current_datetime_formatted():
@@ -510,6 +514,74 @@ def _run_driver_and_shutdown(
         request_shutdown()
 
 
+def _worker_kind_config_path() -> str:
+    """Choose the kind config file based on host architecture."""
+    arch = platform.machine().lower()
+    config_name = "kind-config-arm.yaml" if ("arm" in arch or "aarch" in arch) else "kind-config-x86.yaml"
+    return os.path.abspath(os.path.join("kind", config_name))
+
+
+def _create_worker_cluster(worker_id: int, experiment_log_dir: str) -> tuple[str, str]:
+    """Create a dedicated kind cluster for one worker and return (cluster_name, kubeconfig_path)."""
+    cluster_name = f"{KIND_CLUSTER_PREFIX}{worker_id}"
+    kubeconfig_dir = os.path.join(experiment_log_dir, "kubeconfigs")
+    os.makedirs(kubeconfig_dir, exist_ok=True)
+    kubeconfig_path = os.path.join(kubeconfig_dir, f"worker_{worker_id}.kubeconfig")
+    config_path = _worker_kind_config_path()
+
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Kind config file not found: {config_path}")
+
+    logger.info(f"Preparing isolated kind cluster for worker {worker_id}: {cluster_name}")
+
+    # Best-effort cleanup in case a previous run crashed and left this worker cluster behind.
+    subprocess.run(
+        ["kind", "delete", "cluster", "--name", cluster_name],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+
+    subprocess.run(
+        [
+            "kind",
+            "create",
+            "cluster",
+            "--name",
+            cluster_name,
+            "--config",
+            config_path,
+            "--kubeconfig",
+            kubeconfig_path,
+            "--wait",
+            "180s",
+        ],
+        check=True,
+    )
+
+    os.environ["KUBECONFIG"] = kubeconfig_path
+    os.environ["SREGYM_BASE_KUBECONFIG"] = kubeconfig_path
+    os.environ["SREGYM_KIND_CLUSTER_NAME"] = cluster_name
+    logger.info(f"Worker {worker_id} cluster ready: {cluster_name}, kubeconfig={kubeconfig_path}")
+    return cluster_name, kubeconfig_path
+
+
+def _delete_worker_cluster(cluster_name: str) -> None:
+    """Delete a worker's dedicated kind cluster."""
+    if not cluster_name:
+        return
+    logger.info(f"Tearing down worker kind cluster: {cluster_name}")
+    subprocess.run(
+        ["kind", "delete", "cluster", "--name", cluster_name],
+        check=False,
+    )
+
+
+def _worker_meta_key(worker_id: int) -> str:
+    return f"{WORKER_META_KEY_PREFIX}{worker_id}"
+
+
 def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict):
     """Worker function for parallel execution."""
     os.environ["SREGYM_WORKER_ID"] = str(worker_id)
@@ -536,8 +608,39 @@ def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict)
         os.dup2(f.fileno(), 1)
         os.dup2(f.fileno(), 2)
 
-        # Run main with the specific list of problems
-        main(args, problem_queue=problem_queue, experiment_log_dir=experiment_log_dir, status_dict=status_dict, worker_id=worker_id)
+        cluster_name = ""
+        try:
+            status_dict[_worker_meta_key(worker_id)] = {
+                "status": "Creating cluster",
+                "start_time": time.time(),
+                "elapsed": 0.0,
+                "worker_id": worker_id,
+            }
+            cluster_name, _ = _create_worker_cluster(worker_id, experiment_log_dir)
+            status_dict[_worker_meta_key(worker_id)] = {
+                "status": f"Cluster ready ({cluster_name})",
+                "start_time": time.time(),
+                "elapsed": 0.0,
+                "worker_id": worker_id,
+            }
+            # Run main with the specific list of problems
+            main(
+                args,
+                problem_queue=problem_queue,
+                experiment_log_dir=experiment_log_dir,
+                status_dict=status_dict,
+                worker_id=worker_id,
+            )
+        except Exception as e:
+            status_dict[_worker_meta_key(worker_id)] = {
+                "status": f"Worker setup failed: {e}",
+                "start_time": time.time(),
+                "elapsed": 0.0,
+                "worker_id": worker_id,
+            }
+            raise
+        finally:
+            _delete_worker_cluster(cluster_name)
 
 
 def run_parallel(args):
@@ -675,6 +778,8 @@ def run_parallel(args):
                             wid = worker_map.get(p)
                             # Find problems assigned to this worker that are not terminal
                             for pid, info in status_dict.items():
+                                if str(pid).startswith(WORKER_META_KEY_PREFIX):
+                                    continue
                                 if info.get("worker_id") == wid:
                                     status = info.get("status")
                                     if not (status.startswith("Completed") or status in ["Error", "Skipped (Khaos Req)", "Error (Worker Died)"]):
@@ -694,6 +799,8 @@ def run_parallel(args):
                     current_worker_status = {i: None for i in range(args.parallel)} 
                     
                     for pid, info in status_dict.items():
+                        if str(pid).startswith(WORKER_META_KEY_PREFIX):
+                            continue
                         status = info.get("status", "Unknown")
                         wid = info.get("worker_id")
                         
@@ -755,7 +862,17 @@ def run_parallel(args):
                             progress.update(worker_tasks[i], description=desc, completed=completed_pct)
                         else:
                             # Worker is alive but idle (or between tasks)
-                            progress.update(worker_tasks[i], description=f"Worker {i}: Idle", completed=0)
+                            meta = status_dict.get(_worker_meta_key(i))
+                            if meta and meta.get("status"):
+                                start_t = meta.get("start_time", time.time())
+                                elapsed = int(time.time() - start_t)
+                                progress.update(
+                                    worker_tasks[i],
+                                    description=f"Worker {i}: [blue]{meta.get('status')}[/blue] [yellow]({elapsed}s)[/yellow]",
+                                    completed=0,
+                                )
+                            else:
+                                progress.update(worker_tasks[i], description=f"Worker {i}: Idle", completed=0)
                     
                     if not any(p.is_alive() for p in processes):
                         break
