@@ -1,6 +1,5 @@
-import os
-
 from clients.stratus.weak_oracles.base_oracle import BaseOracle, OracleResult
+from sregym.service.kubeconfig import require_kubeconfig_path
 
 
 class ClusterStateOracle(BaseOracle):
@@ -18,11 +17,8 @@ class ClusterStateOracle(BaseOracle):
 
         from kubernetes import client, config
 
-        # Load Kubernetes configuration
-        if os.path.exists(os.path.expanduser("~/.kube/config")):
-            config.load_kube_config()
-        else:
-            config.load_incluster_config()
+        # Load Kubernetes configuration from an explicit path.
+        config.load_kube_config(config_file=require_kubeconfig_path())
 
         # print(f"Validating cluster status on namespace '{namespace}'...")
 

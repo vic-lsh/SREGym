@@ -3,10 +3,12 @@ import asyncio
 import csv
 import fcntl
 import glob
+import json
 import logging
 import multiprocessing
 import os
 import platform
+import re
 import subprocess
 import sys
 import threading
@@ -57,6 +59,8 @@ OPENEBS_PRELOAD_IMAGES = [
     "openebs/node-disk-operator:2.1.0",
     "openebs/provisioner-localpv:3.4.0",
 ]
+PRELOAD_IMAGE_ENV_VAR = "SREGYM_PRELOAD_IMAGES"
+PRELOAD_IMAGE_PATTERN = re.compile(r"^\s*image:\s*['\"]?([^'\"\s]+)['\"]?\s*$", re.MULTILINE)
 
 
 def get_current_datetime_formatted():
@@ -70,11 +74,11 @@ def get_latest_log_dir():
     logs_root = os.path.abspath("logs")
     if not os.path.exists(logs_root):
         return None
-    
+
     subdirs = [os.path.join(logs_root, d) for d in os.listdir(logs_root) if os.path.isdir(os.path.join(logs_root, d))]
     if not subdirs:
         return None
-    
+
     # Sort by modification time
     return max(subdirs, key=os.path.getmtime)
 
@@ -142,7 +146,7 @@ def driver_loop(
         # because it will be interleaved. We only use console for local logging
         # which will be redirected to a file.
         console = Console(force_terminal=True) if status_dict is None else Console(file=sys.stdout)
-        
+
         # give the API a moment to bind
         await asyncio.sleep(1)
 
@@ -179,15 +183,18 @@ def driver_loop(
                 writer.writeheader()
                 writer.writerow(snapshot)
             logger.info(f"❌ Problem {problem_id} for agent {agent_to_run} failed. Error result written to {csv_path}")
+
         # session_timestamp = get_current_datetime_formatted()
 
         if problem_queue:
+
             def problem_gen():
                 while True:
                     try:
                         yield problem_queue.get_nowait()
                     except queue.Empty:
                         return
+
             problem_iterator = problem_gen()
         else:
             # Get all problem IDs and filter if needed
@@ -196,7 +203,9 @@ def driver_loop(
             all_problem_ids = conductor.problems.get_problem_ids(all=True)
             if problem_filter:
                 if problem_filter not in all_problem_ids:
-                    console.log(f"⚠️  Problem '{problem_filter}' not found in registry. Available problems: {problem_ids}")
+                    console.log(
+                        f"⚠️  Problem '{problem_filter}' not found in registry. Available problems: {problem_ids}"
+                    )
                     sys.exit(1)
                 problem_ids = [problem_filter]
                 console.log(f"🎯 Running single problem: {problem_filter}")
@@ -213,7 +222,7 @@ def driver_loop(
                 )
             for unknown_problem_id in unknown_problem_ids:
                 problem_ids.remove(unknown_problem_id)
-            
+
             problem_iterator = problem_ids
 
         for pid in problem_iterator:
@@ -230,7 +239,9 @@ def driver_loop(
                         completed_iterations += 1
 
                 if completed_iterations >= repeat:
-                    console.log(f"⏭️  Skipping problem '{pid}': Found {completed_iterations}/{repeat} completed results.")
+                    console.log(
+                        f"⏭️  Skipping problem '{pid}': Found {completed_iterations}/{repeat} completed results."
+                    )
 
                     if status_dict is not None:
                         status_dict[pid] = {
@@ -246,14 +257,16 @@ def driver_loop(
                     )
 
             # Prepare for logging redirection if in parallel mode
-            redirect_ctx = open(os.path.join(experiment_log_dir, f"{pid}.log"), "w") if status_dict is not None else None
+            redirect_ctx = (
+                open(os.path.join(experiment_log_dir, f"{pid}.log"), "w") if status_dict is not None else None
+            )
             original_stdout = sys.stdout
             original_stderr = sys.stderr
 
             if status_dict is not None:
                 sys.stdout = redirect_ctx
                 sys.stderr = redirect_ctx
-                
+
                 # Redirect logging handler to the file so logs don't go to the original stderr (which might be console or worker log)
                 root_logger = logging.getLogger("all")
                 for handler in root_logger.handlers:
@@ -265,12 +278,12 @@ def driver_loop(
                     "status": "Deploying",
                     "start_time": time.time(),
                     "elapsed": 0.0,
-                    "worker_id": worker_id
+                    "worker_id": worker_id,
                 }
 
             try:
                 for iteration in range(completed_iterations, repeat):
-                    console.log(f"\n🔍 Starting problem: {pid} (Run {iteration+1}/{repeat})")
+                    console.log(f"\n🔍 Starting problem: {pid} (Run {iteration + 1}/{repeat})")
 
                     conductor.problem_id = pid
 
@@ -282,7 +295,7 @@ def driver_loop(
                                 "status": "Skipped (Khaos Req)",
                                 "start_time": status_dict[pid]["start_time"],
                                 "elapsed": time.time() - status_dict[pid]["start_time"],
-                                "worker_id": worker_id
+                                "worker_id": worker_id,
                             }
                         continue
 
@@ -300,19 +313,21 @@ def driver_loop(
                                 "status": "Agent Running",
                                 "start_time": status_dict[pid]["start_time"],
                                 "elapsed": time.time() - status_dict[pid]["start_time"],
-                                "worker_id": worker_id
+                                "worker_id": worker_id,
                             }
 
-                        reg = get_agent(agent_to_run, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
+                        reg = get_agent(
+                            agent_to_run, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml"
+                        )
                         if reg:
                             extra_args = ""
                             # Pass explicit log dir to supported agents (e.g. gemini_cli)
                             if agent_to_run == "gemini_cli":
-                                 extra_args += f" --logs-dir {agent_log_dir}"
-                            
+                                extra_args += f" --logs-dir {agent_log_dir}"
+
                             if enable_summary:
-                                 extra_args += " --enable-summary"
-                                 
+                                extra_args += " --enable-summary"
+
                             await LAUNCHER.ensure_started(reg, extra_args=extra_args.strip())
 
                     # Poll until grading completes or agent exits
@@ -324,7 +339,7 @@ def driver_loop(
                                 "status": f"Agent: {current_stage}",
                                 "start_time": status_dict[pid]["start_time"],
                                 "elapsed": time.time() - status_dict[pid]["start_time"],
-                                "worker_id": worker_id
+                                "worker_id": worker_id,
                             }
 
                         # Check if agent process has exited
@@ -341,7 +356,7 @@ def driver_loop(
                             "status": "Cleaning Up",
                             "start_time": status_dict[pid]["start_time"],
                             "elapsed": time.time() - status_dict[pid]["start_time"],
-                            "worker_id": worker_id
+                            "worker_id": worker_id,
                         }
 
                     console.log(f"✅ Completed {pid}: results={conductor.results}")
@@ -357,7 +372,9 @@ def driver_loop(
                             while elapsed < timeout:
                                 agent_proc.proc.poll()
                                 if agent_proc.proc.returncode is not None:
-                                    console.log(f"✅ Agent process completed with return code {agent_proc.proc.returncode}")
+                                    console.log(
+                                        f"✅ Agent process completed with return code {agent_proc.proc.returncode}"
+                                    )
                                     break
                                 await asyncio.sleep(1)
                                 elapsed += 1
@@ -375,7 +392,7 @@ def driver_loop(
 
                     fieldnames = sorted(snapshot.keys())
                     current_date_time = get_current_datetime_formatted()
-                    
+
                     # Write results to experiment_log_dir
                     csv_path = os.path.join(experiment_log_dir, f"{current_date_time}_{pid}_{agent_to_run}_results.csv")
                     with open(csv_path, "w", newline="") as csvfile:
@@ -397,14 +414,12 @@ def driver_loop(
                                 summarize_cmd = [
                                     sys.executable,
                                     "clients/gemini_cli/summarize_results.py",
-                                    "--logs-dir", agent_log_dir,
-                                    "--model", os.environ.get("MODEL_ID", "gemini-2.0-flash")
+                                    "--logs-dir",
+                                    agent_log_dir,
+                                    "--model",
+                                    os.environ.get("MODEL_ID", "gemini-2.0-flash"),
                                 ]
-                                result = subprocess.run(
-                                    summarize_cmd,
-                                    capture_output=True,
-                                    text=True
-                                )
+                                result = subprocess.run(summarize_cmd, capture_output=True, text=True)
                                 if result.returncode == 0:
                                     console.log("✅ External summarization step completed.")
                                 else:
@@ -412,7 +427,7 @@ def driver_loop(
                                     console.log(result.stderr)
                             except Exception as e:
                                 console.log(f"⚠️ External summarization failed to launch: {e}")
-            
+
             except Exception as e:
                 console.log(f"❌ Error running problem {pid}: {e}")
                 if not use_external_harness:
@@ -422,31 +437,31 @@ def driver_loop(
                         "status": "Error",
                         "start_time": status_dict[pid]["start_time"],
                         "elapsed": time.time() - status_dict[pid]["start_time"],
-                        "worker_id": worker_id
+                        "worker_id": worker_id,
                     }
                 # Do not raise e; continue to next problem
             finally:
                 # Ensure agent is cleaned up even if an error occurred
                 if not use_external_harness:
                     LAUNCHER.cleanup_agent(agent_to_run)
-                
+
                 if status_dict is not None:
                     if status_dict[pid]["status"] != "Error":
                         status_dict[pid] = {
                             "status": "Completed",
                             "start_time": status_dict[pid]["start_time"],
                             "elapsed": time.time() - status_dict[pid]["start_time"],
-                            "worker_id": worker_id
+                            "worker_id": worker_id,
                         }
                     sys.stdout = original_stdout
                     sys.stderr = original_stderr
-                    
+
                     # Restore logging handler
                     root_logger = logging.getLogger("all")
                     for handler in root_logger.handlers:
                         if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
                             handler.setStream(original_stderr)
-                    
+
                     if redirect_ctx:
                         redirect_ctx.close()
 
@@ -533,10 +548,100 @@ def _should_preload_infra_images() -> bool:
     return os.getenv("SREGYM_PRELOAD_INFRA_IMAGES", "1").strip().lower() not in {"0", "false", "no"}
 
 
+def _extract_images_from_text(text: str) -> set[str]:
+    images: set[str] = set()
+    for match in PRELOAD_IMAGE_PATTERN.findall(text):
+        image = match.strip()
+        if not image or "{{" in image or "}}" in image:
+            continue
+        images.add(image)
+    return images
+
+
+def _iter_yaml_files(root_path: Path):
+    if not root_path.exists():
+        return
+    for suffix in ("*.yaml", "*.yml"):
+        for file_path in root_path.rglob(suffix):
+            if not file_path.is_file():
+                continue
+            yield file_path
+
+
+def _collect_images_from_yaml_path(path: Path) -> set[str]:
+    images: set[str] = set()
+    if not path.exists():
+        return images
+
+    if path.is_file():
+        candidates = [path]
+    else:
+        candidates = list(_iter_yaml_files(path))
+
+    for file_path in candidates:
+        try:
+            text = file_path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        images.update(_extract_images_from_text(text))
+    return images
+
+
+def _collect_images_from_helm_chart(chart_path: Path) -> set[str]:
+    if not chart_path.exists():
+        return set()
+
+    rendered = subprocess.run(
+        ["helm", "template", "sregym-preload-scan", str(chart_path), "--include-crds"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if rendered.returncode == 0 and rendered.stdout:
+        return _extract_images_from_text(rendered.stdout)
+
+    logger.warning(f"Helm template failed for preload scan ({chart_path}), falling back to static YAML scan.")
+    return _collect_images_from_yaml_path(chart_path)
+
+
+def _discover_benchmark_images() -> list[str]:
+    metadata_root = Path("sregym/service/metadata")
+    benchmark_images: set[str] = set()
+
+    if metadata_root.exists():
+        for metadata_file in metadata_root.glob("*.json"):
+            try:
+                metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+
+            helm_cfg = metadata.get("Helm Config") or {}
+            chart_path = helm_cfg.get("chart_path")
+            if chart_path and not helm_cfg.get("remote_chart", False):
+                local_chart_path = Path("SREGym-applications") / chart_path
+                benchmark_images.update(_collect_images_from_helm_chart(local_chart_path))
+
+            for key in ("K8S Deploy Path", "K8S Workload Job Path"):
+                deploy_path = metadata.get(key)
+                if deploy_path:
+                    local_path = Path("SREGym-applications") / deploy_path
+                    benchmark_images.update(_collect_images_from_yaml_path(local_path))
+
+    # Infra resources used by multiple problems.
+    benchmark_images.update(_collect_images_from_yaml_path(Path("sregym/service/khaos.yaml")))
+    benchmark_images.update(_collect_images_from_yaml_path(Path("sregym/observer/prometheus")))
+
+    return sorted(benchmark_images)
+
+
 def _get_preload_images() -> list[str]:
-    override = os.getenv("SREGYM_PRELOAD_IMAGES", "").strip()
+    override = os.getenv(PRELOAD_IMAGE_ENV_VAR, "").strip()
     if not override:
-        return OPENEBS_PRELOAD_IMAGES
+        discovered = _discover_benchmark_images()
+        # Persist the resolved list so worker processes reuse the exact same image set.
+        images = sorted(set(OPENEBS_PRELOAD_IMAGES).union(discovered))
+        os.environ[PRELOAD_IMAGE_ENV_VAR] = ",".join(images)
+        return images
     images = [img.strip() for img in override.split(",") if img.strip()]
     return images if images else OPENEBS_PRELOAD_IMAGES
 
@@ -581,6 +686,7 @@ def _prefetch_infra_images_once() -> None:
     images = _get_preload_images()
     if not images:
         return
+    logger.info(f"Preloading benchmark images on host: {len(images)} image(s).")
 
     # Cross-process lock to ensure only one process pulls shared images.
     lock_path = os.path.join(tempfile.gettempdir(), "sregym-image-prefetch.lock")
@@ -598,6 +704,7 @@ def _load_preloaded_images_into_cluster(cluster_name: str) -> None:
         return
 
     images = _get_preload_images()
+    logger.info(f"Loading pre-pulled benchmark images into cluster {cluster_name}: {len(images)} image(s).")
     for image in images:
         if not _docker_image_exists(image):
             logger.warning(f"Skipping kind load for missing local image: {image}")
@@ -606,13 +713,16 @@ def _load_preloaded_images_into_cluster(cluster_name: str) -> None:
             subprocess.run(
                 ["kind", "load", "docker-image", "--name", cluster_name, image],
                 check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                capture_output=True,
                 text=True,
             )
             logger.info(f"Loaded cached image into {cluster_name}: {image}")
         except subprocess.CalledProcessError as e:
             logger.warning(f"Failed to load image into {cluster_name}: {image} ({e})")
+            logger.warning(f"Stdout: {e.stdout}")
+            logger.warning(f"Stderr: {e.stderr}")
+            # Continue loading other images; do not fail the cluster setup
+            pass
 
 
 def _create_worker_cluster(worker_id: int, experiment_log_dir: str) -> tuple[str, str]:
@@ -693,11 +803,21 @@ def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict)
     os.environ["API_PORT"] = str(8000 + worker_id)
     os.environ["MCP_SERVER_PORT"] = str(9000 + worker_id)
     os.environ["SREGYM_EXP_ENV"] = f"exp_env_{worker_id}"
-    
+
     # Append worker ID to log file to avoid conflicts
     session_timestamp = get_current_datetime_formatted()
     os.environ["SREGYM_LOG_FILE"] = os.path.join(experiment_log_dir, f"sregym_{session_timestamp}_w{worker_id}.log")
-    
+
+    # Reset logging handlers to avoid writing to the supervisor's log (inherited via fork)
+    root_logger = logging.getLogger("all")
+    if root_logger.handlers:
+        for handler in root_logger.handlers[:]:
+            root_logger.removeHandler(handler)
+            handler.close()
+
+    # Re-initialize logger with the new SREGYM_LOG_FILE
+    init_logger()
+
     # In parallel mode, redirect all output to a worker log file to prevent console interleaving
     worker_log_path = os.path.join(experiment_log_dir, f"worker_{worker_id}.log")
 
@@ -775,8 +895,8 @@ def run_parallel(args):
     if args.resume_last:
         latest = get_latest_log_dir()
         if not latest:
-             logger.error("No previous log directory found to resume from.")
-             sys.exit(1)
+            logger.error("No previous log directory found to resume from.")
+            sys.exit(1)
         experiment_log_dir = latest
         logger.info(f"Resuming experiment from latest: {experiment_log_dir}")
     elif args.resume_from:
@@ -791,16 +911,16 @@ def run_parallel(args):
         experiment_log_dir = os.path.abspath(f"logs/{session_timestamp}")
         os.makedirs(experiment_log_dir, exist_ok=True)
         logger.info(f"Parallel experiment logs will be stored in: {experiment_log_dir}")
-        
+
         # Set log file for parallel runner
-        log_file_path = os.path.join(experiment_log_dir, f"sregym_parallel_{session_timestamp}.log")
+        log_file_path = os.path.join(experiment_log_dir, f"sregym_supervisor_{session_timestamp}.log")
         os.environ["SREGYM_LOG_FILE"] = log_file_path
         init_logger()
 
     manager = multiprocessing.Manager()
     status_dict = manager.dict()
     problem_queue = manager.Queue()
-    
+
     # Filter problems if resuming
     problems_to_run = []
     if args.resume_last or args.resume_from:
@@ -813,7 +933,7 @@ def run_parallel(args):
                 for f_path in existing_files:
                     if is_result_complete(f_path):
                         completed_iterations += 1
-            
+
             if completed_iterations < args.repeat:
                 problems_to_run.append(pid)
             else:
@@ -821,7 +941,7 @@ def run_parallel(args):
                     "status": "Completed (Resumed)",
                     "start_time": time.time(),
                     "elapsed": 0.0,
-                    "worker_id": None
+                    "worker_id": None,
                 }
     else:
         problems_to_run = all_problems
@@ -830,29 +950,29 @@ def run_parallel(args):
         problem_queue.put(pid)
 
     _prefetch_infra_images_once()
-        
+
     processes = []
-    worker_map = {} # Map process to worker ID
+    worker_map = {}  # Map process to worker ID
     logger.info(f"Running {len(problems_to_run)} problems with {args.parallel} workers.")
-    
+
     for i in range(args.parallel):
         p = multiprocessing.Process(target=worker_main, args=(args, i, problem_queue, experiment_log_dir, status_dict))
         p.start()
         processes.append(p)
         worker_map[p] = i
-        
+
     # Monitoring loop
     try:
         # Redirect stdout/stderr to suppress unwanted output during Progress display
         # We keep a reference to the original stdout for the Console to use
         original_stdout = sys.stdout
         original_stderr = sys.stderr
-        
+
         # Use devnull for unwanted output
-        null_out = open(os.devnull, 'w')
+        null_out = open(os.devnull, "w")
         sys.stdout = null_out
         sys.stderr = null_out
-        
+
         try:
             console = Console(file=original_stdout, force_terminal=True)
             with Progress(
@@ -861,20 +981,23 @@ def run_parallel(args):
                 BarColumn(),
                 TaskProgressColumn(),
                 TimeElapsedColumn(),
-                console=console
+                console=console,
             ) as progress:
                 # Main overall progress
                 total_problems = len(all_problems)
                 main_task = progress.add_task("[bold green]Overall Progress", total=total_problems)
-                
+
                 # Worker tasks - one per worker
                 worker_tasks = {}
                 for i in range(args.parallel):
                     # Initial state for workers
-                    t_id = progress.add_task(f"Worker {i}: Idle", total=100, visible=True) 
+                    t_id = progress.add_task(f"Worker {i}: Idle", total=100, visible=True)
                     worker_tasks[i] = t_id
-                
-                while any(p.is_alive() for p in processes) or (status_dict and any(info.get("worker_id") is not None for info in status_dict.values())):
+
+                failed_workers_logged = set()
+                while any(p.is_alive() for p in processes) or (
+                    status_dict and any(info.get("worker_id") is not None for info in status_dict.values())
+                ):
                     # Check for dead workers and update status
                     active_workers = set()
                     for p in processes:
@@ -883,34 +1006,43 @@ def run_parallel(args):
                         else:
                             # Worker died
                             wid = worker_map.get(p)
+                            if p.exitcode != 0 and wid not in failed_workers_logged:
+                                msg = f"Worker {wid} failed with exit code {p.exitcode}. Check worker_{wid}.log for details."
+                                logger.error(msg)
+                                progress.console.print(f"[bold red]❌ {msg}[/bold red]")
+                                failed_workers_logged.add(wid)
+
                             # Find problems assigned to this worker that are not terminal
                             for pid, info in status_dict.items():
                                 if str(pid).startswith(WORKER_META_KEY_PREFIX):
                                     continue
                                 if info.get("worker_id") == wid:
                                     status = info.get("status")
-                                    if not (status.startswith("Completed") or status in ["Error", "Skipped (Khaos Req)", "Error (Worker Died)"]):
+                                    if not (
+                                        status.startswith("Completed")
+                                        or status in ["Error", "Skipped (Khaos Req)", "Error (Worker Died)"]
+                                    ):
                                         status_dict[pid] = {
                                             "status": "Error (Worker Died)",
                                             "start_time": info["start_time"],
                                             "elapsed": time.time() - info["start_time"],
-                                            "worker_id": wid
+                                            "worker_id": wid,
                                         }
 
                     completed_count = 0
                     error_count = 0
                     skipped_count = 0
-                    
+
                     # Track what each worker is doing
                     # Initialize with None
-                    current_worker_status = {i: None for i in range(args.parallel)} 
-                    
+                    current_worker_status = {i: None for i in range(args.parallel)}
+
                     for pid, info in status_dict.items():
                         if str(pid).startswith(WORKER_META_KEY_PREFIX):
                             continue
                         status = info.get("status", "Unknown")
                         wid = info.get("worker_id")
-                        
+
                         # Counts for overall
                         if status.startswith("Completed"):
                             completed_count += 1
@@ -918,11 +1050,14 @@ def run_parallel(args):
                             error_count += 1
                         elif status == "Skipped (Khaos Req)":
                             skipped_count += 1
-                        
+
                         # Worker status (if active)
                         if wid is not None:
                             # Check if this is an active state
-                            is_active = not (status.startswith("Completed") or status in ["Error", "Skipped (Khaos Req)", "Error (Worker Died)"])
+                            is_active = not (
+                                status.startswith("Completed")
+                                or status in ["Error", "Skipped (Khaos Req)", "Error (Worker Died)"]
+                            )
                             if is_active:
                                 start_t = info.get("start_time", time.time())
                                 current_worker_status[wid] = (status, pid, start_t)
@@ -934,16 +1069,18 @@ def run_parallel(args):
                         status_text += f", Skipped: [yellow]{skipped_count}[/yellow]"
                     status_text += ")"
                     progress.update(main_task, completed=finished_count, description=status_text)
-                    
+
                     # Update worker tasks
                     for i in range(args.parallel):
                         if i not in active_workers:
-                             # Worker is dead or finished
-                             progress.update(worker_tasks[i], description=f"Worker {i}: [dim]Finished[/dim]", completed=100)
+                            # Worker is dead or finished
+                            progress.update(
+                                worker_tasks[i], description=f"Worker {i}: [dim]Finished[/dim]", completed=100
+                            )
                         elif current_worker_status[i]:
                             status, pid, start_t = current_worker_status[i]
                             elapsed = int(time.time() - start_t)
-                            
+
                             # Map status to approximate progress
                             completed_pct = 0
                             if status == "Deploying":
@@ -957,14 +1094,14 @@ def run_parallel(args):
                                     completed_pct = 70
                                 else:
                                     completed_pct = 40
-                                
+
                                 if "verifying" in status.lower():
                                     completed_pct += 10
                             elif status == "Cleaning Up":
                                 completed_pct = 90
                             elif status.startswith("Completed") or status.startswith("Error"):
                                 completed_pct = 100
-                                
+
                             desc = f"Worker {i}: [cyan]{pid}[/cyan] - {status} [yellow]({elapsed}s)[/yellow]"
                             progress.update(worker_tasks[i], description=desc, completed=completed_pct)
                         else:
@@ -980,12 +1117,12 @@ def run_parallel(args):
                                 )
                             else:
                                 progress.update(worker_tasks[i], description=f"Worker {i}: Idle", completed=0)
-                    
+
                     if not any(p.is_alive() for p in processes):
                         break
-                        
+
                     time.sleep(0.5)
-        
+
         finally:
             # Restore stdout/stderr
             sys.stdout = original_stdout
@@ -996,7 +1133,7 @@ def run_parallel(args):
         logger.info("\n🛑 Interrupted by user. Terminating workers...")
 
     finally:
-        pass # Nothing to restore here anymore
+        pass  # Nothing to restore here anymore
 
     logger.info("Waiting for workers to cleanup...")
     # Wait for workers to cleanup (parallel wait)
@@ -1020,13 +1157,13 @@ def main(args, problem_list=None, experiment_log_dir=None, status_dict=None, pro
     session_timestamp = get_current_datetime_formatted()
     # Ensure logs root exists
     os.makedirs("logs", exist_ok=True)
-    
+
     if experiment_log_dir is None:
         if args.resume_last:
             latest = get_latest_log_dir()
             if not latest:
-                 logger.error("No previous log directory found to resume from.")
-                 sys.exit(1)
+                logger.error("No previous log directory found to resume from.")
+                sys.exit(1)
             experiment_log_dir = latest
             logger.info(f"Resuming experiment from latest: {experiment_log_dir}")
         elif getattr(args, "resume_from", None):
@@ -1038,9 +1175,9 @@ def main(args, problem_list=None, experiment_log_dir=None, status_dict=None, pro
         else:
             # Create experiment directory
             experiment_log_dir = os.path.abspath(f"logs/{session_timestamp}")
-    
+
     os.makedirs(experiment_log_dir, exist_ok=True)
-    
+
     # Set log file path for init_logger if not already set by worker
     if "SREGYM_LOG_FILE" not in os.environ:
         log_file_path = os.path.join(experiment_log_dir, f"sregym_{session_timestamp}.log")
@@ -1081,7 +1218,19 @@ def main(args, problem_list=None, experiment_log_dir=None, status_dict=None, pro
     # Start the driver in the background; it will call request_shutdown() when finished
     driver_thread = threading.Thread(
         target=_run_driver_and_shutdown,
-        args=(conductor, experiment_log_dir, args.problem, args.agent, args.use_external_harness, args.repeat, args.enable_summary, problem_list, status_dict, problem_queue, worker_id),
+        args=(
+            conductor,
+            experiment_log_dir,
+            args.problem,
+            args.agent,
+            args.use_external_harness,
+            args.repeat,
+            args.enable_summary,
+            problem_list,
+            status_dict,
+            problem_queue,
+            worker_id,
+        ),
         name="driver",
         daemon=True,
     )

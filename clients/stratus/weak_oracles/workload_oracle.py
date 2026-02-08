@@ -11,6 +11,7 @@ from clients.stratus.weak_oracles.base_oracle import BaseOracle, OracleResult
 # from aiopslab.generators.workload.wrk import Wrk
 from sregym.paths import BASE_DIR, TARGET_MICROSERVICES
 from sregym.service.apps.base import Application
+from sregym.service.kubeconfig import require_kubeconfig_path
 from sregym.service.kubectl import KubeCtl
 
 # from sregym.generators.workload.wrk2 import Wrk2 as Wrk
@@ -25,7 +26,7 @@ class Wrk:
         self.threads = threads
         self.latency = latency
 
-        config.load_kube_config()
+        config.load_kube_config(config_file=require_kubeconfig_path())
 
         self.kubectl = KubeCtl()
 
@@ -155,7 +156,7 @@ class WorkloadOracle(BaseOracle):
         super().__init__()
         self.app = app
 
-        config.load_kube_config()
+        config.load_kube_config(config_file=require_kubeconfig_path())
         self.core_v1_api = client.CoreV1Api()
         self.batch_v1_api = client.BatchV1Api()
         self.kubectl = KubeCtl()
