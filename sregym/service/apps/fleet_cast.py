@@ -113,6 +113,7 @@ class FleetCast(Application):
     def deploy(self):
         """Deploy TiDB, then install FleetCast chart from repo with Ingress enabled on the first install."""
         self.kubectl.create_namespace_if_not_exist(self.namespace)
+        self.configure_dockerhub_pull_secret()
 
         self.ensure_ingress_controller()
 

@@ -36,6 +36,7 @@ class TrainTicket(Application):
 
         if self.namespace:
             self.kubectl.create_namespace_if_not_exist(self.namespace)
+            self.configure_dockerhub_pull_secret()
 
         Helm.install(**self.helm_configs)
         # Use the app namespace (worker-suffixed in parallel mode) instead of the fixed base namespace.
@@ -54,7 +55,6 @@ class TrainTicket(Application):
     def _is_train_ticket_deployed(self):
         """Check if the train-ticket app is currently deployed."""
         try:
-
             # Check if the namespace exists
             namespace_exists = self.kubectl.exec_command(f"kubectl get namespace {self.namespace}")
             if "not found" in namespace_exists or "No resources found" in namespace_exists:
@@ -114,7 +114,6 @@ class TrainTicket(Application):
 
     def _deploy_load_generator(self):
         try:
-
             locustfile_path = Path(__file__).parent.parent.parent / "resources" / "trainticket" / "locustfile.py"
 
             if locustfile_path.exists():

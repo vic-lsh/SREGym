@@ -1,6 +1,7 @@
 """Interface to the social network application from DeathStarBench"""
 
 import logging
+import os
 
 from sregym.generators.workload.wrk2 import Wrk2, Wrk2WorkloadManager
 from sregym.observer.trace_api import TraceAPI
@@ -33,6 +34,38 @@ class SocialNetwork(Application):
         self.frontend_service = metadata.get("frontend_service", "nginx-thrift")
         self.frontend_port = metadata.get("frontend_port", 8080)
 
+    def create_docker_registry_secret(self):
+        """Create docker-registry secret if DOCKER_USERNAME/PASSWORD env vars exist."""
+        docker_user = os.environ.get("DOCKER_USERNAME")
+        docker_password = os.environ.get("DOCKER_PASSWORD")
+
+        if docker_user and docker_password:
+            # Check if secret already exists
+            check_sec = f"kubectl get secret regcred -n {self.namespace}"
+            result = self.kubectl.exec_command(check_sec)
+
+            if "regcred" not in result:
+                logger.debug("Creating Docker registry secret...")
+                cmd = (
+                    f"kubectl create secret docker-registry regcred "
+                    f"--docker-server=https://index.docker.io/v1/ "
+                    f"--docker-username={docker_user} "
+                    f"--docker-password={docker_password} "
+                    f"--docker-email=sregym@example.com "
+                    f"-n {self.namespace}"
+                )
+                self.kubectl.exec_command(cmd)
+
+            # Patch default service account
+            patch_cmd = (
+                f"kubectl patch serviceaccount default "
+                f'-p \'{{"imagePullSecrets": [{{"name": "regcred"}}]}}\' '
+                f"-n {self.namespace}"
+            )
+            self.kubectl.exec_command(patch_cmd)
+        else:
+            logger.warning("DOCKER_USERNAME and DOCKER_PASSWORD env vars not found. Skipping registry secret creation.")
+
     def create_tls_secret(self):
         """Create TLS secret for MongoDB if it doesn't exist."""
         check_sec = f"kubectl get secret mongodb-tls -n {self.namespace}"
@@ -63,6 +96,7 @@ class SocialNetwork(Application):
     def deploy(self):
         """Deploy the Helm configurations with architecture-aware image selection."""
         self.create_namespace()
+        self.configure_dockerhub_pull_secret()
         self.create_tls_secret()
         node_architectures = self.kubectl.get_node_architectures()
         is_arm = any(arch in ["arm64", "aarch64"] for arch in node_architectures)

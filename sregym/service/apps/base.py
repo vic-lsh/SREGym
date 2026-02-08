@@ -98,43 +98,57 @@ class Application:
             self.logger.info("[DEPLOY] Docker Hub imagePullSecret injection disabled.")
             return
 
-        docker_config_path = os.getenv("SREGYM_DOCKER_CONFIG_JSON", os.path.expanduser("~/.docker/config.json"))
-        if not os.path.exists(docker_config_path):
-            self.logger.warning(
-                f"[DEPLOY] Docker config not found at {docker_config_path}; skipping app imagePullSecret setup."
+        secret_name = os.getenv("SREGYM_DOCKER_PULL_SECRET_NAME", "regcred")
+        docker_user = os.environ.get("DOCKER_USERNAME")
+        docker_password = os.environ.get("DOCKER_PASSWORD")
+
+        secret_created = False
+
+        if docker_user and docker_password:
+            self.logger.info(f"Creating Docker registry secret '{secret_name}' from env vars...")
+            cmd = (
+                f"kubectl create secret docker-registry {secret_name} "
+                f"--docker-server=https://index.docker.io/v1/ "
+                f"--docker-username={docker_user} "
+                f"--docker-password={docker_password} "
+                f"--docker-email=sregym@example.com "
+                f"-n {self.namespace} "
+                f"--dry-run=client -o yaml | kubectl apply -f -"
             )
+            self.kubectl.exec_command(cmd)
+            secret_created = True
+        else:
+            self.logger.warning(
+                "DOCKER_USERNAME and DOCKER_PASSWORD env vars not found. Skipping Docker Hub secret creation."
+            )
+            # Fallback to config.json removed as per user instruction to strictly use env vars
             return
 
-        secret_name = os.getenv("SREGYM_DOCKER_PULL_SECRET_NAME", "dockerhub-creds")
-        escaped_path = docker_config_path.replace("'", "'\"'\"'")
-        escaped_ns = self.namespace.replace("'", "'\"'\"'")
+        if secret_created:
+            service_accounts = ["default"]
+            if patch_all_service_accounts:
+                escaped_ns = self.namespace.replace("'", "'\"'\"'")
+                service_accounts_output = self.kubectl.exec_command(
+                    f"kubectl -n '{escaped_ns}' get sa -o jsonpath='{{.items[*].metadata.name}}'"
+                ).strip()
+                if service_accounts_output:
+                    service_accounts = service_accounts_output.split()
 
-        self.kubectl.exec_command(
-            "kubectl -n "
-            f"'{escaped_ns}' create secret generic {secret_name} --type=kubernetes.io/dockerconfigjson "
-            f"--from-file=.dockerconfigjson='{escaped_path}' --dry-run=client -o yaml | kubectl apply -f -"
-        )
+            for sa_name in service_accounts:
+                escaped_sa = sa_name.replace("'", "'\"'\"'")
+                escaped_ns = self.namespace.replace("'", "'\"'\"'")
+                self.kubectl.exec_command(
+                    f"kubectl -n '{escaped_ns}' patch sa '{escaped_sa}' --type=merge -p "
+                    f'\'{{"imagePullSecrets":[{{"name":"{secret_name}"}}]}}\''
+                )
 
-        service_accounts = ["default"]
-        if patch_all_service_accounts:
-            service_accounts_output = self.kubectl.exec_command(
-                "kubectl -n " f"'{escaped_ns}' get sa -o jsonpath='{{.items[*].metadata.name}}'"
-            ).strip()
-            if service_accounts_output:
-                service_accounts = service_accounts_output.split()
+            if restart_pods:
+                escaped_ns = self.namespace.replace("'", "'\"'\"'")
+                self.kubectl.exec_command(f"kubectl -n '{escaped_ns}' delete pod --all --ignore-not-found")
 
-        for sa_name in service_accounts:
-            escaped_sa = sa_name.replace("'", "'\"'\"'")
-            self.kubectl.exec_command(
-                "kubectl -n "
-                f"'{escaped_ns}' patch sa '{escaped_sa}' --type=merge -p "
-                f"'{{\"imagePullSecrets\":[{{\"name\":\"{secret_name}\"}}]}}'"
+            self.logger.info(
+                f"[DEPLOY] Configured app imagePullSecrets in namespace '{self.namespace}' using '{secret_name}'."
             )
-
-        if restart_pods:
-            self.kubectl.exec_command(f"kubectl -n '{escaped_ns}' delete pod --all --ignore-not-found")
-
-        self.logger.info(f"[DEPLOY] Configured app imagePullSecrets in namespace '{self.namespace}' using '{secret_name}'.")
 
     def cleanup(self):
         """Delete the entire namespace for the application."""

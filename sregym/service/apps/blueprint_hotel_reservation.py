@@ -34,6 +34,7 @@ class BlueprintHotelReservation(Application):
         """Deploy the Kubernetes configurations."""
         logger.info(f"Deploying Kubernetes configurations in namespace: {self.namespace}")
         self.create_namespace()
+        self.configure_dockerhub_pull_secret()
         self.kubectl.apply_configs(self.namespace, self.k8s_deploy_path)
         self.kubectl.wait_for_ready(self.namespace)
         self.trace_api = TraceAPI(self.namespace)

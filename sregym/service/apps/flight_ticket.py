@@ -26,6 +26,7 @@ class FlightTicket(Application):
     def deploy(self):
         """Deploy the Helm configurations."""
         self.kubectl.create_namespace_if_not_exist(self.namespace)
+        self.configure_dockerhub_pull_secret()
         Helm.add_repo(
             "flight-ticket",
             "https://xlab-uiuc.github.io/flight-ticket",

@@ -15,6 +15,7 @@ The proxy:
 import base64
 import json
 import logging
+import os
 import ssl
 import tempfile
 import threading
@@ -356,14 +357,14 @@ class KubernetesAPIProxy:
             t = threading.Thread(target=self.server.shutdown)
             t.start()
             t.join(timeout=2.0)
-            
+
             if t.is_alive():
                 logger.warning("Proxy server shutdown timed out, forcing close")
                 try:
                     self.server.server_close()
                 except Exception as e:
                     logger.warning(f"Error forcing proxy server close: {e}")
-            
+
             self.server = None
             self.server_thread = None
             logger.info("Kubernetes API filtering proxy stopped")

@@ -19,7 +19,7 @@ class TiDBClusterDeployer:
             self.metadata = json.load(f)
 
         self.name = self.metadata["Name"]
-        
+
         # FleetCast operator resources are cluster-scoped; use shared namespaces by default.
         # Set SREGYM_TIDB_PER_WORKER_NS=1 to restore worker-suffixed namespaces.
         worker_id = os.getenv("SREGYM_WORKER_ID")
@@ -58,8 +58,33 @@ class TiDBClusterDeployer:
         print(f"Running: {cmd}")
         subprocess.run(cmd, shell=True, check=True)
 
+    def inject_docker_secret(self, ns):
+        docker_user = os.environ.get("DOCKER_USERNAME")
+        docker_password = os.environ.get("DOCKER_PASSWORD")
+        if not (docker_user and docker_password):
+            return
+
+        print(f"Injecting Docker secret into namespace {ns}...")
+        secret_name = "regcred"
+        cmd = (
+            f"kubectl create secret docker-registry {secret_name} "
+            f"--docker-server=https://index.docker.io/v1/ "
+            f"--docker-username={docker_user} "
+            f"--docker-password={docker_password} "
+            f"--docker-email=sregym@example.com "
+            f"-n {ns} "
+            f"--dry-run=client -o yaml | kubectl apply -f -"
+        )
+        self.run_cmd(cmd)
+
+        # Patch default SA
+        self.run_cmd(
+            f'kubectl -n {ns} patch sa default --type=merge -p \'{{"imagePullSecrets":[{{"name":"{secret_name}"}}]}}\''
+        )
+
     def create_namespace(self, ns):
         self.run_cmd(f"kubectl create ns {ns} --dry-run=client -o yaml | kubectl apply -f -")
+        self.inject_docker_secret(ns)
 
     def install_crds(self):
         print(f"Installing CRDs from {self.operator_crd_url} ...")
@@ -183,7 +208,6 @@ SQL"
         self.run_cmd(f"kubectl -n {ns} delete pod/mysql-client --wait=false || true")
 
     def init_schema_and_seed(self):
-
         print("Initializing schema and seeding data in satellite_sim ...")
         sql = """
         CREATE DATABASE IF NOT EXISTS satellite_sim;

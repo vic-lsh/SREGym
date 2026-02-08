@@ -6,6 +6,7 @@ import pathlib
 import subprocess
 import sys
 import time
+import os
 
 import yaml
 
@@ -226,7 +227,7 @@ def setup_cloudlab_cluster(cfg: dict) -> None:
         print("✓ Control plane is Ready!")
 
         if len(executors) > 1:
-            print(f"\nJoining {len(executors)-1} workers…")
+            print(f"\nJoining {len(executors) - 1} workers…")
             for ex in executors[1:]:
                 join_worker(ex, join_cmd)
 
@@ -249,6 +250,46 @@ def setup_kind_cluster(cfg: dict) -> None:
     kind_cfg = cfg["kind"]["kind_config_arm"]  # adjust arch detection if needed
     subprocess.run(["kind", "create", "cluster", "--config", kind_cfg], check=True)
     print("Kind cluster ready ")
+
+    # Inject Docker credentials if available to avoid rate limiting
+    docker_user = os.environ.get("DOCKER_USERNAME")
+    docker_password = os.environ.get("DOCKER_PASSWORD")
+
+    if docker_user and docker_password:
+        print("Injecting Docker credentials into the cluster...")
+        try:
+            subprocess.run(
+                [
+                    "kubectl",
+                    "create",
+                    "secret",
+                    "docker-registry",
+                    "regcred",
+                    "--docker-server=https://index.docker.io/v1/",
+                    f"--docker-username={docker_user}",
+                    f"--docker-password={docker_password}",
+                    "--docker-email=sregym@example.com",
+                ],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                [
+                    "kubectl",
+                    "patch",
+                    "serviceaccount",
+                    "default",
+                    "-p",
+                    '{"imagePullSecrets": [{"name": "regcred"}]}',
+                ],
+                check=True,
+                capture_output=True,
+            )
+            print("✅ Docker credentials injected successfully!")
+        except subprocess.CalledProcessError as e:
+            print(f"⚠️ Failed to inject Docker credentials: {e}")
+    else:
+        print("⚠️  DOCKER_USERNAME and DOCKER_PASSWORD env vars not found. Image pull limits may apply.")
 
 
 def deploy_sregym(ex: RemoteExecutor, deploy_key_path: str) -> None:
@@ -316,7 +357,7 @@ def setup_cloudlab_cluster_with_sregym(cfg: dict) -> None:
         print("✓ Control plane is Ready!")
 
         if len(executors) > 1:
-            print(f"\nJoining {len(executors)-1} workers…")
+            print(f"\nJoining {len(executors) - 1} workers…")
             for ex in executors[1:]:
                 join_worker(ex, join_cmd)
 

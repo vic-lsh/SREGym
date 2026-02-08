@@ -62,6 +62,38 @@ OPENEBS_PRELOAD_IMAGES = [
 PRELOAD_IMAGE_ENV_VAR = "SREGYM_PRELOAD_IMAGES"
 PRELOAD_IMAGE_PATTERN = re.compile(r"^\s*image:\s*['\"]?([^'\"\s]+)['\"]?\s*$", re.MULTILINE)
 
+# Resource limits for parallel execution
+# Calibrated based on container count (1 core per container).
+# Social Network: ~27 containers -> 27 units
+# Hotel Reservation: ~18 containers -> 18 units (approx)
+# Astronomy Shop: ~14 containers -> 14 units
+# Train Ticket: ~10 containers -> 10 units
+# Light apps: ~5 units
+#
+# System Capacity = Total Cores.
+
+try:
+    _system_cores = multiprocessing.cpu_count()
+    RESOURCE_CAPACITY = int(_system_cores * 0.9)
+except Exception:
+    RESOURCE_CAPACITY = 64  # Fallback
+
+
+def get_resource_cost(problem_id: str) -> int:
+    pid = problem_id.lower()
+    if "social_network" in pid or "social-network" in pid:
+        return 27
+    if "hotel_reservation" in pid or "hotel-reservation" in pid:
+        return 19
+    if "astronomy_shop" in pid or "astronomy-shop" in pid:
+        # 14 microservices + kafka/redis/etc.
+        # Plus heavier memory footprint as seen in resource audit.
+        return 20
+    if "train_ticket" in pid or "trainticket" in pid:
+        # Train ticket has ~65 deployments!
+        return 65
+    return 5
+
 
 def get_current_datetime_formatted():
     now = datetime.now()
@@ -196,7 +228,12 @@ def driver_loop(
 
                 while True:
                     try:
-                        yield problem_queue.get_nowait()
+                        # Blocking get() allows the main loop to wait for the scheduler
+                        # to assign tasks via the queue.
+                        task = problem_queue.get()
+                        if task is None:  # Sentinel to stop
+                            return
+                        yield task
                     except queue.Empty:
                         return
 
@@ -855,12 +892,8 @@ def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict)
 
         cluster_name = ""
         try:
-            # Check for work before creating cluster
-            try:
-                first_problem = problem_queue.get_nowait()
-            except queue.Empty:
-                logger.info(f"Worker {worker_id} found no work in queue. Exiting.")
-                return
+            # Note: We do NOT check for work here anymore. We want the worker to start up,
+            # create the cluster, and then wait for tasks from the scheduler.
 
             status_dict[_worker_meta_key(worker_id)] = {
                 "status": "Creating cluster",
@@ -875,11 +908,11 @@ def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict)
                 "elapsed": 0.0,
                 "worker_id": worker_id,
             }
-            # Run main with the specific list of problems
+            # Run main with the private queue. It will block until tasks arrive.
             main(
                 args,
                 problem_queue=problem_queue,
-                problem_list=[first_problem],
+                problem_list=None,  # No pre-assigned list, everything via queue
                 experiment_log_dir=experiment_log_dir,
                 status_dict=status_dict,
                 worker_id=worker_id,
@@ -947,7 +980,8 @@ def run_parallel(args):
 
     manager = multiprocessing.Manager()
     status_dict = manager.dict()
-    problem_queue = manager.Queue()
+    # Replace single shared queue with private queues for each worker
+    worker_queues = [manager.Queue() for _ in range(args.parallel)]
 
     # Filter problems if resuming
     problems_to_run = []
@@ -974,20 +1008,30 @@ def run_parallel(args):
     else:
         problems_to_run = all_problems
 
-    for pid in problems_to_run:
-        problem_queue.put(pid)
+    # Do not populate queues upfront. We will schedule them dynamically.
+    pending_problems = list(problems_to_run)
+    # Sort pending problems to run heaviest first? Or mixed?
+    # Heaviest first is usually better for packing, but we have a simple limit.
+    # Let's keep original order or shuffle. Original order is fine.
 
     _prefetch_infra_images_once()
 
     processes = []
     worker_map = {}  # Map process to worker ID
+    logger.info(f"Resource Capacity set to: {RESOURCE_CAPACITY} (System Cores: {_system_cores})")
     logger.info(f"Running {len(problems_to_run)} problems with {args.parallel} workers.")
 
     for i in range(args.parallel):
-        p = multiprocessing.Process(target=worker_main, args=(args, i, problem_queue, experiment_log_dir, status_dict))
+        # Pass the PRIVATE queue for this worker
+        p = multiprocessing.Process(
+            target=worker_main, args=(args, i, worker_queues[i], experiment_log_dir, status_dict)
+        )
         p.start()
         processes.append(p)
         worker_map[p] = i
+
+    assigned_tasks = {}  # worker_id -> problem_id
+    shutdown_sent = False
 
     # Monitoring loop
     try:
@@ -1026,6 +1070,79 @@ def run_parallel(args):
                 while any(p.is_alive() for p in processes) or (
                     status_dict and any(info.get("worker_id") is not None for info in status_dict.values())
                 ):
+                    # --- SCHEDULING LOGIC ---
+                    if not shutdown_sent:
+                        # 1. Update Assigned Tasks (Check completion)
+                        # Make a copy of keys to modify dict
+                        for wid in list(assigned_tasks.keys()):
+                            pid = assigned_tasks[wid]
+                            info = status_dict.get(pid)
+                            if info:
+                                status = info.get("status", "")
+                                # Check for terminal states
+                                if (
+                                    status.startswith("Completed")
+                                    or status.startswith("Error")
+                                    or status.startswith("Skipped")
+                                ):
+                                    del assigned_tasks[wid]
+
+                        # 2. Calculate Resource Usage
+                        current_resource_usage = 0
+                        for pid in assigned_tasks.values():
+                            current_resource_usage += get_resource_cost(pid)
+
+                        # 3. Assign New Tasks to Idle Workers
+                        idle_workers = []
+                        for i in range(args.parallel):
+                            # Worker must be running, not assigned a task, and not failed
+                            if (i not in assigned_tasks) and (i not in failed_workers_logged):
+                                # Verify process is alive
+                                if processes[i].is_alive():
+                                    idle_workers.append(i)
+
+                        for wid in idle_workers:
+                            if not pending_problems:
+                                break
+
+                            # Try to find a problem that fits
+                            # We iterate to find the first one that fits (simple First-Fit)
+                            problem_to_assign = None
+                            for p in pending_problems:
+                                cost = get_resource_cost(p)
+                                if current_resource_usage + cost <= RESOURCE_CAPACITY:
+                                    problem_to_assign = p
+                                    current_resource_usage += cost
+                                    break
+
+                            if problem_to_assign:
+                                pending_problems.remove(problem_to_assign)
+                                assigned_tasks[wid] = problem_to_assign
+                                worker_queues[wid].put(problem_to_assign)
+                                # Update status dict to show it's queued (optional, improves UI latency)
+                                # status_dict[problem_to_assign] = ...
+                            else:
+                                # No problem fits in current resources. Stop looking for this worker.
+                                meta_key = _worker_meta_key(wid)
+                                current_meta = status_dict.get(meta_key, {})
+                                if current_meta.get("status") != "Waiting for resources":
+                                    status_dict[meta_key] = {
+                                        "status": "Waiting for resources",
+                                        "start_time": time.time(),
+                                        "elapsed": 0.0,
+                                        "worker_id": wid,
+                                    }
+
+                        # 4. Check Termination
+                        if not pending_problems and not assigned_tasks:
+                            # Done!
+                            logger.info("All tasks completed or assigned. Sending shutdown signals.")
+                            for q in worker_queues:
+                                q.put(None)
+                            shutdown_sent = True
+
+                    # --- END SCHEDULING LOGIC ---
+
                     # Check for dead workers and update status
                     active_workers = set()
                     for p in processes:
