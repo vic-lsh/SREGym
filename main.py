@@ -189,6 +189,11 @@ def driver_loop(
         if problem_queue:
 
             def problem_gen():
+                # Yield pre-assigned problems first (e.g. popped by worker to check for work)
+                if problem_list:
+                    for p in problem_list:
+                        yield p
+
                 while True:
                     try:
                         yield problem_queue.get_nowait()
@@ -850,6 +855,13 @@ def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict)
 
         cluster_name = ""
         try:
+            # Check for work before creating cluster
+            try:
+                first_problem = problem_queue.get_nowait()
+            except queue.Empty:
+                logger.info(f"Worker {worker_id} found no work in queue. Exiting.")
+                return
+
             status_dict[_worker_meta_key(worker_id)] = {
                 "status": "Creating cluster",
                 "start_time": time.time(),
@@ -867,6 +879,7 @@ def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict)
             main(
                 args,
                 problem_queue=problem_queue,
+                problem_list=[first_problem],
                 experiment_log_dir=experiment_log_dir,
                 status_dict=status_dict,
                 worker_id=worker_id,
