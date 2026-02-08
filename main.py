@@ -275,7 +275,7 @@ def driver_loop(
 
                 # Update status to starting
                 status_dict[pid] = {
-                    "status": "Deploying",
+                    "status": "Deploying App",
                     "start_time": time.time(),
                     "elapsed": 0.0,
                     "worker_id": worker_id,
@@ -286,6 +286,21 @@ def driver_loop(
                     console.log(f"\n🔍 Starting problem: {pid} (Run {iteration + 1}/{repeat})")
 
                     conductor.problem_id = pid
+
+                    # Define callback to update status from conductor
+                    def update_conductor_status(status):
+                        if status_dict is not None:
+                            # Preserve start_time if it exists, otherwise use current time
+                            current_info = status_dict.get(pid, {})
+                            start_time = current_info.get("start_time", time.time())
+                            status_dict[pid] = {
+                                "status": status,
+                                "start_time": start_time,
+                                "elapsed": time.time() - start_time,
+                                "worker_id": worker_id,
+                            }
+
+                    conductor.set_status_callback(update_conductor_status)
 
                     result = await conductor.start_problem()
                     if result == StartProblemResult.SKIPPED_KHAOS_REQUIRED:
@@ -1083,8 +1098,10 @@ def run_parallel(args):
 
                             # Map status to approximate progress
                             completed_pct = 0
-                            if status == "Deploying":
+                            if status == "Deploying App":
                                 completed_pct = 10
+                            elif status == "Injecting Faults":
+                                completed_pct = 20
                             elif status == "Agent Running":
                                 completed_pct = 30
                             elif status.startswith("Agent:"):

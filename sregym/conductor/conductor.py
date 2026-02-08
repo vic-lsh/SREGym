@@ -47,8 +47,8 @@ class Conductor:
         proxy_port = 16443
         worker_id = os.getenv("SREGYM_WORKER_ID")
         if worker_id:
-             proxy_port += int(worker_id)
-        
+            proxy_port += int(worker_id)
+
         self.k8s_proxy = KubernetesAPIProxy(
             hidden_namespaces={"chaos-mesh", "khaos"},
             listen_port=proxy_port,
@@ -76,6 +76,10 @@ class Conductor:
         self.current_stage_index: int = 0
         self.waiting_for_agent: bool = False
         self.fault_injected: bool = False
+        self.status_callback = None
+
+    def set_status_callback(self, callback):
+        self.status_callback = callback
 
     def register_agent(self, name="agent"):
         self.agent_name = name
@@ -203,6 +207,10 @@ class Conductor:
 
     def _inject_fault(self):
         """Inject fault and prepare diagnosis checkpoint if available."""
+        if self.status_callback:
+            self.status_callback("Injecting Faults")
+
+        self.logger.info("[ENV] Starting fault injection...")
         self.problem.inject_fault()
         self.logger.info("[ENV] Injected fault")
         self.fault_injected = True
@@ -347,6 +355,8 @@ class Conductor:
         self.undeploy_app()  # Cleanup any leftovers
         self.logger.info("App leftovers undeployed.")
         self.logger.info("Deploying app...")
+        if self.status_callback:
+            self.status_callback("Deploying App")
         self.deploy_app()
         self.logger.info("App deployed.")
 
@@ -460,7 +470,9 @@ class Conductor:
 
         docker_config_path = os.getenv("SREGYM_DOCKER_CONFIG_JSON", os.path.expanduser("~/.docker/config.json"))
         if not os.path.exists(docker_config_path):
-            self.logger.warning(f"[DEPLOY] Docker config not found at {docker_config_path}; skipping OpenEBS imagePullSecret setup.")
+            self.logger.warning(
+                f"[DEPLOY] Docker config not found at {docker_config_path}; skipping OpenEBS imagePullSecret setup."
+            )
             return
 
         secret_name = os.getenv("SREGYM_DOCKER_PULL_SECRET_NAME", "dockerhub-creds")
@@ -483,7 +495,7 @@ class Conductor:
             self.kubectl.exec_command(
                 "kubectl -n openebs patch sa "
                 f"{sa_name} --type=merge -p "
-                f"'{{\"imagePullSecrets\":[{{\"name\":\"{secret_name}\"}}]}}'"
+                f'\'{{"imagePullSecrets":[{{"name":"{secret_name}"}}]}}\''
             )
 
         # Restart OpenEBS pods so existing replicas pick up patched service accounts.
