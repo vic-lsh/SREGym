@@ -63,26 +63,30 @@ class Wrk:
 
         job_template["metadata"]["name"] = job_name
         container = job_template["spec"]["template"]["spec"]["containers"][0]
-        
+
         # Override image to avoid Docker Hub rate limits and use apt-installed wrk
         container["image"] = "yinfangchen/hotelreservation:latest"
         container["command"] = ["/bin/sh", "-c"]
-        
+
         # Construct wrk command (standard wrk, not wrk2)
         wrk_cmd = [
             "apt-get update > /dev/null && apt-get install -y wrk > /dev/null &&",
             "wrk",
-            "-t", str(self.threads),
-            "-c", str(self.connections),
-            "-d", f"{self.duration}s",
-            "-s", f"/scripts/{payload_script}",
+            "-t",
+            str(self.threads),
+            "-c",
+            str(self.connections),
+            "-d",
+            f"{self.duration}s",
+            "-s",
+            f"/scripts/{payload_script}",
         ]
-        
+
         if self.latency:
             wrk_cmd.append("--latency")
-            
+
         wrk_cmd.append(url)
-        
+
         # Join into a single shell command string
         container["args"] = [" ".join(wrk_cmd)]
 
@@ -122,7 +126,13 @@ class Wrk:
             return
 
         try:
+            start_time = time.time()
+            timeout = self.duration + 120  # Duration + 2 mins for scheduling/pulling
             while True:
+                if time.time() - start_time > timeout:
+                    print(f"Timeout waiting for job {job_name} to complete.")
+                    break
+
                 job_status = api_instance.read_namespaced_job_status(name=job_name, namespace=namespace)
                 if job_status.status.ready:
                     print("Job completed successfully.")
