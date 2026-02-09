@@ -74,9 +74,14 @@ PRELOAD_IMAGE_PATTERN = re.compile(r"^\s*image:\s*['\"]?([^'\"\s]+)['\"]?\s*$", 
 
 try:
     _system_cores = multiprocessing.cpu_count()
-    RESOURCE_CAPACITY = int(_system_cores * 0.9)
+    RESOURCE_CAPACITY = int(_system_cores * 1.2)
 except Exception:
     RESOURCE_CAPACITY = 64  # Fallback
+
+
+class SchedulerConfig:
+    def __init__(self):
+        self.enable_resource_throttling = os.getenv("SREGYM_ENABLE_RESOURCE_THROTTLING", "true").lower() == "true"
 
 
 def get_resource_cost(problem_id: str) -> int:
@@ -929,7 +934,7 @@ def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict)
             _delete_worker_cluster(cluster_name)
 
 
-def run_parallel(args):
+def run_parallel(args, config: SchedulerConfig):
     """Split problems and run in parallel workers."""
     from sregym.conductor.problems.registry import ProblemRegistry
     import math
@@ -1021,6 +1026,11 @@ def run_parallel(args):
     logger.info(f"Resource Capacity set to: {RESOURCE_CAPACITY} (System Cores: {_system_cores})")
     logger.info(f"Running {len(problems_to_run)} problems with {args.parallel} workers.")
 
+    if not config.enable_resource_throttling:
+        logger.warning(
+            "⚠️ Resource throttling is DISABLED. Workers will be assigned tasks regardless of estimated cost."
+        )
+
     for i in range(args.parallel):
         # Pass the PRIVATE queue for this worker
         p = multiprocessing.Process(
@@ -1044,6 +1054,12 @@ def run_parallel(args):
         null_out = open(os.devnull, "w")
         sys.stdout = null_out
         sys.stderr = null_out
+
+        # Remove StreamHandler from logger to prevent interference with Rich
+        root_logger = logging.getLogger("all")
+        removed_handlers = [h for h in root_logger.handlers if type(h) is logging.StreamHandler]
+        for h in removed_handlers:
+            root_logger.removeHandler(h)
 
         try:
             console = Console(file=original_stdout, force_terminal=True)
@@ -1110,7 +1126,9 @@ def run_parallel(args):
                             problem_to_assign = None
                             for p in pending_problems:
                                 cost = get_resource_cost(p)
-                                if current_resource_usage + cost <= RESOURCE_CAPACITY:
+                                if not config.enable_resource_throttling or (
+                                    current_resource_usage + cost <= RESOURCE_CAPACITY
+                                ):
                                     problem_to_assign = p
                                     current_resource_usage += cost
                                     break
@@ -1275,6 +1293,10 @@ def run_parallel(args):
             sys.stdout = original_stdout
             sys.stderr = original_stderr
             null_out.close()
+
+            # Restore handlers
+            for h in removed_handlers:
+                root_logger.addHandler(h)
 
     except KeyboardInterrupt:
         logger.info("\n🛑 Interrupted by user. Terminating workers...")
@@ -1494,4 +1516,5 @@ if __name__ == "__main__":
 
     # Always run through the parallel wrapper to ensure consistent logging and behavior
     # even for single-worker runs (capture stdout/stderr, etc.)
-    run_parallel(args)
+    config = SchedulerConfig()
+    run_parallel(args, config)

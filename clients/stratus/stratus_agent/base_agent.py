@@ -112,7 +112,7 @@ class BaseAgent:
         }
 
     def should_submit_router(self, state: State):
-        should_submit = state["num_steps"] == self.max_step and state["submitted"] == False
+        should_submit = state["num_steps"] >= self.max_step and state["submitted"] == False
         self.logger.info(f"Should we force the agent submit? {'Yes!' if should_submit else 'No!'}")
         return self.force_submit_prompt_inject_node if should_submit else self.post_round_process_node
 

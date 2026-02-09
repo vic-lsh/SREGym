@@ -43,7 +43,6 @@ class MitigationAgent(BaseAgent):
         self.graph_builder.add_edge(self.thinking_node, self.tool_calling_prompt_inject_node)
         self.graph_builder.add_edge(self.tool_calling_prompt_inject_node, self.tool_calling_node)
         self.graph_builder.add_edge(self.tool_calling_node, self.process_tool_call_node)
-        self.graph_builder.add_edge(self.process_tool_call_node, self.post_round_process_node)
         self.graph_builder.add_conditional_edges(
             self.process_tool_call_node,
             self.should_submit_router,
@@ -145,9 +144,9 @@ def build_default_mitigation_agent():
         for sync_tool_struct in mitigation_agent_config["sync_tools"]:
             mitigation_agent_sync_tools.append(str_to_tool(sync_tool_struct))
             mitigation_agent_tool_descriptions += (
-                f"tool name: {sync_tool_struct["name"]}"
+                f"tool name: {sync_tool_struct['name']}"
                 + "\n\n"
-                + f"tool descriptions {sync_tool_struct["description"]}"
+                + f"tool descriptions {sync_tool_struct['description']}"
                 + "\n\n"
             )
     else:
@@ -156,9 +155,9 @@ def build_default_mitigation_agent():
         for async_tool_struct in mitigation_agent_config["async_tools"]:
             mitigation_agent_async_tools.append(str_to_tool(async_tool_struct))
             mitigation_agent_tool_descriptions += (
-                f"tool name: {async_tool_struct["name"]}"
+                f"tool name: {async_tool_struct['name']}"
                 + "\n\n"
-                + f"tool description: {async_tool_struct["description"]}"
+                + f"tool description: {async_tool_struct['description']}"
                 + "\n\n"
             )
     else:
