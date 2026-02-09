@@ -2,6 +2,8 @@ import argparse
 import csv
 import glob
 import os
+import matplotlib.pyplot as plt
+import numpy as np
 
 
 def summarize_results(target_path=None):
@@ -31,7 +33,7 @@ def summarize_results(target_path=None):
         # If the user explicitly requested a file (e.g. ALL_results.csv), we should probably read it.
         # However, keeping safety logic is usually good, but let's relax it if the user specified a target.
         if not target_path:
-             if "ALL_results" in file_path or "_output.csv" in file_path:
+            if "ALL_results" in file_path or "_output.csv" in file_path:
                 continue
 
         try:
@@ -58,6 +60,17 @@ def summarize_results(target_path=None):
 
         except Exception as e:
             print(f"Error reading {file_path}: {e}")
+
+    # --- Filter: Keep only latest run per problem_id ---
+    # We assume 'files' was sorted, so runs are processed in chronological order.
+    # We use a dict to keep the last seen entry for each problem_id.
+    runs_by_id = {}
+    for run in all_runs:
+        runs_by_id[run["problem_id"]] = run
+
+    all_runs = list(runs_by_id.values())
+    # Sort by source_file to restore roughly chronological order in the list
+    all_runs.sort(key=lambda x: x.get("source_file", ""))
 
     if not all_runs:
         print("No result data found in the CSV files.")
@@ -140,6 +153,41 @@ def summarize_results(target_path=None):
         print(f"{run_date:<14} | {pid:<{problem_id_width}} | {d_res:<8} | {m_res:<8} | {ttl:<7} | {ttm:<7} | {status}")
 
     print("=" * table_width + "\n")
+
+    # --- Plot CDFs ---
+    # Filter out 0s and None/Empty
+    valid_ttls = [t for t in ttls if t > 0]
+    valid_ttms = [t for t in ttms if t > 0]
+
+    if not valid_ttls and not valid_ttms:
+        print("No valid TTL or TTM data for plotting.")
+        return
+
+    plt.figure(figsize=(10, 6))
+
+    if valid_ttls:
+        valid_ttls.sort()
+        y_ttls = np.arange(1, len(valid_ttls) + 1) / len(valid_ttls)
+        plt.plot(valid_ttls, y_ttls, marker=".", linestyle="-", label=f"Time to Diagnosis (n={len(valid_ttls)})")
+
+    if valid_ttms:
+        valid_ttms.sort()
+        y_ttms = np.arange(1, len(valid_ttms) + 1) / len(valid_ttms)
+        plt.plot(valid_ttms, y_ttms, marker=".", linestyle="-", label=f"Time to Mitigation (n={len(valid_ttms)})")
+
+    plt.xlabel("Time (s)")
+    plt.ylabel("CDF")
+    plt.title("CDF of Time to Diagnosis and Mitigation")
+    plt.grid(True)
+    plt.legend()
+
+    if target_path and os.path.isdir(target_path):
+        output_plot = os.path.join(target_path, "cdf_results.png")
+    else:
+        output_plot = "cdf_results.png"
+
+    plt.savefig(output_plot)
+    print(f"CDF plot saved to {output_plot}")
 
 
 if __name__ == "__main__":
