@@ -230,6 +230,41 @@ def diff_results(dir1, dir2):
     os.makedirs(output_dir, exist_ok=True)
     print(f"\nDiff results will be stored in: {output_dir}")
 
+    # --- Statistics Summary ---
+    def get_stats(run_map):
+        runs = list(run_map.values())
+        total = len(runs)
+        completed = [r for r in runs if r["status"] == "Completed"]
+        n_comp = len(completed)
+        d_succ = sum(1 for r in completed if r.get("Diagnosis.success") == "True")
+        m_succ = sum(1 for r in completed if r.get("Mitigation.success") == "True")
+        return total, n_comp, d_succ, m_succ
+
+    t1, c1, d1, m1 = get_stats(runs1_map)
+    t2, c2, d2, m2 = get_stats(runs2_map)
+
+    w_col = max(len(name1), len(name2), 18)
+
+    print("\n" + "=" * (30 + 2 * w_col + 15))
+    print(f"{'Statistic':<25} | {name1:<{w_col}} | {name2:<{w_col}} | {'Diff':<10}")
+    print("-" * (30 + 2 * w_col + 15))
+
+    print(f"{'Total Runs':<25} | {t1:<{w_col}} | {t2:<{w_col}} | {t1 - t2:+d}")
+    print(f"{'Completed Runs':<25} | {c1:<{w_col}} | {c2:<{w_col}} | {c1 - c2:+d}")
+
+    d1_pct = (d1 / c1 * 100) if c1 else 0.0
+    d2_pct = (d2 / c2 * 100) if c2 else 0.0
+    d1_s = f"{d1}/{c1} ({d1_pct:.1f}%)"
+    d2_s = f"{d2}/{c2} ({d2_pct:.1f}%)"
+    print(f"{'Diagnosis Success':<25} | {d1_s:<{w_col}} | {d2_s:<{w_col}} | {d1_pct - d2_pct:+.1f}%")
+
+    m1_pct = (m1 / c1 * 100) if c1 else 0.0
+    m2_pct = (m2 / c2 * 100) if c2 else 0.0
+    m1_s = f"{m1}/{c1} ({m1_pct:.1f}%)"
+    m2_s = f"{m2}/{c2} ({m2_pct:.1f}%)"
+    print(f"{'Mitigation Success':<25} | {m1_s:<{w_col}} | {m2_s:<{w_col}} | {m1_pct - m2_pct:+.1f}%")
+    print("=" * (30 + 2 * w_col + 15) + "\n")
+
     # Comparison Logic
     all_pids = sorted(list(set(runs1_map.keys()) | set(runs2_map.keys())))
 
@@ -259,6 +294,11 @@ def diff_results(dir1, dir2):
 
     ttd1, ttd2 = [], []
     ttm1, ttm2 = [], []
+    ttd1_success, ttd2_success = [], []
+    ttm1_success, ttm2_success = [], []
+    comp_diag_data, comp_mitig_data = [], []
+    comp_diag_success_data, comp_mitig_success_data = [], []
+    comp_diag_fail_data, comp_mitig_fail_data = [], []
 
     def pad_emoji(s, width):
         # Calculate visual length: emojis (checked by presence of check/cross) + rest
@@ -303,13 +343,55 @@ def diff_results(dir1, dir2):
         # Collect for CDFs
         if r1 and td1 is not None and td1 > 0:
             ttd1.append(td1)
+            if r1.get("Diagnosis.success") == "True":
+                ttd1_success.append(td1)
+
         if r2 and td2 is not None and td2 > 0:
             ttd2.append(td2)
+            if r2.get("Diagnosis.success") == "True":
+                ttd2_success.append(td2)
 
         if r1 and tm1 is not None and tm1 > 0:
             ttm1.append(tm1)
+            if r1.get("Mitigation.success") == "True":
+                ttm1_success.append(tm1)
+
         if r2 and tm2 is not None and tm2 > 0:
             ttm2.append(tm2)
+            if r2.get("Mitigation.success") == "True":
+                ttm2_success.append(tm2)
+
+        # Helper vars for readability
+        diag_s1 = r1 and r1.get("Diagnosis.success") == "True"
+        diag_s2 = r2 and r2.get("Diagnosis.success") == "True"
+        mitig_s1 = r1 and r1.get("Mitigation.success") == "True"
+        mitig_s2 = r2 and r2.get("Mitigation.success") == "True"
+
+        if (td1 is not None and td1 > 0) or (td2 is not None and td2 > 0):
+            comp_diag_data.append((pid, td1, td2, diag_s1, diag_s2))
+
+        td1_succ = td1 if diag_s1 else None
+        td2_succ = td2 if diag_s2 else None
+        if (td1_succ is not None and td1_succ > 0) and (td2_succ is not None and td2_succ > 0):
+            comp_diag_success_data.append((pid, td1_succ, td2_succ, True, True))
+
+        td1_fail = td1 if (r1 and not diag_s1) else None
+        td2_fail = td2 if (r2 and not diag_s2) else None
+        if (td1_fail is not None and td1_fail > 0) and (td2_fail is not None and td2_fail > 0):
+            comp_diag_fail_data.append((pid, td1_fail, td2_fail, False, False))
+
+        if (tm1 is not None and tm1 > 0) or (tm2 is not None and tm2 > 0):
+            comp_mitig_data.append((pid, tm1, tm2, mitig_s1, mitig_s2))
+
+        tm1_succ = tm1 if mitig_s1 else None
+        tm2_succ = tm2 if mitig_s2 else None
+        if (tm1_succ is not None and tm1_succ > 0) and (tm2_succ is not None and tm2_succ > 0):
+            comp_mitig_success_data.append((pid, tm1_succ, tm2_succ, True, True))
+
+        tm1_fail = tm1 if (r1 and not mitig_s1) else None
+        tm2_fail = tm2 if (r2 and not mitig_s2) else None
+        if (tm1_fail is not None and tm1_fail > 0) and (tm2_fail is not None and tm2_fail > 0):
+            comp_mitig_fail_data.append((pid, tm1_fail, tm2_fail, False, False))
 
         # Diff strings
         if td1 is not None and td2 is not None:
@@ -361,6 +443,133 @@ def diff_results(dir1, dir2):
         "Time to Mitigation (TTM)",
         os.path.join(output_dir, "cdf_mitigation.png"),
         colors=["#cc5200", "#ff9933"],  # Dark Orange, Lighter Orange
+    )
+
+    # Plotting Success Only
+    plot_cdfs(
+        ttd1_success,
+        ttd2_success,
+        name1,
+        name2,
+        "Time to Diagnosis (Success Only)",
+        os.path.join(output_dir, "cdf_diagnosis_success.png"),
+        colors=["#004d99", "#66b3ff"],  # Dark Blue, Lighter Blue
+    )
+    plot_cdfs(
+        ttm1_success,
+        ttm2_success,
+        name1,
+        name2,
+        "Time to Mitigation (Success Only)",
+        os.path.join(output_dir, "cdf_mitigation_success.png"),
+        colors=["#cc5200", "#ff9933"],  # Dark Orange, Lighter Orange
+    )
+
+    plot_comparison_by_problem(
+        comp_diag_data,
+        name1,
+        name2,
+        "Diagnosis Time",
+        os.path.join(output_dir, "comparison_diagnosis.png"),
+        colors=["#004d99", "#66b3ff"],
+        use_status_colors=True,
+    )
+    plot_comparison_by_problem(
+        comp_diag_data,
+        name1,
+        name2,
+        "Diagnosis Time",
+        os.path.join(output_dir, "comparison_diagnosis_compact.png"),
+        colors=["#004d99", "#66b3ff"],
+        compact=True,
+        use_status_colors=True,
+    )
+    plot_comparison_by_problem(
+        comp_mitig_data,
+        name1,
+        name2,
+        "Mitigation Time",
+        os.path.join(output_dir, "comparison_mitigation.png"),
+        colors=["#cc5200", "#ff9933"],
+        use_status_colors=True,
+    )
+    plot_comparison_by_problem(
+        comp_mitig_data,
+        name1,
+        name2,
+        "Mitigation Time",
+        os.path.join(output_dir, "comparison_mitigation_compact.png"),
+        colors=["#cc5200", "#ff9933"],
+        compact=True,
+        use_status_colors=True,
+    )
+    plot_comparison_by_problem(
+        comp_diag_success_data,
+        name1,
+        name2,
+        "Diagnosis Time (Success Only)",
+        os.path.join(output_dir, "comparison_diagnosis_success.png"),
+        colors=["#004d99", "#66b3ff"],
+    )
+    plot_comparison_by_problem(
+        comp_diag_success_data,
+        name1,
+        name2,
+        "Diagnosis Time (Success Only)",
+        os.path.join(output_dir, "comparison_diagnosis_success_compact.png"),
+        colors=["#004d99", "#66b3ff"],
+        compact=True,
+    )
+    plot_comparison_by_problem(
+        comp_mitig_success_data,
+        name1,
+        name2,
+        "Mitigation Time (Success Only)",
+        os.path.join(output_dir, "comparison_mitigation_success.png"),
+        colors=["#cc5200", "#ff9933"],
+    )
+    plot_comparison_by_problem(
+        comp_mitig_success_data,
+        name1,
+        name2,
+        "Mitigation Time (Success Only)",
+        os.path.join(output_dir, "comparison_mitigation_success_compact.png"),
+        colors=["#cc5200", "#ff9933"],
+        compact=True,
+    )
+    plot_comparison_by_problem(
+        comp_diag_fail_data,
+        name1,
+        name2,
+        "Diagnosis Time (Failure Only)",
+        os.path.join(output_dir, "comparison_diagnosis_failure.png"),
+        colors=["#004d99", "#66b3ff"],
+    )
+    plot_comparison_by_problem(
+        comp_diag_fail_data,
+        name1,
+        name2,
+        "Diagnosis Time (Failure Only)",
+        os.path.join(output_dir, "comparison_diagnosis_failure_compact.png"),
+        colors=["#004d99", "#66b3ff"],
+        compact=True,
+    )
+    plot_comparison_by_problem(
+        comp_mitig_fail_data,
+        name1,
+        name2,
+        "Mitigation Time (Failure Only)",
+        os.path.join(output_dir, "comparison_mitigation_failure.png"),
+        colors=["#cc5200", "#ff9933"],
+    )
+    plot_comparison_by_problem(
+        comp_mitig_fail_data,
+        name1,
+        name2,
+        "Mitigation Time (Failure Only)",
+        os.path.join(output_dir, "comparison_mitigation_failure_compact.png"),
+        colors=["#cc5200", "#ff9933"],
+        compact=True,
     )
 
 
@@ -416,6 +625,122 @@ def plot_cdfs(data1, data2, label1, label2, title_metric, output_path, colors=No
     plt.savefig(output_path)
     plt.close()
     print(f"Plot saved to {output_path}")
+
+
+def plot_comparison_by_problem(
+    data, name1, name2, title_metric, output_path, colors=None, compact=False, use_status_colors=False
+):
+    if not HAS_PLOTTING:
+        print(f"Matplotlib/Numpy not found. Skipping plot: {output_path}")
+        return
+
+    if not data:
+        print(f"No valid data to plot for {title_metric}")
+        return
+
+    if colors is None:
+        colors = ["tab:blue", "tab:orange"]
+
+    # Sort by first dir's output time (x[1]).
+    # Place None/Missing at the end (top of graph).
+    data.sort(key=lambda x: x[1] if x[1] is not None else float("inf"))
+
+    pids = [d[0] for d in data]
+
+    if compact:
+        # Compact mode: tighter vertical spacing
+        fig_height = max(6, len(pids) * 0.05)
+    else:
+        # Standard mode: enough space for labels
+        fig_height = max(6, len(pids) * 0.3)
+
+    plt.figure(figsize=(10, fig_height))
+
+    y_vals = np.arange(len(pids))
+
+    # Extract valid points for series 1
+    x1_succ, y1_succ = [], []
+    x1_fail, y1_fail = [], []
+
+    # Extract valid points for series 2
+    x2_succ, y2_succ = [], []
+    x2_fail, y2_fail = [], []
+
+    for i, item in enumerate(data):
+        # Unpack with default for backward compatibility if needed, though we updated all calls
+        # item structure: (pid, v1, v2, s1, s2)
+        v1 = item[1]
+        v2 = item[2]
+        s1 = item[3] if len(item) > 3 else True
+        s2 = item[4] if len(item) > 4 else True
+
+        if v1 is not None and v1 > 0:
+            if s1:
+                x1_succ.append(v1)
+                y1_succ.append(i)
+            else:
+                x1_fail.append(v1)
+                y1_fail.append(i)
+
+        if v2 is not None and v2 > 0:
+            if s2:
+                x2_succ.append(v2)
+                y2_succ.append(i)
+            else:
+                x2_fail.append(v2)
+                y2_fail.append(i)
+
+    # Plot Series 1
+    # Colors: Success=Green, Fail=Red
+    # Shapes: Series1=Circle('o'), Series2=Cross('x')
+    c_succ = "tab:green"
+    c_fail = "tab:red"
+
+    m1 = "o"
+    m2 = "x"
+
+    if use_status_colors:
+        if x1_succ:
+            plt.scatter(x1_succ, y1_succ, color=c_succ, label=f"{name1} (Success)", marker=m1, alpha=0.7)
+        if x1_fail:
+            plt.scatter(x1_fail, y1_fail, color=c_fail, label=f"{name1} (Fail)", marker=m1, alpha=0.7)
+
+        # Plot Series 2
+        if x2_succ:
+            plt.scatter(x2_succ, y2_succ, color=c_succ, label=f"{name2} (Success)", marker=m2, alpha=0.7)
+        if x2_fail:
+            plt.scatter(x2_fail, y2_fail, color=c_fail, label=f"{name2} (Fail)", marker=m2, alpha=0.7)
+    else:
+        # Use provided colors for series distinction
+        # Combine succ/fail lists for each series since color is uniform
+        x1_all = x1_succ + x1_fail
+        y1_all = y1_succ + y1_fail
+        x2_all = x2_succ + x2_fail
+        y2_all = y2_succ + y2_fail
+
+        if x1_all:
+            plt.scatter(x1_all, y1_all, color=colors[0], label=name1, marker=m1, alpha=0.7)
+        if x2_all:
+            plt.scatter(x2_all, y2_all, color=colors[1], label=name2, marker=m2, alpha=0.7)
+
+    if not compact:
+        plt.yticks(y_vals, pids)
+        plt.grid(True, axis="y", linestyle=":", alpha=0.3)
+    else:
+        plt.yticks([])
+
+    plt.xlabel("Time (s)")
+    plt.title(f"Per-Problem {title_metric}")
+    plt.grid(True, axis="x", linestyle="--", alpha=0.7)
+    plt.legend()
+
+    # Do NOT invert Y axis, so lowest time (index 0) is at the bottom (y=0)
+    # plt.gca().invert_yaxis()
+
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close()
+    print(f"Comparison plot saved to {output_path}")
 
 
 if __name__ == "__main__":
