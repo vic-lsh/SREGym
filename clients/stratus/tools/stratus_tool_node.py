@@ -1,4 +1,5 @@
 import logging
+import asyncio
 
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import BaseTool
@@ -43,7 +44,7 @@ class StratusToolNode:
 
         if not isinstance(message, AIMessage):
             logger.warning(
-                f"Expected last message to be an AIMessage, but got {type(message)}.\n" f"{inputs.get('messages', [])}"
+                f"Expected last message to be an AIMessage, but got {type(message)}.\n{inputs.get('messages', [])}"
             )
             raise ValueError("Last message is not an AIMessage; skipping tool invocation.")
 
@@ -63,14 +64,30 @@ class StratusToolNode:
                 arg_list = [f"{key} = {value}" for key, value in tool_call["args"].items()]
                 logger.info(f"[STRATUS_TOOLNODE] Agent choose to call: {tool_call['name']}({', '.join(arg_list)})")
                 if tool_call["name"] in self.async_tools_by_name:
-                    tool_result = await self.async_tools_by_name[tool_call["name"]].ainvoke(
-                        {
-                            "type": "tool_call",
-                            "name": tool_call["name"],
-                            "args": {"state": inputs, **tool_call["args"]},
-                            "id": tool_call["id"],
-                        }
-                    )
+                    try:
+                        tool_result = await asyncio.wait_for(
+                            self.async_tools_by_name[tool_call["name"]].ainvoke(
+                                {
+                                    "type": "tool_call",
+                                    "name": tool_call["name"],
+                                    "args": {"state": inputs, **tool_call["args"]},
+                                    "id": tool_call["id"],
+                                }
+                            ),
+                            timeout=120,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.error(f"Tool {tool_call['name']} timed out after 120 seconds.")
+                        tool_result = Command(
+                            update={
+                                "messages": [
+                                    ToolMessage(
+                                        content=f"Error: Tool {tool_call['name']} execution timed out after 120 seconds.",
+                                        tool_call_id=tool_call["id"],
+                                    )
+                                ]
+                            }
+                        )
                 elif tool_call["name"] in self.sync_tools_by_name:
                     tool_result = self.sync_tools_by_name[tool_call["name"]].invoke(
                         {
@@ -93,9 +110,9 @@ class StratusToolNode:
                         }
                     )
 
-                assert isinstance(
-                    tool_result, Command
-                ), f"Tool {tool_call['name']} should return a Command object, but return {type(tool_result)}"
+                assert isinstance(tool_result, Command), (
+                    f"Tool {tool_call['name']} should return a Command object, but return {type(tool_result)}"
+                )
                 logger.debug(f"[STRATUS_TOOLNODE] tool_result: {tool_result}")
                 if tool_result.update["messages"]:
                     combined_content = "\n".join([message.content for message in tool_result.update["messages"]])

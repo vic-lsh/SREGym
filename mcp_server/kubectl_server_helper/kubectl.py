@@ -31,7 +31,6 @@ class DryRunResult:
 
 
 class KubeCtl:
-
     def __init__(self):
         """Initialize the KubeCtl object and load the Kubernetes configuration."""
         config.load_kube_config(config_file=require_kubeconfig_path())
@@ -39,17 +38,34 @@ class KubeCtl:
         # self.apps_v1_api = client.AppsV1Api()
 
     @staticmethod
-    def exec_command(command: str, input_data=None):
+    def exec_command(command: str, input_data=None, timeout: int = 60):
         """Execute an arbitrary kubectl command."""
         if input_data is not None:
             input_data = input_data.encode("utf-8")
         try:
             out = subprocess.run(
-                command, shell=True, check=True, capture_output=True, input=input_data, cwd="exp_env"
+                command,
+                shell=True,
+                check=True,
+                capture_output=True,
+                input=input_data,
+                cwd="exp_env",
+                timeout=timeout,
             )  # nosec B602
             out.stdout = out.stdout.decode("utf-8")
             out.stderr = out.stderr.decode("utf-8")
             return out
+        except subprocess.TimeoutExpired as e:
+            # Create a mock result object that mimics CompletedProcess/CalledProcessError
+            class TimeoutResult:
+                def __init__(self, stdout, stderr):
+                    self.returncode = 124  # Standard exit code for timeout
+                    self.stdout = stdout if stdout else ""
+                    self.stderr = stderr if stderr else f"Command timed out after {timeout} seconds."
+
+            stdout_decoded = e.stdout.decode("utf-8") if e.stdout else ""
+            stderr_decoded = e.stderr.decode("utf-8") if e.stderr else f"Command timed out after {timeout} seconds."
+            return TimeoutResult(stdout_decoded, stderr_decoded)
         except subprocess.CalledProcessError as e:
             e.stderr = e.stderr.decode("utf-8")
             return e
@@ -135,9 +151,7 @@ class KubeCtl:
             dry_run_arguments.extend(["-o", keylist])
 
         dry_run_command = KubeCtl.insert_flags(command, dry_run_arguments)
-        dry_run_result = subprocess.run(
-            dry_run_command, shell=True, capture_output=True, text=True, cwd="exp_env"
-        )  # nosec B602
+        dry_run_result = subprocess.run(dry_run_command, shell=True, capture_output=True, text=True, cwd="exp_env")  # nosec B602
 
         if dry_run_result.returncode == 0:
             if len(dry_run_result.stdout.strip()) == 0:

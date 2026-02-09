@@ -11,11 +11,7 @@ output_parent_dir = parent_parent_dir / "data"
 
 
 class KubectlToolCfg(BaseModel):
-    retry_wait_time: float = Field(
-        default=60,
-        description="Seconds to wait between retries.",
-        gt=0
-    )
+    retry_wait_time: float = Field(default=60, description="Seconds to wait between retries.", gt=0)
 
     forbid_unsafe_commands: bool = Field(
         default=False,
@@ -30,8 +26,7 @@ class KubectlToolCfg(BaseModel):
     # Update "default" with session id if using remote mcp server
     # If you see default dir, something went wrong.
     output_dir: str = Field(
-        default=str(output_parent_dir / "default"),
-        description="Directory to store some data used by kubectl server."
+        default=str(output_parent_dir / "default"), description="Directory to store some data used by kubectl server."
     )
 
     namespace: str = Field(
@@ -43,6 +38,8 @@ class KubectlToolCfg(BaseModel):
         default=True,
         description="Enable rollback stack for the rollback tool.",
     )
+
+    command_timeout: int = Field(default=60, description="Timeout in seconds for executing kubectl commands.", gt=0)
 
     """ Rollback Tool Configuration """
     validate_rollback: bool = Field(

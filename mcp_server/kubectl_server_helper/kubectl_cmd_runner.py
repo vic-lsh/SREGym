@@ -151,7 +151,7 @@ class KubectlCmdRunner:
 
     def _execute_kubectl_command(self, command: str):
         logger.debug(f"Executing command: {command}")
-        result = KubeCtl.exec_command(command)
+        result = KubeCtl.exec_command(command, timeout=self.config.command_timeout)
         if result.returncode == 0:
             output = parse_text(result.stdout, 1000)
             logger.debug(f"Kubectl MCP Tool command execution:\n{output}")
@@ -168,6 +168,11 @@ class KubectlCmdRunner:
                 if result.stderr.strip():
                     output += result.stderr.strip()
                 return output if output else "Command completed with no output"
+
+            # Check if it was a timeout
+            if result.returncode == 124:  # Check for timeout specific return code
+                logger.error(f"Command timed out:\n{result.stderr}")
+                return f"Command execution timed out after {self.config.command_timeout} seconds. Output so far: {result.stdout}"
 
             logger.warning(f"Error executing kubectl command:\n{result.stderr}")
             raise RuntimeError(f"Error executing kubectl command:\n{result.stderr}")
