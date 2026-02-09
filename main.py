@@ -182,7 +182,7 @@ def driver_loop(
         # In parallel mode, we don't want the console to output to stdout directly
         # because it will be interleaved. We only use console for local logging
         # which will be redirected to a file.
-        console = Console(force_terminal=True) if status_dict is None else Console(file=sys.stdout)
+        console = Console(force_terminal=sys.stdout.isatty()) if status_dict is None else Console(file=sys.stdout)
 
         # give the API a moment to bind
         await asyncio.sleep(1)
@@ -1062,7 +1062,7 @@ def run_parallel(args, config: SchedulerConfig):
             root_logger.removeHandler(h)
 
         try:
-            console = Console(file=original_stdout, force_terminal=True)
+            console = Console(file=original_stdout, force_terminal=original_stdout.isatty())
             with Progress(
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
@@ -1163,12 +1163,14 @@ def run_parallel(args, config: SchedulerConfig):
 
                     # Check for dead workers and update status
                     active_workers = set()
-                    for p in processes:
+                    for idx in range(len(processes)):
+                        p = processes[idx]
+                        wid = idx  # processes list is indexed by worker_id
+
                         if p.is_alive():
-                            active_workers.add(worker_map.get(p))
+                            active_workers.add(wid)
                         else:
                             # Worker died
-                            wid = worker_map.get(p)
                             if p.exitcode != 0 and wid not in failed_workers_logged:
                                 msg = f"Worker {wid} failed with exit code {p.exitcode}. Check worker_{wid}.log for details."
                                 logger.error(msg)
@@ -1191,6 +1193,41 @@ def run_parallel(args, config: SchedulerConfig):
                                             "elapsed": time.time() - info["start_time"],
                                             "worker_id": wid,
                                         }
+
+                            # Restart Logic: If there is still work to do, restart the worker
+                            if pending_problems and not shutdown_sent:
+                                logger.info(
+                                    f"Restarting Worker {wid} to handle {len(pending_problems)} pending problems."
+                                )
+                                progress.console.print(f"[bold yellow]🔄 Restarting Worker {wid}[/bold yellow]")
+
+                                if wid in failed_workers_logged:
+                                    failed_workers_logged.remove(wid)
+
+                                # Update status to indicate restart (helps UI)
+                                meta_key = _worker_meta_key(wid)
+                                status_dict[meta_key] = {
+                                    "status": "Restarting...",
+                                    "start_time": time.time(),
+                                    "elapsed": 0.0,
+                                    "worker_id": wid,
+                                }
+
+                                # Remove old process from map
+                                if p in worker_map:
+                                    del worker_map[p]
+
+                                # Start new process
+                                new_p = multiprocessing.Process(
+                                    target=worker_main,
+                                    args=(args, wid, worker_queues[wid], experiment_log_dir, status_dict),
+                                )
+                                new_p.start()
+
+                                # Update references
+                                processes[idx] = new_p
+                                worker_map[new_p] = wid
+                                active_workers.add(wid)
 
                     completed_count = 0
                     error_count = 0
