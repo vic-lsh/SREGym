@@ -151,7 +151,21 @@ class KubeCtl:
             dry_run_arguments.extend(["-o", keylist])
 
         dry_run_command = KubeCtl.insert_flags(command, dry_run_arguments)
-        dry_run_result = subprocess.run(dry_run_command, shell=True, capture_output=True, text=True, cwd="exp_env")  # nosec B602
+        try:
+            dry_run_result = subprocess.run(
+                dry_run_command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                cwd="exp_env",
+                timeout=30,
+            )  # nosec B602
+        except subprocess.TimeoutExpired:
+            return DryRunResult(
+                status=DryRunStatus.ERROR,
+                description="Dry-run timed out. The command might be unsafe or the cluster is unresponsive.",
+                result=[],
+            )
 
         if dry_run_result.returncode == 0:
             if len(dry_run_result.stdout.strip()) == 0:
