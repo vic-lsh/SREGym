@@ -1,6 +1,7 @@
 {
     "Name": "Social Network",
     "Namespace": "social-network",
+    "Parallel Namespace Suffix": false,
     "Desc": "A social network with unidirectional follow relationships, implemented with loosely-coupled microservices, communicating with each other via Thrift RPCs.",
     "Supported Operations": [
         "Create text post (optional media: image, video, shortened URL, user tag)",

@@ -60,7 +60,7 @@ class Helm:
                 stderr=subprocess.PIPE,
                 env=env,
             )
-            dependency_output, dependency_error = dependency_process.communicate()
+            dependency_output, dependency_error = dependency_process.communicate(timeout=600)
 
         command = f"helm install {release_name} {chart_path} -n {namespace} --create-namespace"
 
@@ -71,7 +71,12 @@ class Helm:
             command += " " + " ".join(extra_args)
 
         process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
-        output, error = process.communicate()
+        try:
+            output, error = process.communicate(timeout=600)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            output, error = process.communicate()
+            raise RuntimeError(f"Helm install timed out for release '{release_name}'")
 
         if process.returncode != 0:
             stderr = error.decode("utf-8").strip()
@@ -105,7 +110,12 @@ class Helm:
 
         command = f"helm uninstall {release_name} -n {namespace}"
         process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
-        output, error = process.communicate()
+        try:
+            output, error = process.communicate(timeout=600)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            output, error = process.communicate()
+            raise RuntimeError(f"Helm uninstall timed out for release '{release_name}'")
 
         if process.returncode != 0:
             stderr = error.decode("utf-8").strip()
@@ -137,7 +147,12 @@ class Helm:
             stderr=subprocess.PIPE,
             env=Helm._build_env(kubeconfig_path),
         )
-        output, error = process.communicate()
+        try:
+            output, error = process.communicate(timeout=60)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            logger.error(f"Timeout checking if release {release_name} exists")
+            return False
 
         if process.returncode != 0:
             logger.error(error.decode("utf-8"))
@@ -205,7 +220,12 @@ class Helm:
             command.append(f"{key}={value}")
 
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
-        output, error = process.communicate()
+        try:
+            output, error = process.communicate(timeout=600)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            output, error = process.communicate()
+            raise RuntimeError(f"Helm upgrade timed out for release '{release_name}'")
 
         if process.returncode != 0:
             logger.error("Error during helm upgrade:")
@@ -244,7 +264,13 @@ class Helm:
                 stderr=subprocess.PIPE,
                 env=Helm._build_env(),
             )
-            output, error = process.communicate()
+            try:
+                output, error = process.communicate(timeout=60)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                output, error = process.communicate()
+                logger.warning(f"Helm repo add attempt {attempt + 1} timed out")
+                # Treat timeout as failure, loop will retry or fail
 
             # Check if the repo add was successful (return code 0) or repo already exists
             stdout = output.decode("utf-8").strip() if output else ""
@@ -297,7 +323,12 @@ class Helm:
                 stderr=subprocess.PIPE,
                 env=Helm._build_env(),
             )
-            output, error = process.communicate()
+            try:
+                output, error = process.communicate(timeout=120)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                output, error = process.communicate()
+                logger.warning(f"Helm repo update attempt {attempt + 1} timed out")
 
             if process.returncode == 0:
                 logger.info(f"Helm repo update successful on attempt {attempt + 1}")

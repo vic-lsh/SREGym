@@ -1,6 +1,7 @@
 {
     "Name": "Prometheus",
     "Namespace": "observe",
+    "Parallel Namespace Suffix": false,
     "Desc": "Prometheus is an open-source systems monitoring and alerting toolkit that collects and stores metrics as time series data.",
     "Supported Operations": [
         "Collect metrics from various endpoints",

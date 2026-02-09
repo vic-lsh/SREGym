@@ -1,6 +1,7 @@
 {
   "Name": "TiDB Cluster with Operator",
   "Namespace": "tidb-cluster",
+  "Parallel Namespace Suffix": false,
   "OperatorNamespace": "tidb-operator",
   "Desc": "A TiDB cluster with operator managing.",
   "Supported Operations": [

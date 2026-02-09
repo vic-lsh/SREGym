@@ -1,6 +1,7 @@
 {
     "Name": "Blueprint Hotel Reservation",
     "Namespace": "blueprint-hotel-reservation",
+    "Parallel Namespace Suffix": false,
     "Desc": "A blueprint-compiled version of the hotel reservation application built with Go and gRPC, providing backend in-memory and persistent databases, a recommender system for hotel recommendations, and a functionality to place reservations.",
     "Supported Operations": [
         "Get profile and rates of nearby hotels available during given time periods",
