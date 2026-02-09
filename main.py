@@ -864,7 +864,7 @@ def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict)
     os.environ["SREGYM_WORKER_ID"] = str(worker_id)
     os.environ["API_PORT"] = str(8000 + worker_id)
     os.environ["MCP_SERVER_PORT"] = str(9000 + worker_id)
-    os.environ["SREGYM_EXP_ENV"] = f"exp_env_{worker_id}"
+    os.environ["SREGYM_EXP_ENV"] = f"exp_env/exp_env_{worker_id}"
 
     # Append worker ID to log file to avoid conflicts
     session_timestamp = get_current_datetime_formatted()

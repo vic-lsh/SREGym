@@ -50,8 +50,7 @@ class GeminiCliAgent:
 
         if not auto_install:
             raise RuntimeError(
-                "Gemini CLI is not installed. Please install it using:\n"
-                "  npm install -g @google/gemini-cli\n"
+                "Gemini CLI is not installed. Please install it using:\n  npm install -g @google/gemini-cli\n"
             )
 
         # Attempt auto-installation
@@ -72,10 +71,7 @@ class GeminiCliAgent:
             error_msg = f"Failed to auto-install Gemini CLI: {e}\n"
             if isinstance(e, FileNotFoundError):
                 error_msg += "npm is not installed. Please install Node.js and npm first.\n"
-            error_msg += (
-                "Please install Gemini CLI manually using:\n"
-                "  npm install -g @google/gemini-cli\n"
-            )
+            error_msg += "Please install Gemini CLI manually using:\n  npm install -g @google/gemini-cli\n"
             raise RuntimeError(error_msg)
 
     def __init__(
@@ -111,12 +107,12 @@ class GeminiCliAgent:
     def output_path(self) -> Path:
         """Path to Gemini CLI output file."""
         return self.logs_dir / self._OUTPUT_FILENAME
-    
+
     @property
     def summary_path(self) -> Path:
         """Path to the long-term summary file."""
         return self.logs_dir / self._SUMMARY_FILENAME
-    
+
     @property
     def instruction_path(self) -> Path:
         """Path to the instruction file."""
@@ -165,11 +161,12 @@ class GeminiCliAgent:
         text = ""
         if not self.output_path.exists():
             return text
-        
+
         with open(self.output_path, "r") as f:
             for line in f:
                 line = line.strip()
-                if not line: continue
+                if not line:
+                    continue
                 try:
                     event = json.loads(line)
                     # Assuming standard gemini cli output structure for stream-json
@@ -191,7 +188,7 @@ class GeminiCliAgent:
             Return code from Gemini CLI execution (0 for success)
         """
         model = self.model_name
-        
+
         # If summary is enabled and exists, append it to the instruction
         if self.enable_summary and self.summary_path.exists():
             try:
@@ -216,7 +213,7 @@ class GeminiCliAgent:
 
         # Build environment variables
         env = os.environ.copy()
-        
+
         # Set API key if available
         api_key = os.environ.get("GOOGLE_API_KEY", "") or os.environ.get("GEMINI_API_KEY", "")
 
@@ -245,7 +242,7 @@ class GeminiCliAgent:
 
         # Ensure exp_env directory exists
         exp_env_dir = Path(os.getenv("SREGYM_EXP_ENV", "exp_env"))
-        exp_env_dir.mkdir(exist_ok=True)
+        exp_env_dir.mkdir(exist_ok=True, parents=True)
 
         try:
             # Run Gemini CLI and capture output
@@ -279,4 +276,3 @@ class GeminiCliAgent:
         except Exception as e:
             logger.error(f"Error running Gemini CLI: {e}")
             raise
-

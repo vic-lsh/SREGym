@@ -70,7 +70,9 @@ class ClaudeCodeAgent:
 
             # Verify installation
             if not ClaudeCodeAgent.check_installation():
-                raise RuntimeError("Claude Code CLI installation appeared to succeed but command is still not available")
+                raise RuntimeError(
+                    "Claude Code CLI installation appeared to succeed but command is still not available"
+                )
 
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             error_msg = f"Failed to auto-install Claude Code CLI: {e}\n"
@@ -158,7 +160,7 @@ class ClaudeCodeAgent:
         if len(candidate_dirs) == 1:
             return candidate_dirs[0]
 
-        logger.warning("Multiple Claude Code session directories found; " "could not identify the correct one")
+        logger.warning("Multiple Claude Code session directories found; could not identify the correct one")
         return None
 
     def get_usage_metrics(self) -> dict[str, int]:
@@ -242,8 +244,7 @@ class ClaudeCodeAgent:
         invalid_patterns = ["bedrock", "litellm", "azure", "openai", "watsonx", "gemini"]
         if any(pattern in model.lower() for pattern in invalid_patterns):
             logger.warning(
-                f"Model '{model}' appears to be for a non-Anthropic provider. "
-                f"Defaulting to 'sonnet' for Claude Code."
+                f"Model '{model}' appears to be for a non-Anthropic provider. Defaulting to 'sonnet' for Claude Code."
             )
             model = "sonnet"
 
@@ -298,8 +299,8 @@ class ClaudeCodeAgent:
         logger.info(f"Executing command: {' '.join(command)}")
 
         # Ensure exp_env directory exists
-        exp_env_dir = Path("exp_env")
-        exp_env_dir.mkdir(exist_ok=True)
+        exp_env_dir = Path(os.getenv("SREGYM_EXP_ENV", "exp_env"))
+        exp_env_dir.mkdir(exist_ok=True, parents=True)
 
         try:
             # Run Claude Code and capture output
