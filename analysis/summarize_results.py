@@ -2,6 +2,7 @@ import argparse
 import csv
 import glob
 import os
+import sys
 
 try:
     import matplotlib.pyplot as plt
@@ -23,6 +24,9 @@ def load_results(target_path=None):
             # recursive=True requires the pattern to include ** for that part
             pattern = os.path.join(target_path, "**", "*_results.csv")
             files = glob.glob(pattern, recursive=True)
+        elif not os.path.exists(target_path) and not any(c in target_path for c in "*?[]"):
+            print(f"Error: The path '{target_path}' does not exist.")
+            sys.exit(1)
         else:
             # User provided a file pattern
             files = glob.glob(target_path, recursive=True)

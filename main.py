@@ -84,6 +84,26 @@ class SchedulerConfig:
         self.enable_resource_throttling = os.getenv("SREGYM_ENABLE_RESOURCE_THROTTLING", "true").lower() == "true"
 
 
+def _resolve_progress_mode(stream) -> str:
+    """
+    Determine progress rendering mode.
+    Modes:
+      - rich: animated rich Progress UI
+      - plain: periodic plain-text summaries
+      - off: no progress output
+    """
+    raw = os.getenv("SREGYM_PROGRESS_MODE", "auto").strip().lower()
+    if raw in {"rich", "plain", "off"}:
+        return raw
+
+    is_tty = hasattr(stream, "isatty") and stream.isatty()
+    term = os.getenv("TERM", "").strip().lower()
+    in_ci = os.getenv("CI", "").strip().lower() in {"1", "true", "yes"}
+    if not is_tty or term in {"", "dumb"} or in_ci:
+        return "plain"
+    return "rich"
+
+
 def get_resource_cost(problem_id: str) -> int:
     pid = problem_id.lower()
     if "social_network" in pid or "social-network" in pid:
@@ -974,7 +994,10 @@ def run_parallel(args, config: SchedulerConfig):
     else:
         session_timestamp = get_current_datetime_formatted()
         os.makedirs("logs", exist_ok=True)
-        experiment_log_dir = os.path.abspath(f"logs/{session_timestamp}")
+        dir_name = session_timestamp
+        if args.agent:
+            dir_name = f"{session_timestamp}_{args.agent}"
+        experiment_log_dir = os.path.abspath(f"logs/{dir_name}")
         os.makedirs(experiment_log_dir, exist_ok=True)
         logger.info(f"Parallel experiment logs will be stored in: {experiment_log_dir}")
 
@@ -1062,7 +1085,10 @@ def run_parallel(args, config: SchedulerConfig):
             root_logger.removeHandler(h)
 
         try:
-            console = Console(file=original_stdout, force_terminal=original_stdout.isatty())
+            progress_mode = _resolve_progress_mode(original_stdout)
+            logger.info(f"Progress output mode: {progress_mode}")
+
+            console = Console(file=original_stdout, force_terminal=(progress_mode == "rich"))
             with Progress(
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
@@ -1070,6 +1096,8 @@ def run_parallel(args, config: SchedulerConfig):
                 TaskProgressColumn(),
                 TimeElapsedColumn(),
                 console=console,
+                disable=(progress_mode != "rich"),
+                transient=(progress_mode == "rich"),
             ) as progress:
                 # Main overall progress
                 total_problems = len(all_problems)
@@ -1083,6 +1111,8 @@ def run_parallel(args, config: SchedulerConfig):
                     worker_tasks[i] = t_id
 
                 failed_workers_logged = set()
+                last_plain_print_ts = 0.0
+                last_plain_snapshot = None
                 while any(p.is_alive() for p in processes) or (
                     status_dict and any(info.get("worker_id") is not None for info in status_dict.values())
                 ):
@@ -1320,6 +1350,29 @@ def run_parallel(args, config: SchedulerConfig):
                             else:
                                 progress.update(worker_tasks[i], description=f"Worker {i}: Idle", completed=0)
 
+                    if progress_mode == "plain":
+                        now_ts = time.time()
+                        snapshot = (
+                            finished_count,
+                            completed_count,
+                            error_count,
+                            skipped_count,
+                            len(pending_problems),
+                            len(assigned_tasks),
+                        )
+                        if snapshot != last_plain_snapshot or now_ts - last_plain_print_ts >= 15:
+                            print(
+                                (
+                                    f"[progress] done={finished_count}/{total_problems} "
+                                    f"ok={completed_count} err={error_count} skip={skipped_count} "
+                                    f"pending={len(pending_problems)} active_workers={len(assigned_tasks)}"
+                                ),
+                                file=original_stdout,
+                                flush=True,
+                            )
+                            last_plain_snapshot = snapshot
+                            last_plain_print_ts = now_ts
+
                     if not any(p.is_alive() for p in processes):
                         break
 
@@ -1380,7 +1433,10 @@ def main(args, problem_list=None, experiment_log_dir=None, status_dict=None, pro
             logger.info(f"Resuming experiment from: {experiment_log_dir}")
         else:
             # Create experiment directory
-            experiment_log_dir = os.path.abspath(f"logs/{session_timestamp}")
+            dir_name = session_timestamp
+            if args.agent:
+                dir_name = f"{session_timestamp}_{args.agent}"
+            experiment_log_dir = os.path.abspath(f"logs/{dir_name}")
 
     os.makedirs(experiment_log_dir, exist_ok=True)
 
