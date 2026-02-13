@@ -130,7 +130,6 @@ You are an SRE agent tasked with diagnosing and fixing issues in a Kubernetes ap
 
 Application: {app_name}
 Namespace: {namespace}
-Problem ID: {problem_id}
 
 {descriptions}
 

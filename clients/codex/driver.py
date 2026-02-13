@@ -129,7 +129,6 @@ def build_instruction(app_info: dict, problem_id: str) -> str:
 
 Application: {app_name}
 Namespace: {namespace}
-Problem ID: {problem_id}
 
 {descriptions}
 
