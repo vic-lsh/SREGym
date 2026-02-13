@@ -19,7 +19,6 @@ class GeminiCliAgent:
 
     _OUTPUT_FILENAME = "gemini-cli.txt"
     _SUMMARY_FILENAME = "long_term_summary.txt"
-    _INSTRUCTION_FILENAME = "instruction.txt"
 
     @staticmethod
     def check_installation() -> bool:
@@ -79,6 +78,7 @@ class GeminiCliAgent:
         logs_dir: Path,
         model_name: str,
         sessions_dir: Optional[Path] = None,
+        summary_dir: Optional[Path] = None,
         enable_summary: bool = False,
     ):
         """
@@ -88,6 +88,7 @@ class GeminiCliAgent:
             logs_dir: Directory to store logs and output
             model_name: Model name to use (e.g., "gemini-2.0-flash")
             sessions_dir: Directory for Gemini sessions (defaults to logs_dir/sessions)
+            summary_dir: Directory for long-term summary (defaults to logs_dir)
             enable_summary: If True, enable accumulation of summaries across runs
         """
         self.logs_dir = Path(logs_dir)
@@ -96,11 +97,16 @@ class GeminiCliAgent:
         self.model_name = model_name.removeprefix("vertex-ai-")
         self.sessions_dir = Path(sessions_dir) if sessions_dir else self.logs_dir / "sessions"
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
+
+        self.summary_dir = Path(summary_dir) if summary_dir else self.logs_dir
+        self.summary_dir.mkdir(parents=True, exist_ok=True)
+
         self.enable_summary = enable_summary
 
         logger.info(f"Initialized Gemini CLI agent with model={self.model_name}")
         logger.info(f"Logs dir: {self.logs_dir}")
         logger.info(f"Sessions dir: {self.sessions_dir}")
+        logger.info(f"Summary dir: {self.summary_dir}")
         logger.info(f"Enable summary: {self.enable_summary}")
 
     @property
@@ -111,12 +117,7 @@ class GeminiCliAgent:
     @property
     def summary_path(self) -> Path:
         """Path to the long-term summary file."""
-        return self.logs_dir / self._SUMMARY_FILENAME
-
-    @property
-    def instruction_path(self) -> Path:
-        """Path to the instruction file."""
-        return self.logs_dir / self._INSTRUCTION_FILENAME
+        return self.summary_dir / self._SUMMARY_FILENAME
 
     def get_usage_metrics(self) -> dict[str, int]:
         """
@@ -189,24 +190,19 @@ class GeminiCliAgent:
         """
         model = self.model_name
 
-        # If summary is enabled and exists, append it to the instruction
+        # Ensure exp_env directory exists (agent's cwd)
+        exp_env_dir = Path(os.getenv("SREGYM_EXP_ENV", "exp_env"))
+        exp_env_dir.mkdir(exist_ok=True, parents=True)
+
+        # If summary is enabled and exists, copy it into agent's cwd and reference by path
         if self.enable_summary and self.summary_path.exists():
             try:
-                with open(self.summary_path, "r") as f:
-                    existing_summary = f.read().strip()
-                if existing_summary:
-                    instruction += f"\n\nIMPORTANT: Here is a summary of findings from previous runs. Use this context to avoid repeating mistakes or to speed up diagnosis:\n\n{existing_summary}\n"
-                    logger.info("Appended existing long-term summary to instruction.")
+                summary_in_cwd = exp_env_dir / self._SUMMARY_FILENAME
+                shutil.copy2(self.summary_path, summary_in_cwd)
+                instruction += f"\n\nIMPORTANT: A summary of findings from previous runs is available at: {self._SUMMARY_FILENAME}\nRead it to avoid repeating mistakes or to speed up diagnosis.\n"
+                logger.info("Copied existing long-term summary into agent cwd and referenced by path.")
             except Exception as e:
-                logger.warning(f"Failed to read existing summary: {e}")
-
-        # Save instruction to file for external summarizer
-        if self.enable_summary:
-            try:
-                self.instruction_path.write_text(instruction)
-                logger.info(f"Saved instruction to {self.instruction_path}")
-            except Exception as e:
-                logger.warning(f"Failed to save instruction to file: {e}")
+                logger.warning(f"Failed to copy existing summary: {e}")
 
         logger.info(f"Running Gemini CLI with instruction: {instruction}")
         logger.info(f"Using model: {model}")
@@ -239,10 +235,6 @@ class GeminiCliAgent:
         ]
 
         logger.info(f"Executing command: {' '.join(command)}")
-
-        # Ensure exp_env directory exists
-        exp_env_dir = Path(os.getenv("SREGYM_EXP_ENV", "exp_env"))
-        exp_env_dir.mkdir(exist_ok=True, parents=True)
 
         try:
             # Run Gemini CLI and capture output

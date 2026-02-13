@@ -221,6 +221,12 @@ def main():
         help="Gemini CLI sessions directory (default: logs-dir/sessions)",
     )
     parser.add_argument(
+        "--summary-dir",
+        type=str,
+        default=None,
+        help="Directory for long-term summary (default: logs-dir)",
+    )
+    parser.add_argument(
         "--no-auto-install",
         action="store_true",
         help="Disable auto-installation of Gemini CLI if not found",
@@ -269,11 +275,13 @@ def main():
     # Initialize Gemini CLI agent
     logs_dir = Path(args.logs_dir)
     sessions_dir = Path(args.sessions_dir) if args.sessions_dir else None
+    summary_dir = Path(args.summary_dir) if args.summary_dir else None
 
     agent = GeminiCliAgent(
         logs_dir=logs_dir,
         model_name=args.model,
         sessions_dir=sessions_dir,
+        summary_dir=summary_dir,
         enable_summary=args.enable_summary,
     )
 

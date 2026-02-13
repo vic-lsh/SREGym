@@ -9,6 +9,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 # Add SREGym root to path to import backend
 sregym_root = Path(__file__).resolve().parents[2]
@@ -23,13 +24,35 @@ logger = logging.getLogger("all.gemini_cli.summarize")
 
 
 class ResultSummarizer:
-    def __init__(self, logs_dir: Path, model_name: str):
+    def __init__(self, logs_dir: Path, model_name: str, summary_dir: Optional[Path] = None):
         self.logs_dir = logs_dir
         self.model_name = model_name.removeprefix("vertex-ai-")
-        
+        self.summary_dir = summary_dir if summary_dir else logs_dir
+
         self.output_path = self.logs_dir / "gemini-cli.txt"
-        self.instruction_path = self.logs_dir / "instruction.txt"
-        self.summary_path = self.logs_dir / "long_term_summary.txt"
+        self.summary_path = self.summary_dir / "long_term_summary.txt"
+
+    def _get_instruction_text(self) -> str:
+        """Extract instruction from the first user message in Gemini CLI output file."""
+        if not self.output_path.exists():
+            return ""
+
+        try:
+            with open(self.output_path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                        if event.get("type") == "message" and event.get("role") == "user":
+                            return event.get("content", "")
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as e:
+            logger.error(f"Error reading instruction from output file: {e}")
+
+        return ""
 
     def _get_response_text(self) -> str:
         """Extract response text from Gemini CLI output file."""
@@ -63,7 +86,7 @@ Response:
 """
         api_key = os.environ.get("GOOGLE_API_KEY", "") or os.environ.get("GEMINI_API_KEY", "")
         model_name = self.model_name
-        
+
         # Determine appropriate model prefix based on available credentials
         provider = "litellm"
         location = None
@@ -74,19 +97,19 @@ Response:
             if not model_name.startswith("vertex_ai/"):
                 model_name = f"vertex_ai/{model_name}"
             # Check for location in env vars
-            location = os.environ.get("VERTEX_LOCATION") or os.environ.get("GOOGLE_CLOUD_LOCATION") or os.environ.get("LOCATION")
+            location = (
+                os.environ.get("VERTEX_LOCATION")
+                or os.environ.get("GOOGLE_CLOUD_LOCATION")
+                or os.environ.get("LOCATION")
+            )
 
         elif not model_name.startswith("gemini/") and "gemini" in model_name:
             # Fallback to AI Studio (requires API Key)
-             model_name = f"gemini/{model_name}"
+            model_name = f"gemini/{model_name}"
 
         try:
             llm = LiteLLMBackend(
-                provider=provider,
-                model_name=model_name,
-                api_key=api_key,
-                temperature=0.0,
-                location=location
+                provider=provider, model_name=model_name, api_key=api_key, temperature=0.0, location=location
             )
             result = llm.inference(messages=prompt)
             return result.content
@@ -117,7 +140,7 @@ Task: Update the Long-Term Summary.
 """
         api_key = os.environ.get("GOOGLE_API_KEY", "") or os.environ.get("GEMINI_API_KEY", "")
         model_name = self.model_name
-        
+
         # Determine appropriate model prefix based on available credentials
         provider = "litellm"
         location = None
@@ -128,19 +151,19 @@ Task: Update the Long-Term Summary.
             if not model_name.startswith("vertex_ai/"):
                 model_name = f"vertex_ai/{model_name}"
             # Check for location in env vars
-            location = os.environ.get("VERTEX_LOCATION") or os.environ.get("GOOGLE_CLOUD_LOCATION") or os.environ.get("LOCATION")
+            location = (
+                os.environ.get("VERTEX_LOCATION")
+                or os.environ.get("GOOGLE_CLOUD_LOCATION")
+                or os.environ.get("LOCATION")
+            )
 
         elif not model_name.startswith("gemini/") and "gemini" in model_name:
             # Fallback to AI Studio (requires API Key)
-             model_name = f"gemini/{model_name}"
+            model_name = f"gemini/{model_name}"
 
         try:
             llm = LiteLLMBackend(
-                provider=provider,
-                model_name=model_name,
-                api_key=api_key,
-                temperature=0.0,
-                location=location
+                provider=provider, model_name=model_name, api_key=api_key, temperature=0.0, location=location
             )
             result = llm.inference(messages=prompt)
             return result.content
@@ -151,16 +174,15 @@ Task: Update the Long-Term Summary.
     def run(self):
         logger.info(f"Summarizing run in {self.logs_dir}")
 
-        if not self.instruction_path.exists():
-            logger.error(f"Instruction file not found at {self.instruction_path}. Cannot summarize.")
+        instruction = self._get_instruction_text()
+        if not instruction:
+            logger.error("Instruction not found in output file. Cannot summarize.")
             sys.exit(1)
-
-        instruction = self.instruction_path.read_text()
         response = self._get_response_text()
 
         if not response:
             logger.warning("Response text is empty. Agent might have produced no output.")
-            # We still try to summarize even if response is empty (maybe to note failure), 
+            # We still try to summarize even if response is empty (maybe to note failure),
             # but usually it's better to note that no response was recorded.
             response = "(No output from agent)"
 
@@ -168,11 +190,11 @@ Task: Update the Long-Term Summary.
             logger.info("Generating iteration summary...")
             iter_summary = self._summarize_trajectory(instruction, response)
             logger.info(f"Iteration Summary: {iter_summary}")
-            
+
             logger.info("Merging with long-term summary...")
             updated_long_term = self._merge_summaries(iter_summary)
             logger.info(f"Updated Long-Term Summary: {updated_long_term}")
-            
+
             with open(self.summary_path, "w") as f:
                 f.write(updated_long_term)
             logger.info(f"Updated long-term summary saved to {self.summary_path}")
@@ -182,14 +204,18 @@ Task: Update the Long-Term Summary.
             # Do not raise, just log error so we don't crash the harness if this optional step fails
             sys.exit(1)
 
+
 def main():
     parser = argparse.ArgumentParser(description="Summarize Gemini CLI results")
     parser.add_argument("--logs-dir", type=str, required=True, help="Path to logs directory")
     parser.add_argument("--model", type=str, required=True, help="Model name used")
+    parser.add_argument("--summary-dir", type=str, required=False, help="Path to summary directory")
     args = parser.parse_args()
 
-    summarizer = ResultSummarizer(Path(args.logs_dir), args.model)
+    summary_dir = Path(args.summary_dir) if args.summary_dir else None
+    summarizer = ResultSummarizer(Path(args.logs_dir), args.model, summary_dir=summary_dir)
     summarizer.run()
+
 
 if __name__ == "__main__":
     main()
