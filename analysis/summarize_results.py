@@ -576,6 +576,64 @@ def diff_results(dir1, dir2):
         compact=True,
     )
 
+    # --- By Name Variations ---
+    plot_comparison_by_problem(
+        comp_diag_data,
+        name1,
+        name2,
+        "Diagnosis Time (By Name)",
+        os.path.join(output_dir, "comparison_diagnosis_by_name.png"),
+        colors=["#004d99", "#66b3ff"],
+        use_status_colors=True,
+        sort_by_name=True,
+    )
+    plot_comparison_by_problem(
+        comp_mitig_data,
+        name1,
+        name2,
+        "Mitigation Time (By Name)",
+        os.path.join(output_dir, "comparison_mitigation_by_name.png"),
+        colors=["#cc5200", "#ff9933"],
+        use_status_colors=True,
+        sort_by_name=True,
+    )
+    plot_comparison_by_problem(
+        comp_diag_success_data,
+        name1,
+        name2,
+        "Diagnosis Time (Success Only, By Name)",
+        os.path.join(output_dir, "comparison_diagnosis_success_by_name.png"),
+        colors=["#004d99", "#66b3ff"],
+        sort_by_name=True,
+    )
+    plot_comparison_by_problem(
+        comp_mitig_success_data,
+        name1,
+        name2,
+        "Mitigation Time (Success Only, By Name)",
+        os.path.join(output_dir, "comparison_mitigation_success_by_name.png"),
+        colors=["#cc5200", "#ff9933"],
+        sort_by_name=True,
+    )
+    plot_comparison_by_problem(
+        comp_diag_fail_data,
+        name1,
+        name2,
+        "Diagnosis Time (Failure Only, By Name)",
+        os.path.join(output_dir, "comparison_diagnosis_failure_by_name.png"),
+        colors=["#004d99", "#66b3ff"],
+        sort_by_name=True,
+    )
+    plot_comparison_by_problem(
+        comp_mitig_fail_data,
+        name1,
+        name2,
+        "Mitigation Time (Failure Only, By Name)",
+        os.path.join(output_dir, "comparison_mitigation_failure_by_name.png"),
+        colors=["#cc5200", "#ff9933"],
+        sort_by_name=True,
+    )
+
 
 def plot_cdfs(data1, data2, label1, label2, title_metric, output_path, colors=None):
     if not HAS_PLOTTING:
@@ -632,7 +690,15 @@ def plot_cdfs(data1, data2, label1, label2, title_metric, output_path, colors=No
 
 
 def plot_comparison_by_problem(
-    data, name1, name2, title_metric, output_path, colors=None, compact=False, use_status_colors=False
+    data,
+    name1,
+    name2,
+    title_metric,
+    output_path,
+    colors=None,
+    compact=False,
+    use_status_colors=False,
+    sort_by_name=False,
 ):
     if not HAS_PLOTTING:
         print(f"Matplotlib/Numpy not found. Skipping plot: {output_path}")
@@ -645,9 +711,12 @@ def plot_comparison_by_problem(
     if colors is None:
         colors = ["tab:blue", "tab:orange"]
 
-    # Sort by first dir's output time (x[1]).
-    # Place None/Missing at the end (top of graph).
-    data.sort(key=lambda x: x[1] if x[1] is not None else float("inf"))
+    if sort_by_name:
+        data.sort(key=lambda x: x[0])
+    else:
+        # Sort by first dir's output time (x[1]).
+        # Place None/Missing at the end (top of graph).
+        data.sort(key=lambda x: x[1] if x[1] is not None else float("inf"))
 
     pids = [d[0] for d in data]
 
