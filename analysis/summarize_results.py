@@ -1,7 +1,9 @@
 import argparse
 import csv
 import glob
+import json
 import os
+import re
 import sys
 
 try:
@@ -81,6 +83,80 @@ def load_results(target_path=None):
     sorted_runs.sort(key=lambda x: x.get("source_file", ""))
 
     return runs_by_id, sorted_runs
+
+
+def load_stratus_tokens(log_dir):
+    """Load token usage from Stratus *_stratus_output.csv files.
+    Sums diagnosis + mitigation (all agent rows) per problem.
+    Returns dict[problem_id, total_tokens] or empty dict if none found.
+    """
+    pattern = os.path.join(log_dir, "**", "*_stratus_output.csv")
+    files = glob.glob(pattern, recursive=True)
+    if not files:
+        return {}
+
+    tokens_by_pid = {}
+    for file_path in files:
+        # Extract problem_id: {MMDD_HHMM}_{problem_id}_stratus_output.csv
+        basename = os.path.basename(file_path)
+        if not basename.endswith("_stratus_output.csv"):
+            continue
+        rest = basename[: -len("_stratus_output.csv")]
+        parts = rest.split("_", 2)  # MMDD, HHMM, problem_id (may contain underscores)
+        if len(parts) < 3:
+            continue
+        problem_id = parts[2]
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                total = 0
+                for row in reader:
+                    try:
+                        total += int(row.get("total_tokens", 0) or 0)
+                    except (ValueError, TypeError):
+                        pass
+                if total > 0:
+                    tokens_by_pid[problem_id] = total
+        except Exception as e:
+            print(f"Warning: could not read {file_path}: {e}")
+    return tokens_by_pid
+
+
+def load_gemini_tokens(log_dir):
+    """Load token usage from Gemini gemini_cli_results_*.json files.
+    Returns dict[problem_id, total_tokens] or empty dict if none found.
+    """
+    # Check log_dir/gemini_cli/ and log_dir/
+    for subdir in ["gemini_cli", ""]:
+        base = os.path.join(log_dir, subdir) if subdir else log_dir
+        pattern = os.path.join(base, "gemini_cli_results_*.json")
+        files = glob.glob(pattern)
+        if not files:
+            continue
+
+        tokens_by_pid = {}
+        for file_path in files:
+            basename = os.path.basename(file_path)
+            m = re.match(r"gemini_cli_results_(.+)_\d{8}_\d{6}\.json", basename)
+            if not m:
+                continue
+            problem_id = m.group(1)
+
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                um = data.get("usage_metrics", {})
+                inp = int(um.get("input_tokens", 0) or 0)
+                out = int(um.get("output_tokens", 0) or 0)
+                total = inp + out
+                if total > 0:
+                    tokens_by_pid[problem_id] = total
+            except Exception as e:
+                print(f"Warning: could not read {file_path}: {e}")
+        if tokens_by_pid:
+            return tokens_by_pid
+    return {}
 
 
 def summarize_results(target_path=None):
@@ -634,6 +710,283 @@ def diff_results(dir1, dir2):
         sort_by_name=True,
     )
 
+    # --- Token-based comparison plots ---
+    plot_success_rates(
+        d1,
+        m1,
+        c1,
+        name1,
+        d2,
+        m2,
+        c2,
+        name2,
+        os.path.join(output_dir, "success_rates_comparison.png"),
+        colors=["#1f77b4", "#ff7f0e"],
+    )
+
+    tokens1_map = load_stratus_tokens(dir1) or load_gemini_tokens(dir1)
+    tokens2_map = load_stratus_tokens(dir2) or load_gemini_tokens(dir2)
+
+    if tokens1_map or tokens2_map:
+        tokens1_list = [t for t in tokens1_map.values() if t and t > 0]
+        tokens2_list = [t for t in tokens2_map.values() if t and t > 0]
+
+        # 1) CDF of token usage
+        plot_cdf_tokens(
+            tokens1_list,
+            tokens2_list,
+            name1,
+            name2,
+            os.path.join(output_dir, "cdf_tokens.png"),
+            colors=["#004d99", "#66b3ff"],
+        )
+
+        # 2) Scatter plot: Y=problem labels, X=diag+mitigation token usage (dots like time-based)
+        comp_token_data = []
+        for pid in all_pids:
+            t1 = tokens1_map.get(pid)
+            t2 = tokens2_map.get(pid)
+            if (t1 is not None and t1 > 0) or (t2 is not None and t2 > 0):
+                r1 = runs1_map.get(pid)
+                r2 = runs2_map.get(pid)
+                d1 = r1 and r1.get("Diagnosis.success") == "True"
+                m1 = r1 and r1.get("Mitigation.success") == "True"
+                d2 = r2 and r2.get("Diagnosis.success") == "True"
+                m2 = r2 and r2.get("Mitigation.success") == "True"
+                comp_token_data.append((pid, t1 or 0, t2 or 0, d1 and m1, d2 and m2))
+        plot_token_comparison_by_problem(
+            comp_token_data,
+            name1,
+            name2,
+            os.path.join(output_dir, "comparison_tokens.png"),
+            colors=["#004d99", "#66b3ff"],
+            use_status_colors=True,
+        )
+        plot_token_comparison_by_problem(
+            comp_token_data,
+            name1,
+            name2,
+            os.path.join(output_dir, "comparison_tokens_by_name.png"),
+            colors=["#004d99", "#66b3ff"],
+            use_status_colors=True,
+            sort_by_name=True,
+        )
+
+        # 3) Scatter: tokens vs aggregate time (TTL + TTM)
+        tokens_time_data1 = []
+        tokens_time_data2 = []
+        for pid in all_pids:
+            tok1 = tokens1_map.get(pid)
+            tok2 = tokens2_map.get(pid)
+            r1 = runs1_map.get(pid)
+            r2 = runs2_map.get(pid)
+
+            def parse_float(val):
+                try:
+                    return float(val)
+                except (ValueError, TypeError):
+                    return None
+
+            ttl1 = parse_float(r1.get("TTL")) if r1 else None
+            ttm1 = parse_float(r1.get("TTM")) if r1 else None
+            ttl2 = parse_float(r2.get("TTL")) if r2 else None
+            ttm2 = parse_float(r2.get("TTM")) if r2 else None
+
+            agg1 = (ttl1 or 0) + (ttm1 or 0)
+            agg2 = (ttl2 or 0) + (ttm2 or 0)
+
+            if tok1 and tok1 > 0 and agg1 > 0:
+                tokens_time_data1.append((tok1, agg1, pid))
+            if tok2 and tok2 > 0 and agg2 > 0:
+                tokens_time_data2.append((tok2, agg2, pid))
+
+        plot_tokens_vs_time(
+            tokens_time_data1,
+            tokens_time_data2,
+            name1,
+            name2,
+            os.path.join(output_dir, "scatter_tokens_vs_time.png"),
+            colors=["#004d99", "#66b3ff"],
+        )
+
+
+def plot_tokens_vs_time(data1, data2, label1, label2, output_path, colors=None):
+    """Scatter plot: X=tokens (diag+mitigation), Y=aggregate time (TTL+TTM)."""
+    if not HAS_PLOTTING:
+        print(f"Matplotlib/Numpy not found. Skipping plot: {output_path}")
+        return
+
+    if not data1 and not data2:
+        print("No tokens+time data for scatter plot.")
+        return
+
+    if colors is None:
+        colors = ["tab:blue", "tab:orange"]
+
+    plt.figure(figsize=(10, 6))
+    has_data = False
+
+    if data1:
+        x1 = [d[0] for d in data1]
+        y1 = [d[1] for d in data1]
+        plt.scatter(x1, y1, color=colors[0], label=f"{label1} (n={len(data1)})", marker="o", alpha=0.7)
+        has_data = True
+
+    if data2:
+        x2 = [d[0] for d in data2]
+        y2 = [d[1] for d in data2]
+        plt.scatter(x2, y2, color=colors[1], label=f"{label2} (n={len(data2)})", marker="x", alpha=0.7)
+        has_data = True
+
+    if has_data:
+        plt.xlabel("Tokens (diagnosis + mitigation)")
+        plt.ylabel("Time (s) — TTL + TTM")
+        plt.title("Tokens vs Aggregate Time (Diagnosis + Mitigation)")
+        plt.grid(True)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(output_path)
+        plt.close()
+        print(f"Tokens vs time scatter plot saved to {output_path}")
+
+
+def plot_cdf_tokens(data1, data2, label1, label2, output_path, colors=None):
+    """Plot CDF of token usage for two agents."""
+    if not HAS_PLOTTING:
+        print(f"Matplotlib/Numpy not found. Skipping plot: {output_path}")
+        return
+
+    if not data1 and not data2:
+        print("No token data for CDF plot.")
+        return
+
+    if colors is None:
+        colors = ["tab:blue", "tab:orange"]
+
+    plt.figure(figsize=(10, 6))
+    has_data = False
+
+    if data1:
+        data1 = sorted(data1)
+        y1 = np.arange(1, len(data1) + 1) / len(data1)
+        plt.plot(
+            data1,
+            y1,
+            marker=".",
+            linestyle="-",
+            color=colors[0],
+            label=f"{label1} (n={len(data1)})",
+        )
+        has_data = True
+
+    if data2:
+        data2 = sorted(data2)
+        y2 = np.arange(1, len(data2) + 1) / len(data2)
+        plt.plot(
+            data2,
+            y2,
+            marker="x",
+            linestyle="--",
+            color=colors[1],
+            label=f"{label2} (n={len(data2)})",
+        )
+        has_data = True
+
+    if has_data:
+        plt.xlabel("Tokens (diagnosis + mitigation)")
+        plt.ylabel("CDF")
+        plt.title("CDF of Token Usage (Diagnosis + Mitigation)")
+        plt.grid(True)
+        plt.legend()
+        plt.savefig(output_path)
+        plt.close()
+        print(f"Token CDF plot saved to {output_path}")
+
+
+def plot_token_comparison_by_problem(
+    data,
+    name1,
+    name2,
+    output_path,
+    colors=None,
+    use_status_colors=False,
+    sort_by_name=False,
+):
+    """Plot scatter: Y=problem labels, X=token usage for both agents (dots like time-based)."""
+    if not HAS_PLOTTING:
+        print(f"Matplotlib/Numpy not found. Skipping plot: {output_path}")
+        return
+
+    if not data:
+        print("No token data for comparison plot.")
+        return
+
+    if colors is None:
+        colors = ["tab:blue", "tab:orange"]
+
+    if sort_by_name:
+        data = sorted(data, key=lambda x: x[0])
+    else:
+        data = sorted(data, key=lambda x: x[1] if x[1] else 0)
+
+    pids = [d[0] for d in data]
+    fig_height = max(6, len(pids) * 0.3)
+    plt.figure(figsize=(10, fig_height))
+
+    y_vals = np.arange(len(pids))
+
+    x1_succ, x1_fail, y1_succ, y1_fail = [], [], [], []
+    x2_succ, x2_fail, y2_succ, y2_fail = [], [], [], []
+
+    for i, (pid, t1, t2, s1, s2) in enumerate(data):
+        if t1 and t1 > 0:
+            if s1:
+                x1_succ.append(t1)
+                y1_succ.append(i)
+            else:
+                x1_fail.append(t1)
+                y1_fail.append(i)
+        if t2 and t2 > 0:
+            if s2:
+                x2_succ.append(t2)
+                y2_succ.append(i)
+            else:
+                x2_fail.append(t2)
+                y2_fail.append(i)
+
+    c_succ, c_fail = "tab:green", "tab:red"
+    m1, m2 = "o", "x"
+
+    if use_status_colors:
+        if x1_succ:
+            plt.scatter(x1_succ, y1_succ, color=c_succ, label=f"{name1} (Success)", marker=m1, alpha=0.7)
+        if x1_fail:
+            plt.scatter(x1_fail, y1_fail, color=c_fail, label=f"{name1} (Fail)", marker=m1, alpha=0.7)
+        if x2_succ:
+            plt.scatter(x2_succ, y2_succ, color=c_succ, label=f"{name2} (Success)", marker=m2, alpha=0.7)
+        if x2_fail:
+            plt.scatter(x2_fail, y2_fail, color=c_fail, label=f"{name2} (Fail)", marker=m2, alpha=0.7)
+    else:
+        x1_all = x1_succ + x1_fail
+        y1_all = y1_succ + y1_fail
+        x2_all = x2_succ + x2_fail
+        y2_all = y2_succ + y2_fail
+        if x1_all:
+            plt.scatter(x1_all, y1_all, color=colors[0], label=name1, marker=m1, alpha=0.7)
+        if x2_all:
+            plt.scatter(x2_all, y2_all, color=colors[1], label=name2, marker=m2, alpha=0.7)
+
+    plt.yticks(y_vals, pids)
+    plt.xlabel("Tokens (diagnosis + mitigation)")
+    plt.title("Per-Problem Token Usage")
+    plt.grid(True, axis="y", linestyle=":", alpha=0.3)
+    plt.grid(True, axis="x", linestyle="--", alpha=0.7)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close()
+    print(f"Token comparison plot saved to {output_path}")
+
 
 def plot_cdfs(data1, data2, label1, label2, title_metric, output_path, colors=None):
     if not HAS_PLOTTING:
@@ -814,6 +1167,75 @@ def plot_comparison_by_problem(
     plt.savefig(output_path)
     plt.close()
     print(f"Comparison plot saved to {output_path}")
+
+
+def plot_success_rates(d1, m1, n1, name1, d2, m2, n2, name2, output_path, colors=None):
+    """
+    Bar chart comparing diagnosis and mitigation success rates.
+    """
+    if not HAS_PLOTTING:
+        print(f"Matplotlib/Numpy not found. Skipping plot: {output_path}")
+        return
+
+    if colors is None:
+        colors = ["tab:blue", "tab:orange"]
+
+    # Calculate rates
+    d1_rate = (d1 / n1 * 100) if n1 > 0 else 0.0
+    m1_rate = (m1 / n1 * 100) if n1 > 0 else 0.0
+    d2_rate = (d2 / n2 * 100) if n2 > 0 else 0.0
+    m2_rate = (m2 / n2 * 100) if n2 > 0 else 0.0
+
+    labels = ["Diagnosis", "Mitigation"]
+    x = np.arange(len(labels))
+    width = 0.35
+
+    plt.figure(figsize=(8, 6))
+
+    # Agent 1 bars
+    rects1 = plt.bar(
+        x - width / 2,
+        [d1_rate, m1_rate],
+        width,
+        label=f"{name1} (n={n1})",
+        color=colors[0],
+    )
+    # Agent 2 bars
+    rects2 = plt.bar(
+        x + width / 2,
+        [d2_rate, m2_rate],
+        width,
+        label=f"{name2} (n={n2})",
+        color=colors[1],
+    )
+
+    plt.ylabel("Success Rate (%)")
+    plt.title("Diagnosis & Mitigation Success Rates")
+    plt.xticks(x, labels)
+    plt.ylim(0, 110)  # Extra space for labels
+    plt.legend()
+    plt.grid(True, axis="y", linestyle="--", alpha=0.7)
+
+    def autolabel(rects):
+        """Attach a text label above each bar in *rects*, displaying its height."""
+        for rect in rects:
+            height = rect.get_height()
+            plt.annotate(
+                f"{height:.1f}%",
+                xy=(rect.get_x() + rect.get_width() / 2, height),
+                xytext=(0, 3),  # 3 points vertical offset
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+            )
+
+    autolabel(rects1)
+    autolabel(rects2)
+
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close()
+    print(f"Success rate plot saved to {output_path}")
 
 
 if __name__ == "__main__":
