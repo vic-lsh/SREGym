@@ -93,6 +93,16 @@ async def get_problem():
     return {"problem_id": problem_id}
 
 
+@app.get("/stages")
+async def get_stages():
+    if _conductor is None:
+        logger.error("No problem has been started")
+        raise HTTPException(status_code=400, detail="No problem has been started")
+    stage_names = [s["name"] for s in _conductor.stage_sequence]
+    logger.debug(f"API returns planned stages: {stage_names}")
+    return {"stages": stage_names}
+
+
 def run_api(conductor):
     """
     Start the API server and block until request_shutdown() is called.
@@ -114,8 +124,9 @@ def run_api(conductor):
         Markdown(
             """
 **Available Endpoints**
-- **POST /submit**: `{ "solution": "<your-solution>" }` → grades the current stage  
+- **POST /submit**: `{ "solution": "<your-solution>" }` → grades the current stage
 - **GET /status**: returns `{ "stage": "setup" | "diagnosis" | "mitigation" | "done" }`
+- **GET /stages**: returns `{ "stages": ["diagnosis", "mitigation", ...] }` — planned stage sequence
 """
         )
     )

@@ -67,6 +67,22 @@ def get_problem_id() -> str:
         raise
 
 
+def get_planned_stages() -> list[str]:
+    """Get the planned stage sequence from conductor API."""
+    api_url = f"{get_api_base_url()}/stages"
+    logger.info(f"Fetching planned stages from {api_url}")
+
+    try:
+        response = requests.get(api_url)
+        response.raise_for_status()
+        stages = response.json().get("stages", [])
+        logger.info(f"Planned stages: {stages}")
+        return stages
+    except Exception as e:
+        logger.error(f"Failed to get planned stages: {e}")
+        raise
+
+
 def wait_for_ready_stage(timeout: int = 300) -> str:
     """
     Wait for conductor to reach a submission-ready stage (diagnosis or mitigation).
@@ -109,13 +125,14 @@ def wait_for_ready_stage(timeout: int = 300) -> str:
     raise TimeoutError(f"Conductor did not reach ready stage within {timeout} seconds")
 
 
-def build_instruction(app_info: dict, problem_id: str) -> str:
+def build_instruction(app_info: dict, problem_id: str, planned_stages: list[str]) -> str:
     """
     Build the instruction string for Gemini CLI.
 
     Args:
         app_info: Application information from conductor
         problem_id: Problem identifier
+        planned_stages: List of planned stage names (e.g. ["diagnosis"] or ["diagnosis", "mitigation"])
 
     Returns:
         Instruction string to pass to Gemini CLI
@@ -124,27 +141,36 @@ def build_instruction(app_info: dict, problem_id: str) -> str:
     namespace = app_info.get("namespace", "default")
     descriptions = app_info.get("descriptions", "")
 
+    has_mitigation = "mitigation" in planned_stages
+    task_count = "TWO" if has_mitigation else "ONE"
+    task_verb = "diagnosing and fixing" if has_mitigation else "diagnosing"
+
     # Build instruction similar to how it would be done in Harbor
     instruction = f"""
-You are an SRE agent tasked with diagnosing and fixing issues in a Kubernetes application.
+You are an SRE agent tasked with {task_verb} issues in a Kubernetes application.
 
 Application: {app_name}
 Namespace: {namespace}
 
 {descriptions}
 
-WORKFLOW: You will perform TWO tasks in sequence:
+WORKFLOW: You will perform {task_count} task{"s" if has_mitigation else ""} in sequence:
 
 TASK 1: DIAGNOSIS
 - Investigate the application to detect any anomalies or issues
 - Analyze metrics, logs, and traces
 - When ready, submit a natural language description of the issue you found
+"""
 
+    if has_mitigation:
+        instruction += """
 TASK 2: MITIGATION
 - Identify the root cause of the issue
 - Implement a fix to resolve the problem
 - When the fix is applied, submit to trigger validation
+"""
 
+    instruction += f"""
 HOW TO SUBMIT:
 
 The submission endpoint is: {get_api_base_url()}/submit
@@ -152,11 +178,16 @@ The submission endpoint is: {get_api_base_url()}/submit
 For DIAGNOSIS stage:
 - Submit with a natural language description of the issue
 - Example: POST {get_api_base_url()}/submit with JSON: {{"solution": "The frontend service is crashing due to missing environment variable"}}
+"""
 
+    if has_mitigation:
+        instruction += f"""
 For MITIGATION stage:
 - Submit with an EMPTY STRING after you have applied the fix
 - POST {get_api_base_url()}/submit with JSON: {{"solution": ""}}
+"""
 
+    instruction += f"""
 Important:
 - You have access to kubectl commands to inspect and modify resources in namespace '{namespace}'
 - You can query metrics and traces through the available observability tools
@@ -236,6 +267,11 @@ def main():
         action="store_true",
         help="Enable summarization of runs across iterations",
     )
+    parser.add_argument(
+        "--no-inject-summary",
+        action="store_true",
+        help="Build summaries but do not pass them to the agent",
+    )
 
     args = parser.parse_args()
 
@@ -244,6 +280,7 @@ def main():
     logger.info(f"Model: {args.model}")
     logger.info(f"Logs directory: {args.logs_dir}")
     logger.info(f"Enable summary: {args.enable_summary}")
+    logger.info(f"Inject summary: {not args.no_inject_summary}")
     logger.info("=" * 80)
 
     # Check if Gemini CLI is installed
@@ -265,12 +302,13 @@ def main():
     try:
         app_info = get_app_info()
         problem_id = get_problem_id()
+        planned_stages = get_planned_stages()
     except Exception as e:
         logger.error(f"Failed to get problem information: {e}")
         sys.exit(1)
 
     # Build instruction
-    instruction = build_instruction(app_info, problem_id)
+    instruction = build_instruction(app_info, problem_id, planned_stages)
 
     # Initialize Gemini CLI agent
     logs_dir = Path(args.logs_dir)
@@ -283,6 +321,7 @@ def main():
         sessions_dir=sessions_dir,
         summary_dir=summary_dir,
         enable_summary=args.enable_summary,
+        inject_summary=not args.no_inject_summary,
     )
 
     # Run Gemini CLI
