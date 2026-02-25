@@ -80,6 +80,7 @@ class GeminiCliAgent:
         sessions_dir: Optional[Path] = None,
         summary_dir: Optional[Path] = None,
         enable_summary: bool = False,
+        inject_summary: bool = True,
     ):
         """
         Initialize the Gemini CLI agent.
@@ -90,6 +91,7 @@ class GeminiCliAgent:
             sessions_dir: Directory for Gemini sessions (defaults to logs_dir/sessions)
             summary_dir: Directory for long-term summary (defaults to logs_dir)
             enable_summary: If True, enable accumulation of summaries across runs
+            inject_summary: If True, pass summary to agent in prompt (requires enable_summary)
         """
         self.logs_dir = Path(logs_dir)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
@@ -102,12 +104,14 @@ class GeminiCliAgent:
         self.summary_dir.mkdir(parents=True, exist_ok=True)
 
         self.enable_summary = enable_summary
+        self.inject_summary = inject_summary
 
         logger.info(f"Initialized Gemini CLI agent with model={self.model_name}")
         logger.info(f"Logs dir: {self.logs_dir}")
         logger.info(f"Sessions dir: {self.sessions_dir}")
         logger.info(f"Summary dir: {self.summary_dir}")
         logger.info(f"Enable summary: {self.enable_summary}")
+        logger.info(f"Inject summary: {self.inject_summary}")
 
     @property
     def output_path(self) -> Path:
@@ -194,8 +198,8 @@ class GeminiCliAgent:
         exp_env_dir = Path(os.getenv("SREGYM_EXP_ENV", "exp_env"))
         exp_env_dir.mkdir(exist_ok=True, parents=True)
 
-        # If summary is enabled and exists, copy it into agent's cwd and reference by path
-        if self.enable_summary and self.summary_path.exists():
+        # If summary is enabled, injection is on, and file exists, copy it into agent's cwd and reference by path
+        if self.enable_summary and self.inject_summary and self.summary_path.exists():
             try:
                 summary_in_cwd = exp_env_dir / self._SUMMARY_FILENAME
                 shutil.copy2(self.summary_path, summary_in_cwd)

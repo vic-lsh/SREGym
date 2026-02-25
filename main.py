@@ -9,6 +9,7 @@ import multiprocessing
 import os
 import platform
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -185,6 +186,7 @@ def driver_loop(
     use_external_harness: bool = False,
     repeat: int = 1,
     enable_summary: bool = False,
+    inject_summary: bool = True,
     problem_list: list = None,
     status_dict=None,
     problem_queue=None,
@@ -201,6 +203,7 @@ def driver_loop(
         agent_to_run: Agent name to run (required unless use_external_harness is True).
         use_external_harness: If True, inject fault and exit without running evaluation logic.
         enable_summary: If True, pass --enable-summary to the agent.
+        inject_summary: If True, pass summary to agent in prompt (default). If False, pass --no-inject-summary.
         problem_list: Optional list of problem IDs to run.
         status_dict: Shared dictionary for status updates (used in parallel mode).
         problem_queue: Optional multiprocessing.Queue to fetch problems from.
@@ -418,10 +421,12 @@ def driver_loop(
                             extra_args = ""
                             # Pass explicit log dir to supported agents (e.g. gemini_cli)
                             if agent_to_run == "gemini_cli":
-                                extra_args += f" --logs-dir {agent_log_dir}"
+                                extra_args += f" --logs-dir {agent_log_dir} --summary-dir {agent_base_dir}"
 
                             if enable_summary:
                                 extra_args += " --enable-summary"
+                            if not inject_summary:
+                                extra_args += " --no-inject-summary"
 
                             await LAUNCHER.ensure_started(reg, extra_args=extra_args.strip())
 
@@ -511,6 +516,8 @@ def driver_loop(
                                     "clients/gemini_cli/summarize_results.py",
                                     "--logs-dir",
                                     agent_log_dir,
+                                    "--summary-dir",
+                                    agent_base_dir,
                                     "--model",
                                     os.environ.get("MODEL_ID", "gemini-2.0-flash"),
                                 ]
@@ -605,6 +612,7 @@ def _run_driver_and_shutdown(
     use_external_harness: bool = False,
     repeat: int = 1,
     enable_summary: bool = False,
+    inject_summary: bool = True,
     problem_list: list = None,
     status_dict=None,
     problem_queue=None,
@@ -620,6 +628,7 @@ def _run_driver_and_shutdown(
             use_external_harness=use_external_harness,
             repeat=repeat,
             enable_summary=enable_summary,
+            inject_summary=inject_summary,
             problem_list=problem_list,
             status_dict=status_dict,
             problem_queue=problem_queue,
@@ -1058,6 +1067,14 @@ def run_parallel(args, config: SchedulerConfig):
         experiment_log_dir = os.path.abspath(f"logs/{dir_name}")
         os.makedirs(experiment_log_dir, exist_ok=True)
         logger.info(f"Parallel experiment logs will be stored in: {experiment_log_dir}")
+
+        # Copy seed summary into agent summary dir (for gemini_cli)
+        if args.seed_summary:
+            agent_base_dir = os.path.join(experiment_log_dir, args.agent)
+            os.makedirs(agent_base_dir, exist_ok=True)
+            dest_path = os.path.join(agent_base_dir, "long_term_summary.txt")
+            shutil.copy2(args.seed_summary, dest_path)
+            logger.info(f"Copied seed summary to {dest_path}")
 
         # Set log file for parallel runner
         log_file_path = os.path.join(experiment_log_dir, f"sregym_supervisor_{session_timestamp}.log")
@@ -1554,6 +1571,7 @@ def main(args, problem_list=None, experiment_log_dir=None, status_dict=None, pro
             args.use_external_harness,
             args.repeat,
             args.enable_summary,
+            not args.no_inject_summary,
             problem_list,
             status_dict,
             problem_queue,
@@ -1657,6 +1675,11 @@ if __name__ == "__main__":
         help="Enable summarization of results using an LLM",
     )
     parser.add_argument(
+        "--no-inject-summary",
+        action="store_true",
+        help="Build summaries but do not pass them to the agent",
+    )
+    parser.add_argument(
         "--resume-from",
         type=str,
         default=None,
@@ -1667,11 +1690,28 @@ if __name__ == "__main__":
         action="store_true",
         help="Resume experiment from the most recent log directory",
     )
+    parser.add_argument(
+        "--seed-summary",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Initial summary file for Gemini CLI agents (copied to summary dir before first run)",
+    )
     args = parser.parse_args()
 
     # Validate that --agent is provided when not using external harness
     if not args.use_external_harness and args.agent is None:
         parser.error("--agent is required when --use-external-harness is not set")
+
+    # Validate --seed-summary
+    if args.seed_summary:
+        if args.resume_last or args.resume_from:
+            parser.error("--seed-summary cannot be combined with --resume-last or --resume-from")
+        if args.agent != "gemini_cli":
+            parser.error("--seed-summary can only be used with --agent gemini_cli")
+        seed_path = Path(args.seed_summary)
+        if not seed_path.is_file():
+            parser.error(f"--seed-summary: path does not exist or is not a file: {args.seed_summary}")
 
     # Always run through the parallel wrapper to ensure consistent logging and behavior
     # even for single-worker runs (capture stdout/stderr, etc.)
