@@ -1,5 +1,6 @@
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -55,6 +56,9 @@ class AgentLauncher:
         exp_env_dir = os.getenv("SREGYM_EXP_ENV", "exp_env")
         os.makedirs(exp_env_dir, exist_ok=True)
 
+        # Use start_new_session on Unix so we can kill the entire process group
+        # (agent may spawn child processes, e.g. Gemini CLI subprocesses)
+        start_new_session = sys.platform != "win32"
         proc = subprocess.Popen(
             command,
             shell=True,
@@ -65,12 +69,18 @@ class AgentLauncher:
             text=True,
             bufsize=1,
             universal_newlines=True,
+            start_new_session=start_new_session,
         )
         ap = AgentProcess(reg.name, proc)
         self._procs[reg.name] = ap
         t = threading.Thread(target=self._pipe_logs, args=(reg.name, proc), daemon=True)
         t.start()
         return ap
+
+    def cleanup_all_agents(self, timeout: int = 5) -> None:
+        """Terminate all running agents. Used when worker receives SIGTERM/SIGINT."""
+        for name in list(self._procs.keys()):
+            self.cleanup_agent(name, timeout=timeout)
 
     def _pipe_logs(self, name: str, proc: subprocess.Popen):
         if proc.stdout is None:
@@ -82,13 +92,14 @@ class AgentLauncher:
             except Exception:
                 break
 
-    def cleanup_agent(self, agent_name: str, timeout: int = 5) -> None:
+    def cleanup_agent(self, agent_name: str, timeout: int = 10) -> None:
         """
-        Terminate and cleanup an agent process.
+        Terminate and cleanup an agent process and its entire process group.
+        Ensures no stray agent processes remain when starting the next problem.
 
         Args:
             agent_name: Name of the agent to cleanup
-            timeout: Seconds to wait for graceful termination before killing
+            timeout: Seconds to wait for graceful termination before force kill
         """
         existing = self._procs.get(agent_name)
         if not existing:
@@ -102,19 +113,38 @@ class AgentLauncher:
             self._clean_exp_env()
             return
 
-        # Try graceful termination
+        pid = existing.proc.pid
+        pgid = None
+        if sys.platform != "win32" and pid is not None:
+            try:
+                pgid = os.getpgid(pid)
+            except (ProcessLookupError, OSError):
+                pass
+
+        # Terminate entire process group (kills child processes like Gemini CLI subprocesses)
         try:
-            existing.proc.terminate()
+            if pgid is not None:
+                os.killpg(pgid, signal.SIGTERM)
+            else:
+                existing.proc.terminate()
             try:
                 existing.proc.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 # Force kill if timeout exceeded
-                existing.proc.kill()
-                existing.proc.wait()
-        except Exception:
+                if pgid is not None:
+                    try:
+                        os.killpg(pgid, signal.SIGKILL)
+                    except (ProcessLookupError, OSError):
+                        pass
+                try:
+                    existing.proc.kill()
+                    existing.proc.wait(timeout=2)
+                except (subprocess.TimeoutExpired, ProcessLookupError):
+                    pass
+        except (ProcessLookupError, OSError):
             pass
         finally:
-            # Remove from cache
+            # Remove from cache and ensure process is gone
             if agent_name in self._procs:
                 del self._procs[agent_name]
             self._clean_exp_env()

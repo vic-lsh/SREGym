@@ -9,10 +9,13 @@ import multiprocessing
 import os
 import platform
 import re
+import signal
 import subprocess
 import sys
 import threading
 import time
+
+import psutil
 from datetime import datetime
 from pathlib import Path
 import tempfile
@@ -20,6 +23,7 @@ import queue
 
 import uvicorn
 from rich.console import Console, Group
+from rich.markup import escape
 from rich.progress import (
     Progress,
     SpinnerColumn,
@@ -84,7 +88,7 @@ class SchedulerConfig:
         self.enable_resource_throttling = os.getenv("SREGYM_ENABLE_RESOURCE_THROTTLING", "true").lower() == "true"
 
 
-def _resolve_progress_mode(stream) -> str:
+def _resolve_progress_mode(stream, parallel_workers: int) -> str:
     """
     Determine progress rendering mode.
     Modes:
@@ -95,6 +99,11 @@ def _resolve_progress_mode(stream) -> str:
     raw = os.getenv("SREGYM_PROGRESS_MODE", "auto").strip().lower()
     if raw in {"rich", "plain", "off"}:
         return raw
+
+    # In parallel mode, default to plain output. Rich live rendering is fragile when
+    # any external layer captures or rewrites terminal output.
+    if parallel_workers > 1:
+        return "plain"
 
     is_tty = hasattr(stream, "isatty") and stream.isatty()
     term = os.getenv("TERM", "").strip().lower()
@@ -236,7 +245,7 @@ def driver_loop(
                 "error": str(error_message),
             }
             with open(csv_path, "w", newline="") as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=sorted(snapshot.keys()))
+                writer = csv.DictWriter(csvfile, fieldnames=sorted(snapshot.keys()), quoting=csv.QUOTE_NONNUMERIC)
                 writer.writeheader()
                 writer.writerow(snapshot)
             logger.info(f"❌ Problem {problem_id} for agent {agent_to_run} failed. Error result written to {csv_path}")
@@ -387,7 +396,9 @@ def driver_loop(
                         return []
 
                     # Define agent log directory
-                    agent_log_dir = os.path.join(experiment_log_dir, agent_to_run)
+                    # Use a unique directory per problem to avoid race conditions on instruction.txt/output files
+                    agent_base_dir = os.path.join(experiment_log_dir, agent_to_run)
+                    agent_log_dir = os.path.join(agent_base_dir, conductor.problem_id)
 
                     if not use_external_harness:
                         if status_dict is not None:
@@ -398,6 +409,8 @@ def driver_loop(
                                 "worker_id": worker_id,
                             }
 
+                        # Defensive: ensure no stale agent from previous problem before starting
+                        LAUNCHER.cleanup_agent(agent_to_run)
                         reg = get_agent(
                             agent_to_run, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml"
                         )
@@ -478,7 +491,7 @@ def driver_loop(
                     # Write results to experiment_log_dir
                     csv_path = os.path.join(experiment_log_dir, f"{current_date_time}_{pid}_{agent_to_run}_results.csv")
                     with open(csv_path, "w", newline="") as csvfile:
-                        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                        writer = csv.DictWriter(csvfile, fieldnames=fieldnames, quoting=csv.QUOTE_NONNUMERIC)
                         writer.writeheader()
                         writer.writerows([snapshot])
                     logger.info(f"✅ Problem {pid} for agent {agent_to_run} complete! Results written to {csv_path}")
@@ -526,6 +539,7 @@ def driver_loop(
                 # Ensure agent is cleaned up even if an error occurred
                 if not use_external_harness:
                     LAUNCHER.cleanup_agent(agent_to_run)
+                    await asyncio.sleep(1)  # Allow process group to fully tear down
 
                 if status_dict is not None:
                     if status_dict[pid]["status"] != "Error":
@@ -820,6 +834,24 @@ def _create_worker_cluster(worker_id: int, experiment_log_dir: str) -> tuple[str
 
     logger.info(f"Preparing isolated kind cluster for worker {worker_id}: {cluster_name}")
 
+    # Force cleanup of any lingering docker containers for this worker
+    # kind delete cluster sometimes misses these if the cluster creation was interrupted
+    try:
+        # distinct name filter to avoid deleting other workers' containers (e.g. w1 vs w10)
+        # Using name=^cluster_name- ensures we target only this cluster's nodes
+        cmd = ["docker", "ps", "-a", "-q", "--filter", f"name=^{cluster_name}-"]
+        container_ids = subprocess.check_output(cmd, text=True).strip().split()
+        if container_ids:
+            logger.info(f"Force removing lingering containers for {cluster_name}: {container_ids}")
+            subprocess.run(
+                ["docker", "rm", "-f"] + container_ids,
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+    except Exception as e:
+        logger.warning(f"Failed to force cleanup containers for {cluster_name}: {e}")
+
     # Best-effort cleanup in case a previous run crashed and left this worker cluster behind.
     subprocess.run(
         ["kind", "delete", "cluster", "--name", cluster_name],
@@ -879,8 +911,34 @@ def _worker_meta_key(worker_id: int) -> str:
     return f"{WORKER_META_KEY_PREFIX}{worker_id}"
 
 
+def _kill_process_tree(pid: int, sig: int = signal.SIGTERM) -> None:
+    """Kill a process and all its descendants. Ensures worker subprocesses (agents, kind, kubectl) are terminated."""
+    try:
+        proc = psutil.Process(pid)
+    except psutil.NoSuchProcess:
+        return
+    for child in proc.children(recursive=True):
+        try:
+            child.send_signal(sig)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    try:
+        proc.send_signal(sig)
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        pass
+
+
 def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict):
     """Worker function for parallel execution."""
+
+    def _shutdown_handler(signum, frame):
+        """On SIGTERM/SIGINT, clean up agent subprocesses before exiting."""
+        LAUNCHER.cleanup_all_agents(timeout=3)
+        os._exit(0)
+
+    signal.signal(signal.SIGTERM, _shutdown_handler)
+    signal.signal(signal.SIGINT, _shutdown_handler)
+
     os.environ["SREGYM_WORKER_ID"] = str(worker_id)
     os.environ["API_PORT"] = str(8000 + worker_id)
     os.environ["MCP_SERVER_PORT"] = str(9000 + worker_id)
@@ -1079,13 +1137,17 @@ def run_parallel(args, config: SchedulerConfig):
         sys.stderr = null_out
 
         # Remove StreamHandler from logger to prevent interference with Rich
-        root_logger = logging.getLogger("all")
-        removed_handlers = [h for h in root_logger.handlers if type(h) is logging.StreamHandler]
-        for h in removed_handlers:
-            root_logger.removeHandler(h)
+        # We also need to check the true root logger, as third-party libraries might attach there
+        loggers_to_check = [logging.getLogger("all"), logging.getLogger()]
+        removed_handlers_by_logger = []
+        for logger_obj in loggers_to_check:
+            removed = [h for h in logger_obj.handlers if isinstance(h, logging.StreamHandler)]
+            for h in removed:
+                logger_obj.removeHandler(h)
+            removed_handlers_by_logger.append((logger_obj, removed))
 
         try:
-            progress_mode = _resolve_progress_mode(original_stdout)
+            progress_mode = _resolve_progress_mode(original_stdout, args.parallel)
             logger.info(f"Progress output mode: {progress_mode}")
 
             console = Console(file=original_stdout, force_terminal=(progress_mode == "rich"))
@@ -1334,7 +1396,7 @@ def run_parallel(args, config: SchedulerConfig):
                             elif status.startswith("Completed") or status.startswith("Error"):
                                 completed_pct = 100
 
-                            desc = f"Worker {i}: [cyan]{pid}[/cyan] - {status} [yellow]({elapsed}s)[/yellow]"
+                            desc = f"Worker {i}: [cyan]{escape(str(pid))}[/cyan] - {escape(str(status))} [yellow]({elapsed}s)[/yellow]"
                             progress.update(worker_tasks[i], description=desc, completed=completed_pct)
                         else:
                             # Worker is alive but idle (or between tasks)
@@ -1344,7 +1406,7 @@ def run_parallel(args, config: SchedulerConfig):
                                 elapsed = int(time.time() - start_t)
                                 progress.update(
                                     worker_tasks[i],
-                                    description=f"Worker {i}: [blue]{meta.get('status')}[/blue] [yellow]({elapsed}s)[/yellow]",
+                                    description=f"Worker {i}: [blue]{escape(str(meta.get('status')))}[/blue] [yellow]({elapsed}s)[/yellow]",
                                     completed=0,
                                 )
                             else:
@@ -1385,8 +1447,9 @@ def run_parallel(args, config: SchedulerConfig):
             null_out.close()
 
             # Restore handlers
-            for h in removed_handlers:
-                root_logger.addHandler(h)
+            for logger_obj, handlers in removed_handlers_by_logger:
+                for h in handlers:
+                    logger_obj.addHandler(h)
 
     except KeyboardInterrupt:
         logger.info("\n🛑 Interrupted by user. Terminating workers...")
@@ -1404,9 +1467,12 @@ def run_parallel(args, config: SchedulerConfig):
 
     for p in processes:
         if p.is_alive():
-            logger.warning(f"Worker {worker_map.get(p)} did not exit, forcing termination...")
-            p.terminate()
-            p.join(timeout=1)
+            logger.warning(f"Worker {worker_map.get(p)} did not exit, killing process tree...")
+            _kill_process_tree(p.pid, signal.SIGTERM)
+            p.join(timeout=2)
+            if p.is_alive():
+                _kill_process_tree(p.pid, signal.SIGKILL)
+                p.join(timeout=1)
         else:
             p.join()
 
