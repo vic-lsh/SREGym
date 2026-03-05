@@ -11,7 +11,7 @@ import yaml
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from llm_backend.init_backend import get_llm_backend_for_tools
+from llm_backend.init_backend import get_llm_backend_for_model, get_llm_backend_for_tools
 
 load_dotenv()
 
@@ -46,7 +46,9 @@ class LLMJudge:
     def backend(self):
         """Lazily initialize the LLM backend only when needed."""
         if self._backend is None:
-            self._backend = get_llm_backend_for_tools()
+            judge_model = os.environ.get("JUDGE_MODEL_ID") or os.environ.get("MODEL_ID", "gpt-4o")
+            print("Found JUDGE_MODEL_ID: ", judge_model)
+            self._backend = get_llm_backend_for_model(judge_model)
         return self._backend
 
     def judge(self, solution: str, expectation: str) -> tuple[JudgmentResult, str]:

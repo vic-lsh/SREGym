@@ -1569,6 +1569,8 @@ def main(args, problem_list=None, experiment_log_dir=None, status_dict=None, pro
             logger.warning(f"⚠️ Failed to initialize noise manager: {e}")
 
     os.environ["MODEL_ID"] = args.model
+    if getattr(args, "judge_model", None):
+        os.environ["JUDGE_MODEL_ID"] = args.judge_model
 
     # Enforce explicit kubeconfig selection for every process and worker.
     base_kubeconfig = require_kubeconfig_path()
@@ -1703,6 +1705,13 @@ if __name__ == "__main__":
         default=None,
         help="Model ID for summarization LLM (default: same as --model / MODEL_ID). "
              "Useful to use a cheaper model for summarization, e.g. gemini-2.5-flash.",
+    )
+    parser.add_argument(
+        "--judge-model",
+        type=str,
+        default=None,
+        help="Model ID for the LLM-as-a-judge (default: same as --model / MODEL_ID). "
+             "Useful to use a different model for evaluation, e.g. 'gpt-4o'.",
     )
     parser.add_argument(
         "--resume-from",
