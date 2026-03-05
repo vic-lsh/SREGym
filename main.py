@@ -56,6 +56,16 @@ LAUNCHER = AgentLauncher()
 # Ensure logger inherits from 'all' so handlers are attached
 logger = logging.getLogger("all.main")
 
+# Agents that support the summary system (accumulate learnings across runs).
+# Maps agent name -> output filename used by that agent.
+AGENT_OUTPUT_FILES = {"gemini_cli": "gemini-cli.txt", "claudecode": "claude-code.txt"}
+
+
+def agent_supports_summary(agent_name: str) -> bool:
+    """Return True if the given agent supports the shared summary system."""
+    return agent_name in AGENT_OUTPUT_FILES
+
+
 KIND_CLUSTER_PREFIX = "sregym-w"
 WORKER_META_KEY_PREFIX = "__worker_meta__"
 OPENEBS_PRELOAD_IMAGES = [
@@ -187,6 +197,7 @@ def driver_loop(
     repeat: int = 1,
     enable_summary: bool = False,
     inject_summary: bool = True,
+    summary_model: str = None,
     problem_list: list = None,
     status_dict=None,
     problem_queue=None,
@@ -420,7 +431,7 @@ def driver_loop(
                         if reg:
                             extra_args = ""
                             # Pass explicit log dir to supported agents (e.g. gemini_cli)
-                            if agent_to_run == "gemini_cli":
+                            if agent_supports_summary(agent_to_run):
                                 extra_args += f" --logs-dir {agent_log_dir} --summary-dir {agent_base_dir}"
 
                             if enable_summary:
@@ -506,20 +517,24 @@ def driver_loop(
                         LAUNCHER.cleanup_agent(agent_to_run)
                         console.log(f"🧹 Cleaned up agent process for {agent_to_run}")
 
-                        # Run summarization if enabled (specifically for gemini_cli)
-                        if enable_summary and agent_to_run == "gemini_cli":
-                            console.log("📝 Running external summarization for Gemini CLI...")
+                        # Run summarization if enabled
+                        if enable_summary and agent_supports_summary(agent_to_run):
+                            output_filename = AGENT_OUTPUT_FILES[agent_to_run]
+                            effective_summary_model = summary_model or os.environ.get("MODEL_ID", "gemini-2.5-flash")
+                            console.log(f"📝 Running external summarization for {agent_to_run}...")
                             try:
-                                # Run summarization script
                                 summarize_cmd = [
                                     sys.executable,
-                                    "clients/gemini_cli/summarize_results.py",
+                                    "-m",
+                                    "clients.common.summarize",
                                     "--logs-dir",
                                     agent_log_dir,
                                     "--summary-dir",
                                     agent_base_dir,
                                     "--model",
-                                    os.environ.get("MODEL_ID", "gemini-2.0-flash"),
+                                    effective_summary_model,
+                                    "--output-filename",
+                                    output_filename,
                                 ]
                                 result = subprocess.run(summarize_cmd, capture_output=True, text=True)
                                 if result.returncode == 0:
@@ -613,6 +628,7 @@ def _run_driver_and_shutdown(
     repeat: int = 1,
     enable_summary: bool = False,
     inject_summary: bool = True,
+    summary_model: str = None,
     problem_list: list = None,
     status_dict=None,
     problem_queue=None,
@@ -629,6 +645,7 @@ def _run_driver_and_shutdown(
             repeat=repeat,
             enable_summary=enable_summary,
             inject_summary=inject_summary,
+            summary_model=summary_model,
             problem_list=problem_list,
             status_dict=status_dict,
             problem_queue=problem_queue,
@@ -1068,7 +1085,7 @@ def run_parallel(args, config: SchedulerConfig):
         os.makedirs(experiment_log_dir, exist_ok=True)
         logger.info(f"Parallel experiment logs will be stored in: {experiment_log_dir}")
 
-        # Copy seed summary into agent summary dir (for gemini_cli)
+        # Copy seed summary into agent summary dir
         if args.seed_summary:
             agent_base_dir = os.path.join(experiment_log_dir, args.agent)
             os.makedirs(agent_base_dir, exist_ok=True)
@@ -1572,6 +1589,7 @@ def main(args, problem_list=None, experiment_log_dir=None, status_dict=None, pro
             args.repeat,
             args.enable_summary,
             not args.no_inject_summary,
+            getattr(args, "summary_model", None),
             problem_list,
             status_dict,
             problem_queue,
@@ -1680,6 +1698,13 @@ if __name__ == "__main__":
         help="Build summaries but do not pass them to the agent",
     )
     parser.add_argument(
+        "--summary-model",
+        type=str,
+        default=None,
+        help="Model ID for summarization LLM (default: same as --model / MODEL_ID). "
+             "Useful to use a cheaper model for summarization, e.g. gemini-2.5-flash.",
+    )
+    parser.add_argument(
         "--resume-from",
         type=str,
         default=None,
@@ -1695,7 +1720,7 @@ if __name__ == "__main__":
         type=str,
         default=None,
         metavar="PATH",
-        help="Initial summary file for Gemini CLI agents (copied to summary dir before first run)",
+        help="Initial summary file (copied to summary dir before first run). Works with gemini_cli and claudecode.",
     )
     args = parser.parse_args()
 
@@ -1707,8 +1732,8 @@ if __name__ == "__main__":
     if args.seed_summary:
         if args.resume_last or args.resume_from:
             parser.error("--seed-summary cannot be combined with --resume-last or --resume-from")
-        if args.agent != "gemini_cli":
-            parser.error("--seed-summary can only be used with --agent gemini_cli")
+        if not agent_supports_summary(args.agent):
+            parser.error(f"--seed-summary can only be used with agents that support summaries: {list(AGENT_OUTPUT_FILES)}")
         seed_path = Path(args.seed_summary)
         if not seed_path.is_file():
             parser.error(f"--seed-summary: path does not exist or is not a file: {args.seed_summary}")

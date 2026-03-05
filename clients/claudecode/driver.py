@@ -224,6 +224,22 @@ def main():
         action="store_true",
         help="Disable auto-installation of Claude Code CLI if not found",
     )
+    parser.add_argument(
+        "--summary-dir",
+        type=str,
+        default=None,
+        help="Directory for long-term summary (default: logs-dir)",
+    )
+    parser.add_argument(
+        "--enable-summary",
+        action="store_true",
+        help="Enable summarization of runs across iterations",
+    )
+    parser.add_argument(
+        "--no-inject-summary",
+        action="store_true",
+        help="Build summaries but do not pass them to the agent",
+    )
 
     args = parser.parse_args()
 
@@ -231,6 +247,8 @@ def main():
     logger.info("Starting Claude Code agent for SREGym")
     logger.info(f"Model: {args.model}")
     logger.info(f"Logs directory: {args.logs_dir}")
+    logger.info(f"Enable summary: {args.enable_summary}")
+    logger.info(f"Inject summary: {not args.no_inject_summary}")
     logger.info("=" * 80)
 
     # Check if Claude Code CLI is installed
@@ -262,11 +280,15 @@ def main():
     # Initialize Claude Code agent
     logs_dir = Path(args.logs_dir)
     sessions_dir = Path(args.sessions_dir) if args.sessions_dir else None
+    summary_dir = Path(args.summary_dir) if args.summary_dir else None
 
     agent = ClaudeCodeAgent(
         logs_dir=logs_dir,
         model_name=args.model,
         sessions_dir=sessions_dir,
+        summary_dir=summary_dir,
+        enable_summary=args.enable_summary,
+        inject_summary=not args.no_inject_summary,
     )
 
     # Run Claude Code

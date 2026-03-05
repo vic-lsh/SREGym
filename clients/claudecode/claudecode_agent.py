@@ -23,6 +23,7 @@ class ClaudeCodeAgent:
     """
 
     _OUTPUT_FILENAME = "claude-code.txt"
+    _SUMMARY_FILENAME = "long_term_summary.txt"
 
     @staticmethod
     def check_installation() -> bool:
@@ -110,6 +111,9 @@ class ClaudeCodeAgent:
         logs_dir: Path,
         model_name: str,
         sessions_dir: Optional[Path] = None,
+        summary_dir: Optional[Path] = None,
+        enable_summary: bool = False,
+        inject_summary: bool = True,
     ):
         """
         Initialize the Claude Code agent.
@@ -118,6 +122,9 @@ class ClaudeCodeAgent:
             logs_dir: Directory to store logs and output
             model_name: Model name to use (e.g., "claude-sonnet-4-5")
             sessions_dir: Directory for Claude Code sessions (defaults to logs_dir/sessions)
+            summary_dir: Directory for long-term summary (defaults to logs_dir)
+            enable_summary: If True, enable accumulation of summaries across runs
+            inject_summary: If True, pass summary to agent in prompt (requires enable_summary)
         """
         self.logs_dir = Path(logs_dir)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
@@ -126,14 +133,28 @@ class ClaudeCodeAgent:
         self.sessions_dir = Path(sessions_dir) if sessions_dir else self.logs_dir / "sessions"
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
 
+        self.summary_dir = Path(summary_dir) if summary_dir else self.logs_dir
+        self.summary_dir.mkdir(parents=True, exist_ok=True)
+
+        self.enable_summary = enable_summary
+        self.inject_summary = inject_summary
+
         logger.info(f"Initialized Claude Code agent with model={model_name}")
         logger.info(f"Logs dir: {self.logs_dir}")
         logger.info(f"Sessions dir: {self.sessions_dir}")
+        logger.info(f"Summary dir: {self.summary_dir}")
+        logger.info(f"Enable summary: {self.enable_summary}")
+        logger.info(f"Inject summary: {self.inject_summary}")
 
     @property
     def output_path(self) -> Path:
         """Path to Claude Code output file."""
         return self.logs_dir / self._OUTPUT_FILENAME
+
+    @property
+    def summary_path(self) -> Path:
+        """Path to the long-term summary file."""
+        return self.summary_dir / self._SUMMARY_FILENAME
 
     @property
     def trajectory_path(self) -> Path:
@@ -284,6 +305,19 @@ class ClaudeCodeAgent:
         # Pass through MAX_THINKING_TOKENS if set
         if "MAX_THINKING_TOKENS" in os.environ:
             env["MAX_THINKING_TOKENS"] = os.environ["MAX_THINKING_TOKENS"]
+
+        # If summary is enabled, injection is on, and file exists, copy it into agent's cwd and reference by path
+        if self.enable_summary and self.inject_summary and self.summary_path.exists():
+            try:
+                summary_in_cwd = exp_env_dir / self._SUMMARY_FILENAME
+                shutil.copy2(self.summary_path, summary_in_cwd)
+                instruction += (
+                    f"\n\nIMPORTANT: A summary of findings from previous runs is available at: {self._SUMMARY_FILENAME}\n"
+                    "Read it to avoid repeating mistakes or to speed up diagnosis.\n"
+                )
+                logger.info("Copied existing long-term summary into agent cwd and referenced by path.")
+            except Exception as e:
+                logger.warning(f"Failed to copy existing summary: {e}")
 
         # Build Claude Code command
         command = [

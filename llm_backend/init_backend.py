@@ -50,16 +50,15 @@ def set_param(params, config, field, default_value, required=False):
         # else do nothing
 
 
-def get_llm_backend_for_tools():
+def get_llm_backend_for_model(model_id: str) -> LiteLLMBackend:
+    """Build LLM backend for a given model ID using configs.yaml."""
     llm_config = load_model_config()
 
-    MODEL_ID = os.environ.get("MODEL_ID", "gpt-4o")
-    print("Found MODEL_ID: ", MODEL_ID)
-
-    if MODEL_ID not in llm_config:
-        print(f"Unable to find model configuration - {MODEL_ID}. Available models: {[key for key in llm_config]}")
-        exit(1)
-    model_config = llm_config[MODEL_ID]
+    if model_id not in llm_config:
+        raise ValueError(
+            f"Model {model_id} not found in configs.yaml. Available: {list(llm_config)}"
+        )
+    model_config = llm_config[model_id]
 
     if model_config["provider"] == "litellm":
         config_params = {
@@ -131,3 +130,9 @@ def get_llm_backend_for_tools():
 
     else:
         raise ValueError(f"Unsupported provider - {model_config['provider']}. Exiting...")
+
+
+def get_llm_backend_for_tools() -> LiteLLMBackend:
+    MODEL_ID = os.environ.get("MODEL_ID", "gpt-4o")
+    print("Found MODEL_ID: ", MODEL_ID)
+    return get_llm_backend_for_model(MODEL_ID)
