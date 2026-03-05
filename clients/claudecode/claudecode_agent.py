@@ -331,6 +331,13 @@ class ClaudeCodeAgent:
             except Exception as e:
                 logger.warning(f"Failed to copy existing summary: {e}")
 
+        # Save instruction to file for summarizer
+        instruction_path = self.logs_dir / "instruction.txt"
+        try:
+            instruction_path.write_text(instruction)
+        except Exception as e:
+            logger.warning(f"Failed to save instruction to file: {e}")
+
         # Build Claude Code command
         command = [
             "claude",

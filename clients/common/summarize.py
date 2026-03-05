@@ -54,7 +54,14 @@ class ResultSummarizer:
             )
 
     def _get_instruction_text(self) -> str:
-        """Extract instruction from the first user message in the output file."""
+        """Extract instruction from instruction.txt, or fall back to the output file."""
+        instruction_file = self.logs_dir / "instruction.txt"
+        if instruction_file.exists():
+            try:
+                return instruction_file.read_text().strip()
+            except Exception as e:
+                logger.warning(f"Failed to read instruction.txt: {e}")
+
         if not self.output_path.exists():
             return ""
 
