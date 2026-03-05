@@ -286,6 +286,18 @@ class ClaudeCodeAgent:
         oauth_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
 
         if not api_key and not oauth_token:
+            # Fall back to Claude Code's local credentials file
+            credentials_path = Path.home() / ".claude" / ".credentials.json"
+            try:
+                with open(credentials_path) as f:
+                    creds = json.load(f)
+                oauth_token = creds.get("claudeAiOauth", {}).get("accessToken", "")
+                if oauth_token:
+                    logger.info("Using local Claude Code credentials from %s", credentials_path)
+            except (FileNotFoundError, json.JSONDecodeError, KeyError):
+                pass
+
+        if not api_key and not oauth_token:
             logger.error("=" * 80)
             logger.error("ERROR: No Anthropic API authentication found")
             logger.error("Please set one of the following environment variables:")
