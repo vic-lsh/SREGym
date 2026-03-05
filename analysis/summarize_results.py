@@ -318,10 +318,24 @@ def diff_results(dir1, dir2):
         n_comp = len(completed)
         d_succ = sum(1 for r in completed if r.get("Diagnosis.success") == "True")
         m_succ = sum(1 for r in completed if r.get("Mitigation.success") == "True")
-        return total, n_comp, d_succ, m_succ
+        ttls, ttms = [], []
+        for r in completed:
+            try:
+                if r.get("TTL"):
+                    ttls.append(float(r["TTL"]))
+            except (ValueError, TypeError):
+                pass
+            try:
+                if r.get("TTM"):
+                    ttms.append(float(r["TTM"]))
+            except (ValueError, TypeError):
+                pass
+        avg_ttl = sum(ttls) / len(ttls) if ttls else 0.0
+        avg_ttm = sum(ttms) / len(ttms) if ttms else 0.0
+        return total, n_comp, d_succ, m_succ, avg_ttl, avg_ttm
 
-    t1, c1, d1, m1 = get_stats(runs1_map)
-    t2, c2, d2, m2 = get_stats(runs2_map)
+    t1, c1, d1, m1, attl1, attm1 = get_stats(runs1_map)
+    t2, c2, d2, m2, attl2, attm2 = get_stats(runs2_map)
 
     w_col = max(len(name1), len(name2), 18)
 
@@ -343,6 +357,15 @@ def diff_results(dir1, dir2):
     m1_s = f"{m1}/{c1} ({m1_pct:.1f}%)"
     m2_s = f"{m2}/{c2} ({m2_pct:.1f}%)"
     print(f"{'Mitigation Success':<25} | {m1_s:<{w_col}} | {m2_s:<{w_col}} | {m1_pct - m2_pct:+.1f}%")
+
+    attl1_s = f"{attl1:.1f}s"
+    attl2_s = f"{attl2:.1f}s"
+    print(f"{'Avg TTL':<25} | {attl1_s:<{w_col}} | {attl2_s:<{w_col}} | {attl1 - attl2:+.1f}s")
+
+    attm1_s = f"{attm1:.1f}s"
+    attm2_s = f"{attm2:.1f}s"
+    print(f"{'Avg TTM':<25} | {attm1_s:<{w_col}} | {attm2_s:<{w_col}} | {attm1 - attm2:+.1f}s")
+
     print("=" * (30 + 2 * w_col + 15) + "\n")
 
     # Comparison Logic
