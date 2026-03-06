@@ -16,10 +16,9 @@ import base64
 import json
 import logging
 import os
-import ssl
 import tempfile
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Set
 from urllib.parse import urlparse
 
@@ -38,6 +37,11 @@ HIDDEN_NAMESPACES: Set[str] = {"chaos-mesh", "khaos"}
 # Disable SSL warnings for self-signed certs
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# Upstream connection pool settings
+_POOL_MAXSIZE = 20
+_CONNECT_TIMEOUT = 10  # seconds
+_READ_TIMEOUT = 120  # seconds
+
 
 class KubernetesAPIProxy:
     """Manages the Kubernetes API filtering proxy."""
@@ -50,9 +54,10 @@ class KubernetesAPIProxy:
     ):
         self.hidden_namespaces: Set[str] = hidden_namespaces if hidden_namespaces is not None else HIDDEN_NAMESPACES
         self.listen_port = listen_port
-        self.server: HTTPServer | None = None
+        self.server: ThreadingHTTPServer | None = None
         self.server_thread: threading.Thread | None = None
         self._temp_files: list = []
+        self._upstream_pool: urllib3.HTTPSConnectionPool | None = None
 
         # Load Kubernetes config to get upstream API details.
         self.kubeconfig_path = require_kubeconfig_path(kubeconfig_path)
@@ -151,34 +156,32 @@ class KubernetesAPIProxy:
 
         return files
 
+    def _create_upstream_pool(self, cert_files: dict) -> urllib3.HTTPSConnectionPool:
+        """Create a connection pool to the upstream Kubernetes API."""
+        return urllib3.HTTPSConnectionPool(
+            self.api_host,
+            self.api_port,
+            maxsize=_POOL_MAXSIZE,
+            timeout=urllib3.Timeout(connect=_CONNECT_TIMEOUT, read=_READ_TIMEOUT),
+            retries=False,
+            ca_certs=cert_files.get("ca"),
+            cert_file=cert_files.get("cert"),
+            key_file=cert_files.get("key"),
+        )
+
     def start(self):
         """Start the proxy server in a background thread."""
         cert_files = self._create_temp_cert_files()
+        upstream_pool = self._create_upstream_pool(cert_files)
+        self._upstream_pool = upstream_pool
+
         hidden_namespaces = self.hidden_namespaces
-        api_host = self.api_host
-        api_port = self.api_port
 
         class FilteringProxyHandler(BaseHTTPRequestHandler):
             """HTTP request handler that proxies and filters Kubernetes API responses."""
 
             def log_message(self, format, *args):
                 logger.debug(f"Proxy: {format % args}")
-
-            def _get_upstream_connection(self):
-                """Create HTTPS connection to upstream Kubernetes API."""
-                import http.client
-
-                context = ssl.create_default_context()
-                if cert_files.get("ca"):
-                    context.load_verify_locations(cert_files["ca"])
-                else:
-                    context.check_hostname = False
-                    context.verify_mode = ssl.CERT_NONE
-
-                if cert_files.get("cert") and cert_files.get("key"):
-                    context.load_cert_chain(cert_files["cert"], cert_files["key"])
-
-                return http.client.HTTPSConnection(api_host, api_port, context=context)
 
             def _is_hidden_namespace_request(self, path: str) -> bool:
                 """Check if request is for a hidden namespace."""
@@ -274,24 +277,22 @@ class KubernetesAPIProxy:
                 content_length = int(self.headers.get("Content-Length", 0))
                 body = self.rfile.read(content_length) if content_length > 0 else None
 
-                # Forward request to upstream
+                # Forward request to upstream via connection pool
                 try:
-                    conn = self._get_upstream_connection()
-                    # Forward headers (except Host and Accept-Encoding to avoid gzip)
+                    # Forward headers (except Host and Accept-Encoding so urllib3 controls compression)
                     headers = {k: v for k, v in self.headers.items() if k.lower() not in ("host", "accept-encoding")}
-                    conn.request(method, path, body=body, headers=headers)
-                    response = conn.getresponse()
+                    response = upstream_pool.urlopen(
+                        method,
+                        path,
+                        body=body,
+                        headers=headers,
+                        redirect=False,
+                        preload_content=True,
+                        decode_content=True,  # urllib3 handles gzip/deflate decompression
+                    )
 
-                    # Read response
-                    response_body = response.read()
-                    content_type = response.getheader("Content-Type", "")
-                    content_encoding = response.getheader("Content-Encoding", "")
-
-                    # Decompress if gzip-encoded
-                    if content_encoding == "gzip":
-                        import gzip
-
-                        response_body = gzip.decompress(response_body)
+                    response_body = response.data
+                    content_type = response.headers.get("Content-Type", "")
 
                     # Filter JSON responses if needed
                     filter_type = self._should_filter_response(path)
@@ -307,20 +308,30 @@ class KubernetesAPIProxy:
                             pass  # Not valid JSON, pass through as-is
 
                     # Send response to client
-                    self.send_response(response.status)
-                    for header, value in response.getheaders():
-                        # Skip headers we're modifying
-                        if header.lower() not in ("transfer-encoding", "content-length", "content-encoding"):
-                            self.send_header(header, value)
-                    self.send_header("Content-Length", str(len(response_body)))
-                    self.end_headers()
-                    self.wfile.write(response_body)
+                    try:
+                        self.send_response(response.status)
+                        for header, value in response.headers.items():
+                            # Skip headers we're modifying
+                            if header.lower() not in ("transfer-encoding", "content-length", "content-encoding"):
+                                self.send_header(header, value)
+                        self.send_header("Content-Length", str(len(response_body)))
+                        self.end_headers()
+                        self.wfile.write(response_body)
+                    except BrokenPipeError:
+                        logger.debug(f"Client disconnected before response was sent for {path}")
 
-                    conn.close()
-
+                except urllib3.exceptions.TimeoutError as e:
+                    logger.warning(f"Upstream timeout for {method} {path}: {e}")
+                    try:
+                        self.send_error(504, "Gateway Timeout")
+                    except BrokenPipeError:
+                        pass
                 except Exception as e:
-                    logger.error(f"Proxy error: {e}")
-                    self.send_error(502, f"Bad Gateway: {str(e)}")
+                    logger.error(f"Proxy error for {method} {path}: {e}")
+                    try:
+                        self.send_error(502, f"Bad Gateway: {str(e)}")
+                    except BrokenPipeError:
+                        pass
 
             def do_GET(self):
                 self._proxy_request("GET")
@@ -343,8 +354,8 @@ class KubernetesAPIProxy:
             def do_HEAD(self):
                 self._proxy_request("HEAD")
 
-        # Create and start server
-        self.server = HTTPServer(("127.0.0.1", self.listen_port), FilteringProxyHandler)
+        # Create and start threaded server (handles concurrent requests)
+        self.server = ThreadingHTTPServer(("127.0.0.1", self.listen_port), FilteringProxyHandler)
         self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.server_thread.start()
         logger.info(f"Kubernetes API filtering proxy started on port {self.listen_port}")
@@ -368,6 +379,11 @@ class KubernetesAPIProxy:
             self.server = None
             self.server_thread = None
             logger.info("Kubernetes API filtering proxy stopped")
+
+        # Close connection pool
+        if self._upstream_pool is not None:
+            self._upstream_pool.close()
+            self._upstream_pool = None
 
         # Cleanup temp files
         for temp_file in self._temp_files:
