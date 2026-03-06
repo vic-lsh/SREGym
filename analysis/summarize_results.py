@@ -11,6 +11,18 @@ try:
     import numpy as np
 
     HAS_PLOTTING = True
+
+    _base = plt.rcParams["font.size"]
+    plt.rcParams.update(
+        {
+            "font.size": _base * 1.25,
+            "axes.titlesize": plt.rcParams["axes.titlesize"] * 1.25,
+            "axes.labelsize": plt.rcParams["axes.labelsize"] * 1.25,
+            "xtick.labelsize": plt.rcParams["xtick.labelsize"] * 1.25,
+            "ytick.labelsize": plt.rcParams["ytick.labelsize"] * 1.25,
+            "legend.fontsize": plt.rcParams["legend.fontsize"] * 1.25,
+        }
+    )
 except ImportError:
     HAS_PLOTTING = False
     plt = None
