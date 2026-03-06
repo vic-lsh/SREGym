@@ -318,6 +318,10 @@ class ClaudeCodeAgent:
         if "MAX_THINKING_TOKENS" in os.environ:
             env["MAX_THINKING_TOKENS"] = os.environ["MAX_THINKING_TOKENS"]
 
+        # Ensure exp_env directory exists
+        exp_env_dir = Path(os.getenv("SREGYM_EXP_ENV", "exp_env"))
+        exp_env_dir.mkdir(exist_ok=True, parents=True)
+
         # If summary is enabled, injection is on, and file exists, copy it into agent's cwd and reference by path
         if self.enable_summary and self.inject_summary and self.summary_path.exists():
             try:
@@ -350,10 +354,6 @@ class ClaudeCodeAgent:
         ] + self.ALLOWED_TOOLS
 
         logger.info(f"Executing command: {' '.join(command)}")
-
-        # Ensure exp_env directory exists
-        exp_env_dir = Path(os.getenv("SREGYM_EXP_ENV", "exp_env"))
-        exp_env_dir.mkdir(exist_ok=True, parents=True)
 
         try:
             # Run Claude Code and capture output
