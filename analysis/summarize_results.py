@@ -12,15 +12,15 @@ try:
 
     HAS_PLOTTING = True
 
-    _base = plt.rcParams["font.size"]
+    _base = plt.rcParams["font.size"]  # default 10
     plt.rcParams.update(
         {
             "font.size": _base * 1.25,
-            "axes.titlesize": plt.rcParams["axes.titlesize"] * 1.25,
-            "axes.labelsize": plt.rcParams["axes.labelsize"] * 1.25,
-            "xtick.labelsize": plt.rcParams["xtick.labelsize"] * 1.25,
-            "ytick.labelsize": plt.rcParams["ytick.labelsize"] * 1.25,
-            "legend.fontsize": plt.rcParams["legend.fontsize"] * 1.25,
+            "axes.titlesize": _base * 1.5,    # default "large" ~= 1.2x base
+            "axes.labelsize": _base * 1.25,
+            "xtick.labelsize": _base * 1.25,
+            "ytick.labelsize": _base * 1.25,
+            "legend.fontsize": _base * 1.25,
         }
     )
 except ImportError:
