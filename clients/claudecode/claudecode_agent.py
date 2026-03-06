@@ -6,61 +6,27 @@ Based on Harbor's Claude Code agent implementation for parity experiments.
 import json
 import logging
 import os
-import shutil
 import subprocess
-import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
+
+from clients.common.base_agent import BaseAgent, RunInterceptor
 
 logger = logging.getLogger("all.claudecode.agent")
 
 
-class ClaudeCodeAgent:
-    """
-    The Claude Code agent uses Claude's CLI tool to solve tasks.
-
-    This implementation closely mirrors Harbor's Claude Code agent for parity experiments.
-    """
-
+class ClaudeCodeAgent(BaseAgent):
+    _CLI_NAME = "claude"
     _OUTPUT_FILENAME = "claude-code.txt"
-    _SUMMARY_FILENAME = "long_term_summary.txt"
 
-    @staticmethod
-    def check_installation() -> bool:
-        """
-        Check if Claude Code CLI is installed.
+    ALLOWED_TOOLS = [
+        "Bash", "Edit", "Write", "Read", "Glob", "Grep", "LS",
+        "WebFetch", "NotebookEdit", "NotebookRead", "TodoRead", "TodoWrite",
+        "Agent", "Skill", "SlashCommand", "Task", "WebSearch",
+    ]
 
-        Returns:
-            True if claude is available, False otherwise
-        """
-        return shutil.which("claude") is not None
-
-    @staticmethod
-    def ensure_installed(auto_install: bool = True) -> None:
-        """
-        Ensure Claude Code CLI is installed, optionally attempting installation.
-
-        Args:
-            auto_install: If True, attempt to install claude if not found
-
-        Raises:
-            RuntimeError: If claude is not installed and auto_install fails
-        """
-        if ClaudeCodeAgent.check_installation():
-            logger.info("Claude Code CLI is already installed")
-            return
-
-        logger.warning("Claude Code CLI not found in PATH")
-
-        if not auto_install:
-            raise RuntimeError(
-                "Claude Code CLI is not installed. Please install it using:\n"
-                "  npm install -g @anthropic-ai/claude-code\n"
-                "Or visit: https://docs.claude.ai/claude-code"
-            )
-
-        # Attempt auto-installation
-        logger.info("Attempting to install Claude Code CLI via npm...")
+    @classmethod
+    def _install(cls) -> None:
         try:
             subprocess.check_call(
                 ["npm", "install", "-g", "@anthropic-ai/claude-code"],
@@ -68,109 +34,39 @@ class ClaudeCodeAgent:
                 stderr=subprocess.PIPE,
             )
             logger.info("Successfully installed Claude Code CLI")
-
-            # Verify installation
-            if not ClaudeCodeAgent.check_installation():
-                raise RuntimeError(
-                    "Claude Code CLI installation appeared to succeed but command is still not available"
-                )
-
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            error_msg = f"Failed to auto-install Claude Code CLI: {e}\n"
-            if isinstance(e, FileNotFoundError):
-                error_msg += "npm is not installed. Please install Node.js and npm first.\n"
-            error_msg += (
-                "Please install Claude Code manually using:\n"
-                "  npm install -g @anthropic-ai/claude-code\n"
-                "Or visit: https://docs.claude.ai/claude-code"
-            )
-            raise RuntimeError(error_msg)
-
-    ALLOWED_TOOLS = [
-        "Bash",
-        "Edit",
-        "Write",
-        "Read",
-        "Glob",
-        "Grep",
-        "LS",
-        "WebFetch",
-        "NotebookEdit",
-        "NotebookRead",
-        "TodoRead",
-        "TodoWrite",
-        "Agent",
-        "Skill",
-        "SlashCommand",
-        "Task",
-        "WebSearch",
-    ]
+        except FileNotFoundError as e:
+            raise FileNotFoundError(
+                "npm is not installed. Please install Node.js and npm first.\n"
+                "Then run: npm install -g @anthropic-ai/claude-code"
+            ) from e
 
     def __init__(
         self,
         logs_dir: Path,
         model_name: str,
         sessions_dir: Optional[Path] = None,
-        summary_dir: Optional[Path] = None,
-        enable_summary: bool = False,
-        inject_summary: bool = True,
+        interceptors: Optional[list[RunInterceptor]] = None,
     ):
-        """
-        Initialize the Claude Code agent.
+        super().__init__(logs_dir=logs_dir, model_name=model_name, interceptors=interceptors)
 
-        Args:
-            logs_dir: Directory to store logs and output
-            model_name: Model name to use (e.g., "claude-sonnet-4-5")
-            sessions_dir: Directory for Claude Code sessions (defaults to logs_dir/sessions)
-            summary_dir: Directory for long-term summary (defaults to logs_dir)
-            enable_summary: If True, enable accumulation of summaries across runs
-            inject_summary: If True, pass summary to agent in prompt (requires enable_summary)
-        """
-        self.logs_dir = Path(logs_dir)
-        self.logs_dir.mkdir(parents=True, exist_ok=True)
-
-        self.model_name = model_name
         self.sessions_dir = Path(sessions_dir) if sessions_dir else self.logs_dir / "sessions"
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
-
-        self.summary_dir = Path(summary_dir) if summary_dir else self.logs_dir
-        self.summary_dir.mkdir(parents=True, exist_ok=True)
-
-        self.enable_summary = enable_summary
-        self.inject_summary = inject_summary
 
         logger.info(f"Initialized Claude Code agent with model={model_name}")
         logger.info(f"Logs dir: {self.logs_dir}")
         logger.info(f"Sessions dir: {self.sessions_dir}")
-        logger.info(f"Summary dir: {self.summary_dir}")
-        logger.info(f"Enable summary: {self.enable_summary}")
-        logger.info(f"Inject summary: {self.inject_summary}")
-
-    @property
-    def output_path(self) -> Path:
-        """Path to Claude Code output file."""
-        return self.logs_dir / self._OUTPUT_FILENAME
-
-    @property
-    def summary_path(self) -> Path:
-        """Path to the long-term summary file."""
-        return self.summary_dir / self._SUMMARY_FILENAME
 
     @property
     def trajectory_path(self) -> Path:
-        """Path to trajectory JSON file."""
         return self.logs_dir / "trajectory.json"
 
     def _get_session_dir(self) -> Path | None:
-        """Identify the Claude session directory containing the primary JSONL log"""
-        sessions_root = self.sessions_dir
-        if not sessions_root.exists():
+        """Identify the Claude session directory containing the primary JSONL log."""
+        project_root = self.sessions_dir / "projects"
+        if not project_root.exists():
             return None
 
-        project_root = sessions_root / "projects"
-        candidate_files: list[Path] = []
-        if project_root.exists():
-            candidate_files = list(project_root.glob("**/*.jsonl"))
+        candidate_files = list(project_root.glob("**/*.jsonl"))
         if not candidate_files:
             return None
 
@@ -185,17 +81,7 @@ class ClaudeCodeAgent:
         return None
 
     def get_usage_metrics(self) -> dict[str, int]:
-        """
-        Extract usage metrics from Claude Code session files.
-
-        Returns:
-            Dictionary with keys: input_tokens, cached_input_tokens, output_tokens
-        """
-        metrics = {
-            "input_tokens": 0,
-            "cached_input_tokens": 0,
-            "output_tokens": 0,
-        }
+        metrics = {"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0}
 
         session_dir = self._get_session_dir()
         if not session_dir:
@@ -207,10 +93,6 @@ class ClaudeCodeAgent:
             logger.debug(f"No session files found in {session_dir}")
             return metrics
 
-        total_input_tokens = 0
-        total_cached_tokens = 0
-        total_output_tokens = 0
-
         for session_file in session_files:
             with open(session_file, "r") as handle:
                 for line in handle:
@@ -219,74 +101,43 @@ class ClaudeCodeAgent:
                         continue
                     try:
                         event = json.loads(stripped)
-                        message = event.get("message")
-                        if not isinstance(message, dict):
-                            continue
-
-                        usage = message.get("usage")
+                        usage = event.get("message", {}).get("usage") if isinstance(event.get("message"), dict) else None
                         if isinstance(usage, dict):
-                            total_input_tokens += usage.get("input_tokens", 0)
-                            total_cached_tokens += usage.get("cache_read_input_tokens", 0)
-                            total_output_tokens += usage.get("output_tokens", 0)
+                            metrics["input_tokens"] += usage.get("input_tokens", 0)
+                            metrics["cached_input_tokens"] += usage.get("cache_read_input_tokens", 0)
+                            metrics["output_tokens"] += usage.get("output_tokens", 0)
                     except json.JSONDecodeError:
                         continue
-
-        metrics["input_tokens"] = total_input_tokens
-        metrics["cached_input_tokens"] = total_cached_tokens
-        metrics["output_tokens"] = total_output_tokens
 
         logger.info(f"Extracted usage metrics: {metrics}")
         return metrics
 
     def _setup_sessions_structure(self) -> None:
-        """Create required Claude Code session directory structure."""
-        (self.sessions_dir / "debug").mkdir(parents=True, exist_ok=True)
-        (self.sessions_dir / "projects" / "-app").mkdir(parents=True, exist_ok=True)
-        (self.sessions_dir / "shell-snapshots").mkdir(parents=True, exist_ok=True)
-        (self.sessions_dir / "statsig").mkdir(parents=True, exist_ok=True)
-        (self.sessions_dir / "todos").mkdir(parents=True, exist_ok=True)
-
+        for sub in ("debug", "projects/-app", "shell-snapshots", "statsig", "todos"):
+            (self.sessions_dir / sub).mkdir(parents=True, exist_ok=True)
         logger.info(f"Created session directory structure at {self.sessions_dir}")
 
-    def run(self, instruction: str) -> int:
-        """
-        Run the Claude Code agent with the given instruction.
-
-        Args:
-            instruction: The task instruction to pass to Claude Code
-
-        Returns:
-            Return code from Claude Code execution (0 for success)
-        """
-        # Extract model name (remove provider prefix if present)
+    def _do_run(self, instruction: str, exp_env_dir: Path) -> int:
         model = self.model_name.split("/")[-1]
 
-        # Default to "sonnet" if model name contains non-Anthropic provider patterns
         invalid_patterns = ["bedrock", "litellm", "azure", "openai", "watsonx", "gemini"]
-        if any(pattern in model.lower() for pattern in invalid_patterns):
-            logger.warning(
-                f"Model '{model}' appears to be for a non-Anthropic provider. Defaulting to 'sonnet' for Claude Code."
-            )
+        if any(p in model.lower() for p in invalid_patterns):
+            logger.warning(f"Model '{model}' appears non-Anthropic. Defaulting to 'sonnet'.")
             model = "sonnet"
 
-        logger.info(f"Running Claude Code with instruction: {instruction}")
-        logger.info(f"Using model: {model}")
+        logger.info(f"Running Claude Code with model: {model}")
 
-        # Setup session directory structure
         self._setup_sessions_structure()
 
-        # Build environment variables
         env = os.environ.copy()
         env["CLAUDE_CONFIG_DIR"] = str(self.sessions_dir)
         env["FORCE_AUTO_BACKGROUND_TASKS"] = "1"
         env["ENABLE_BACKGROUND_TASKS"] = "1"
 
-        # Set API key if available
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         oauth_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
 
         if not api_key and not oauth_token:
-            # Fall back to Claude Code's local credentials file
             credentials_path = Path.home() / ".claude" / ".credentials.json"
             try:
                 with open(credentials_path) as f:
@@ -300,9 +151,7 @@ class ClaudeCodeAgent:
         if not api_key and not oauth_token:
             logger.error("=" * 80)
             logger.error("ERROR: No Anthropic API authentication found")
-            logger.error("Please set one of the following environment variables:")
-            logger.error("  - ANTHROPIC_API_KEY")
-            logger.error("  - CLAUDE_CODE_OAUTH_TOKEN")
+            logger.error("Please set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN")
             logger.error("=" * 80)
             return 1
 
@@ -311,76 +160,21 @@ class ClaudeCodeAgent:
         if oauth_token:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
 
-        # Set model name
         env["ANTHROPIC_MODEL"] = model
 
-        # Pass through MAX_THINKING_TOKENS if set
         if "MAX_THINKING_TOKENS" in os.environ:
             env["MAX_THINKING_TOKENS"] = os.environ["MAX_THINKING_TOKENS"]
 
-        # Ensure exp_env directory exists
-        exp_env_dir = Path(os.getenv("SREGYM_EXP_ENV", "exp_env"))
-        exp_env_dir.mkdir(exist_ok=True, parents=True)
-
-        # If summary is enabled, injection is on, and file exists, copy it into agent's cwd and reference by path
-        if self.enable_summary and self.inject_summary and self.summary_path.exists():
-            try:
-                summary_in_cwd = exp_env_dir / self._SUMMARY_FILENAME
-                shutil.copy2(self.summary_path, summary_in_cwd)
-                instruction += (
-                    f"\n\nIMPORTANT: A summary of findings from previous runs is available at: {self._SUMMARY_FILENAME}\n"
-                    "Read it to avoid repeating mistakes or to speed up diagnosis.\n"
-                )
-                logger.info("Copied existing long-term summary into agent cwd and referenced by path.")
-            except Exception as e:
-                logger.warning(f"Failed to copy existing summary: {e}")
-
-        # Save instruction to file for summarizer
-        instruction_path = self.logs_dir / "instruction.txt"
-        try:
-            instruction_path.write_text(instruction)
-        except Exception as e:
-            logger.warning(f"Failed to save instruction to file: {e}")
-
-        # Build Claude Code command
         command = [
             "claude",
             "--verbose",
-            "--output-format",
-            "stream-json",
-            "-p",
-            instruction,
+            "--output-format", "stream-json",
+            "-p", instruction,
             "--allowedTools",
         ] + self.ALLOWED_TOOLS
 
-        logger.info(f"Executing command: {' '.join(command)}")
-
         try:
-            # Run Claude Code and capture output
-            with open(self.output_path, "w") as out_file:
-                process = subprocess.Popen(
-                    command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    stdin=subprocess.DEVNULL,
-                    env=env,
-                    text=True,
-                    bufsize=1,
-                    cwd=exp_env_dir,
-                )
-
-                # Stream output to both file and logger
-                for line in process.stdout:
-                    out_file.write(line)
-                    out_file.flush()
-                    # Also log to console (strip to avoid double newlines)
-                    print(line, end="", flush=True)
-
-                process.wait()
-
-            logger.info(f"Claude Code finished with return code: {process.returncode}")
-            return process.returncode
-
+            return self._run_subprocess(command, exp_env_dir, env)
         except Exception as e:
             logger.error(f"Error running Claude Code: {e}")
             raise
