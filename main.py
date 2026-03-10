@@ -352,6 +352,9 @@ def driver_loop(
             else:
                 seq_idx, pid = None, item
 
+            # Unique key for this sequence slot (disambiguates repeated pids)
+            seq_key = f"{seq_idx:05d}:{pid}" if seq_idx is not None else pid
+
             # Check for existing results (Resume capability)
             # We look for any timestamped file matching the pattern *_{pid}_{agent_to_run}_results.csv
             # Only checking if agent_to_run is specified (not external harness)
@@ -377,8 +380,9 @@ def driver_loop(
                     )
 
                     if status_dict is not None:
-                        status_dict[pid] = {
+                        status_dict[seq_key] = {
                             "status": "Completed (Resumed)",
+                            "pid": pid,
                             "start_time": time.time(),
                             "elapsed": 0.0,
                             "worker_id": worker_id,
@@ -408,8 +412,9 @@ def driver_loop(
                         handler.setStream(redirect_ctx)
 
                 # Update status to starting
-                status_dict[pid] = {
+                status_dict[seq_key] = {
                     "status": "Deploying App",
+                    "pid": pid,
                     "start_time": time.time(),
                     "elapsed": 0.0,
                     "worker_id": worker_id,
@@ -422,13 +427,14 @@ def driver_loop(
                     conductor.problem_id = pid
 
                     # Define callback to update status from conductor
-                    def update_conductor_status(status):
+                    def update_conductor_status(status, _seq_key=seq_key, _pid=pid):
                         if status_dict is not None:
                             # Preserve start_time if it exists, otherwise use current time
-                            current_info = status_dict.get(pid, {})
+                            current_info = status_dict.get(_seq_key, {})
                             start_time = current_info.get("start_time", time.time())
-                            status_dict[pid] = {
+                            status_dict[_seq_key] = {
                                 "status": status,
+                                "pid": _pid,
                                 "start_time": start_time,
                                 "elapsed": time.time() - start_time,
                                 "worker_id": worker_id,
@@ -440,10 +446,11 @@ def driver_loop(
                     if result == StartProblemResult.SKIPPED_KHAOS_REQUIRED:
                         console.log(f"⏭️  Skipping problem '{pid}': requires Khaos but running on emulated cluster")
                         if status_dict is not None:
-                            status_dict[pid] = {
+                            status_dict[seq_key] = {
                                 "status": "Skipped (Khaos Req)",
-                                "start_time": status_dict[pid]["start_time"],
-                                "elapsed": time.time() - status_dict[pid]["start_time"],
+                                "pid": pid,
+                                "start_time": status_dict[seq_key]["start_time"],
+                                "elapsed": time.time() - status_dict[seq_key]["start_time"],
                                 "worker_id": worker_id,
                             }
                         continue
@@ -460,10 +467,11 @@ def driver_loop(
 
                     if not use_external_harness:
                         if status_dict is not None:
-                            status_dict[pid] = {
+                            status_dict[seq_key] = {
                                 "status": "Agent Running",
-                                "start_time": status_dict[pid]["start_time"],
-                                "elapsed": time.time() - status_dict[pid]["start_time"],
+                                "pid": pid,
+                                "start_time": status_dict[seq_key]["start_time"],
+                                "elapsed": time.time() - status_dict[seq_key]["start_time"],
                                 "worker_id": worker_id,
                             }
 
@@ -490,10 +498,11 @@ def driver_loop(
                         if status_dict is not None:
                             # Update stage
                             current_stage = conductor.submission_stage or "Running"
-                            status_dict[pid] = {
+                            status_dict[seq_key] = {
                                 "status": f"Agent: {current_stage}",
-                                "start_time": status_dict[pid]["start_time"],
-                                "elapsed": time.time() - status_dict[pid]["start_time"],
+                                "pid": pid,
+                                "start_time": status_dict[seq_key]["start_time"],
+                                "elapsed": time.time() - status_dict[seq_key]["start_time"],
                                 "worker_id": worker_id,
                             }
 
@@ -507,10 +516,11 @@ def driver_loop(
                         await asyncio.sleep(1)
 
                     if status_dict is not None:
-                        status_dict[pid] = {
+                        status_dict[seq_key] = {
                             "status": "Cleaning Up",
-                            "start_time": status_dict[pid]["start_time"],
-                            "elapsed": time.time() - status_dict[pid]["start_time"],
+                            "pid": pid,
+                            "start_time": status_dict[seq_key]["start_time"],
+                            "elapsed": time.time() - status_dict[seq_key]["start_time"],
                             "worker_id": worker_id,
                         }
 
@@ -602,10 +612,11 @@ def driver_loop(
                 if not use_external_harness:
                     write_error_result(pid, str(e), sequence_index=seq_idx)
                 if status_dict is not None:
-                    status_dict[pid] = {
+                    status_dict[seq_key] = {
                         "status": "Error",
-                        "start_time": status_dict[pid]["start_time"],
-                        "elapsed": time.time() - status_dict[pid]["start_time"],
+                        "pid": pid,
+                        "start_time": status_dict[seq_key]["start_time"],
+                        "elapsed": time.time() - status_dict[seq_key]["start_time"],
                         "worker_id": worker_id,
                     }
                 # Do not raise e; continue to next problem
@@ -616,11 +627,12 @@ def driver_loop(
                     await asyncio.sleep(1)  # Allow process group to fully tear down
 
                 if status_dict is not None:
-                    if status_dict[pid]["status"] != "Error":
-                        status_dict[pid] = {
+                    if status_dict[seq_key]["status"] != "Error":
+                        status_dict[seq_key] = {
                             "status": "Completed",
-                            "start_time": status_dict[pid]["start_time"],
-                            "elapsed": time.time() - status_dict[pid]["start_time"],
+                            "pid": pid,
+                            "start_time": status_dict[seq_key]["start_time"],
+                            "elapsed": time.time() - status_dict[seq_key]["start_time"],
                             "worker_id": worker_id,
                         }
                     sys.stdout = original_stdout
@@ -1511,7 +1523,8 @@ def run_parallel(args, config: SchedulerConfig):
                             )
                             if is_active:
                                 start_t = info.get("start_time", time.time())
-                                current_worker_status[wid] = (status, pid, start_t)
+                                display_pid = info.get("pid", str(pid))  # real pid from value, fallback to key
+                                current_worker_status[wid] = (status, display_pid, start_t)
 
                     # Update main task
                     finished_count = completed_count + error_count + skipped_count
