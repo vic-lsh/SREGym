@@ -8,6 +8,7 @@ import logging
 import multiprocessing
 import os
 import platform
+import random
 import re
 import shutil
 import signal
@@ -188,6 +189,12 @@ def is_result_complete(csv_path):
         return False
 
 
+def generate_sequence(problem_ids: list, n: int, seed: int) -> list:
+    """Generate a deterministic sequence of n problem IDs sampled with replacement."""
+    rng = random.Random(seed)
+    return [rng.choice(problem_ids) for _ in range(n)]
+
+
 def driver_loop(
     conductor: Conductor,
     experiment_log_dir: str,
@@ -202,6 +209,8 @@ def driver_loop(
     status_dict=None,
     problem_queue=None,
     worker_id=None,
+    sequence: list = None,
+    sequence_start_idx: int = 0,
 ):
     """
     Deploy each problem and wait for HTTP grading via POST /submit.
@@ -247,17 +256,27 @@ def driver_loop(
 
         all_results_for_agent = []
 
-        def write_error_result(problem_id: str, error_message: str):
+        def write_error_result(problem_id: str, error_message: str, sequence_index: int = None):
             """Write a structured result row even when execution fails before grading."""
             if not agent_to_run:
                 return
             current_date_time = get_current_datetime_formatted()
-            csv_path = os.path.join(experiment_log_dir, f"{current_date_time}_{problem_id}_{agent_to_run}_results.csv")
+            if sequence_index is not None:
+                csv_path = os.path.join(
+                    experiment_log_dir,
+                    f"{current_date_time}_{sequence_index:05d}_{problem_id}_{agent_to_run}_results.csv",
+                )
+            else:
+                csv_path = os.path.join(
+                    experiment_log_dir, f"{current_date_time}_{problem_id}_{agent_to_run}_results.csv"
+                )
             snapshot = {
                 "problem_id": problem_id,
                 "run_status": "Error",
                 "error": str(error_message),
             }
+            if sequence_index is not None:
+                snapshot["sequence_index"] = sequence_index
             with open(csv_path, "w", newline="") as csvfile:
                 writer = csv.DictWriter(csvfile, fieldnames=sorted(snapshot.keys()), quoting=csv.QUOTE_NONNUMERIC)
                 writer.writeheader()
@@ -266,7 +285,17 @@ def driver_loop(
 
         # session_timestamp = get_current_datetime_formatted()
 
-        if problem_queue:
+        if sequence is not None:
+            # Sequence mode: iterate over pre-generated sequence with indices
+            def sequence_gen():
+                for seq_idx, pid in enumerate(sequence):
+                    if seq_idx < sequence_start_idx:
+                        continue
+                    yield seq_idx, pid
+
+            problem_iterator = sequence_gen()
+            use_sequence_mode = True
+        elif problem_queue:
 
             def problem_gen():
                 # Yield pre-assigned problems first (e.g. popped by worker to check for work)
@@ -286,6 +315,7 @@ def driver_loop(
                         return
 
             problem_iterator = problem_gen()
+            use_sequence_mode = False
         else:
             # Get all problem IDs and filter if needed
             problem_ids = conductor.problems.get_problem_ids()
@@ -314,14 +344,26 @@ def driver_loop(
                 problem_ids.remove(unknown_problem_id)
 
             problem_iterator = problem_ids
+            use_sequence_mode = False
 
-        for pid in problem_iterator:
+        for item in problem_iterator:
+            if use_sequence_mode:
+                seq_idx, pid = item
+            else:
+                seq_idx, pid = None, item
+
             # Check for existing results (Resume capability)
             # We look for any timestamped file matching the pattern *_{pid}_{agent_to_run}_results.csv
             # Only checking if agent_to_run is specified (not external harness)
             completed_iterations = 0
             if agent_to_run and not use_external_harness:
-                search_pattern = os.path.join(experiment_log_dir, f"*_{pid}_{agent_to_run}_results.csv")
+                if seq_idx is not None:
+                    # Sequence mode: match by seq_idx to disambiguate repeated problems
+                    search_pattern = os.path.join(
+                        experiment_log_dir, f"*_{seq_idx:05d}_{pid}_{agent_to_run}_results.csv"
+                    )
+                else:
+                    search_pattern = os.path.join(experiment_log_dir, f"*_{pid}_{agent_to_run}_results.csv")
                 existing_files = glob.glob(search_pattern)
 
                 for f_path in existing_files:
@@ -329,8 +371,9 @@ def driver_loop(
                         completed_iterations += 1
 
                 if completed_iterations >= repeat:
+                    label = f"[{seq_idx:05d}] {pid}" if seq_idx is not None else pid
                     console.log(
-                        f"⏭️  Skipping problem '{pid}': Found {completed_iterations}/{repeat} completed results."
+                        f"⏭️  Skipping problem '{label}': Found {completed_iterations}/{repeat} completed results."
                     )
 
                     if status_dict is not None:
@@ -342,8 +385,9 @@ def driver_loop(
                         }
                     continue
                 elif completed_iterations > 0:
+                    label = f"[{seq_idx:05d}] {pid}" if seq_idx is not None else pid
                     console.log(
-                        f"⏯️  Resuming problem '{pid}': {completed_iterations}/{repeat} iterations already completed."
+                        f"⏯️  Resuming problem '{label}': {completed_iterations}/{repeat} iterations already completed."
                     )
 
             # Prepare for logging redirection if in parallel mode
@@ -493,6 +537,8 @@ def driver_loop(
                                 console.log(f"⚠️  Agent process did not complete within {timeout}s, will force cleanup")
 
                     snapshot = {"problem_id": pid}
+                    if seq_idx is not None:
+                        snapshot["sequence_index"] = seq_idx
                     for stage, outcome in conductor.results.items():
                         if isinstance(outcome, dict):
                             for k, v in outcome.items():
@@ -505,7 +551,13 @@ def driver_loop(
                     current_date_time = get_current_datetime_formatted()
 
                     # Write results to experiment_log_dir
-                    csv_path = os.path.join(experiment_log_dir, f"{current_date_time}_{pid}_{agent_to_run}_results.csv")
+                    if seq_idx is not None:
+                        csv_path = os.path.join(
+                            experiment_log_dir,
+                            f"{current_date_time}_{seq_idx:05d}_{pid}_{agent_to_run}_results.csv",
+                        )
+                    else:
+                        csv_path = os.path.join(experiment_log_dir, f"{current_date_time}_{pid}_{agent_to_run}_results.csv")
                     with open(csv_path, "w", newline="") as csvfile:
                         writer = csv.DictWriter(csvfile, fieldnames=fieldnames, quoting=csv.QUOTE_NONNUMERIC)
                         writer.writeheader()
@@ -548,7 +600,7 @@ def driver_loop(
             except Exception as e:
                 console.log(f"❌ Error running problem {pid}: {e}")
                 if not use_external_harness:
-                    write_error_result(pid, str(e))
+                    write_error_result(pid, str(e), sequence_index=seq_idx)
                 if status_dict is not None:
                     status_dict[pid] = {
                         "status": "Error",
@@ -633,6 +685,8 @@ def _run_driver_and_shutdown(
     status_dict=None,
     problem_queue=None,
     worker_id=None,
+    sequence: list = None,
+    sequence_start_idx: int = 0,
 ):
     """Run the benchmark driver, stash results, then tell the API to exit."""
     try:
@@ -650,6 +704,8 @@ def _run_driver_and_shutdown(
             status_dict=status_dict,
             problem_queue=problem_queue,
             worker_id=worker_id,
+            sequence=sequence,
+            sequence_start_idx=sequence_start_idx,
         )
         setattr(main, "results", results)
     except Exception as e:
@@ -954,7 +1010,7 @@ def _kill_process_tree(pid: int, sig: int = signal.SIGTERM) -> None:
         pass
 
 
-def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict):
+def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict, sequence=None, sequence_start_idx=0):
     """Worker function for parallel execution."""
 
     def _shutdown_handler(signum, frame):
@@ -1020,11 +1076,13 @@ def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict)
             # Run main with the private queue. It will block until tasks arrive.
             main(
                 args,
-                problem_queue=problem_queue,
+                problem_queue=problem_queue if sequence is None else None,
                 problem_list=None,  # No pre-assigned list, everything via queue
                 experiment_log_dir=experiment_log_dir,
                 status_dict=status_dict,
                 worker_id=worker_id,
+                sequence=sequence,
+                sequence_start_idx=sequence_start_idx,
             )
         except Exception as e:
             status_dict[_worker_meta_key(worker_id)] = {
@@ -1098,14 +1156,67 @@ def run_parallel(args, config: SchedulerConfig):
         os.environ["SREGYM_LOG_FILE"] = log_file_path
         init_logger()
 
+    # Handle sequence mode
+    sequence = None
+    sequence_start_idx = 0
+    if getattr(args, "sequence_len", 0) > 0:
+        sequence_state_path = os.path.join(experiment_log_dir, "sequence_state.json")
+        is_resuming = args.resume_last or args.resume_from
+
+        if is_resuming and os.path.exists(sequence_state_path):
+            # Load existing sequence state
+            with open(sequence_state_path) as f:
+                state = json.load(f)
+            stored_seed = state["seed"]
+            stored_sequence = state["sequence"]
+
+            if args.sequence_len > len(stored_sequence):
+                # Extend: regenerate with same seed to new length, verify prefix
+                new_sequence = generate_sequence(all_problems, args.sequence_len, stored_seed)
+                if new_sequence[: len(stored_sequence)] != stored_sequence:
+                    logger.error("Sequence prefix mismatch on extension — seed/problem pool changed?")
+                    sys.exit(1)
+                sequence = new_sequence
+                with open(sequence_state_path, "w") as f:
+                    json.dump({"seed": stored_seed, "sequence": sequence}, f)
+                logger.info(f"Extended sequence from {len(stored_sequence)} to {args.sequence_len} problems.")
+            else:
+                sequence = stored_sequence
+                logger.info(f"Loaded existing sequence of {len(sequence)} problems from {sequence_state_path}.")
+        else:
+            # New sequence run
+            seed = getattr(args, "sequence_seed", 42)
+            sequence = generate_sequence(all_problems, args.sequence_len, seed)
+            with open(sequence_state_path, "w") as f:
+                json.dump({"seed": seed, "sequence": sequence}, f)
+            logger.info(f"Generated new sequence of {args.sequence_len} problems (seed={seed}).")
+
+        # Determine start index: first position without a completed result file
+        agent_to_run = args.agent
+        sequence_start_idx = 0
+        for idx, pid in enumerate(sequence):
+            search_pattern = os.path.join(
+                experiment_log_dir, f"*_{idx:05d}_{pid}_{agent_to_run}_results.csv"
+            )
+            existing_files = glob.glob(search_pattern)
+            completed = any(is_result_complete(f) for f in existing_files)
+            if completed:
+                sequence_start_idx = idx + 1
+            else:
+                break
+        logger.info(f"Sequence mode: starting from index {sequence_start_idx}/{len(sequence)}.")
+
     manager = multiprocessing.Manager()
     status_dict = manager.dict()
     # Replace single shared queue with private queues for each worker
     worker_queues = [manager.Queue() for _ in range(args.parallel)]
 
-    # Filter problems if resuming
+    # Filter problems if resuming (non-sequence mode)
     problems_to_run = []
-    if args.resume_last or args.resume_from:
+    if sequence is not None:
+        # In sequence mode, problems_to_run is just a placeholder (not used for queue scheduling)
+        problems_to_run = []
+    elif args.resume_last or args.resume_from:
         agent_to_run = args.agent
         for pid in all_problems:
             completed_iterations = 0
@@ -1139,7 +1250,10 @@ def run_parallel(args, config: SchedulerConfig):
     processes = []
     worker_map = {}  # Map process to worker ID
     logger.info(f"Resource Capacity set to: {RESOURCE_CAPACITY} (System Cores: {_system_cores})")
-    logger.info(f"Running {len(problems_to_run)} problems with {args.parallel} workers.")
+    if sequence is not None:
+        logger.info(f"Running sequence of {len(sequence)} problems (starting at {sequence_start_idx}) with {args.parallel} workers.")
+    else:
+        logger.info(f"Running {len(problems_to_run)} problems with {args.parallel} workers.")
 
     if not config.enable_resource_throttling:
         logger.warning(
@@ -1149,7 +1263,9 @@ def run_parallel(args, config: SchedulerConfig):
     for i in range(args.parallel):
         # Pass the PRIVATE queue for this worker
         p = multiprocessing.Process(
-            target=worker_main, args=(args, i, worker_queues[i], experiment_log_dir, status_dict)
+            target=worker_main,
+            args=(args, i, worker_queues[i], experiment_log_dir, status_dict),
+            kwargs={"sequence": sequence, "sequence_start_idx": sequence_start_idx},
         )
         p.start()
         processes.append(p)
@@ -1196,7 +1312,10 @@ def run_parallel(args, config: SchedulerConfig):
                 transient=(progress_mode == "rich"),
             ) as progress:
                 # Main overall progress
-                total_problems = len(all_problems)
+                if sequence is not None:
+                    total_problems = len(sequence) - sequence_start_idx
+                else:
+                    total_problems = len(all_problems)
                 main_task = progress.add_task("[bold green]Overall Progress", total=total_problems)
 
                 # Worker tasks - one per worker
@@ -1278,7 +1397,12 @@ def run_parallel(args, config: SchedulerConfig):
                                     }
 
                         # 4. Check Termination
-                        if not pending_problems and not assigned_tasks:
+                        if sequence is not None:
+                            # In sequence mode, the single worker handles its own termination.
+                            # Send shutdown only when all workers have exited.
+                            if not any(p.is_alive() for p in processes) and not shutdown_sent:
+                                shutdown_sent = True
+                        elif not pending_problems and not assigned_tasks:
                             # Done!
                             logger.info("All tasks completed or assigned. Sending shutdown signals.")
                             for q in worker_queues:
@@ -1347,6 +1471,7 @@ def run_parallel(args, config: SchedulerConfig):
                                 new_p = multiprocessing.Process(
                                     target=worker_main,
                                     args=(args, wid, worker_queues[wid], experiment_log_dir, status_dict),
+                                    kwargs={"sequence": sequence, "sequence_start_idx": sequence_start_idx},
                                 )
                                 new_p.start()
 
@@ -1511,7 +1636,7 @@ def run_parallel(args, config: SchedulerConfig):
             p.join()
 
 
-def main(args, problem_list=None, experiment_log_dir=None, status_dict=None, problem_queue=None, worker_id=None):
+def main(args, problem_list=None, experiment_log_dir=None, status_dict=None, problem_queue=None, worker_id=None, sequence=None, sequence_start_idx=0):
     # Generate session ID and log directory
     session_timestamp = get_current_datetime_formatted()
     # Ensure logs root exists
@@ -1582,20 +1707,22 @@ def main(args, problem_list=None, experiment_log_dir=None, status_dict=None, pro
     # Start the driver in the background; it will call request_shutdown() when finished
     driver_thread = threading.Thread(
         target=_run_driver_and_shutdown,
-        args=(
-            conductor,
-            experiment_log_dir,
-            args.problem,
-            args.agent,
-            args.use_external_harness,
-            args.repeat,
-            args.enable_summary,
-            not args.no_inject_summary,
-            getattr(args, "summary_model", None),
-            problem_list,
-            status_dict,
-            problem_queue,
-            worker_id,
+        kwargs=dict(
+            conductor=conductor,
+            experiment_log_dir=experiment_log_dir,
+            problem_filter=args.problem,
+            agent_to_run=args.agent,
+            use_external_harness=args.use_external_harness,
+            repeat=args.repeat,
+            enable_summary=args.enable_summary,
+            inject_summary=not args.no_inject_summary,
+            summary_model=getattr(args, "summary_model", None),
+            problem_list=problem_list,
+            status_dict=status_dict,
+            problem_queue=problem_queue,
+            worker_id=worker_id,
+            sequence=sequence,
+            sequence_start_idx=sequence_start_idx,
         ),
         name="driver",
         daemon=True,
@@ -1731,11 +1858,29 @@ if __name__ == "__main__":
         metavar="PATH",
         help="Initial summary file (copied to summary dir before first run). Works with gemini_cli and claudecode.",
     )
+    parser.add_argument(
+        "--sequence-len",
+        type=int,
+        default=0,
+        help="Sequence mode: run N randomly sampled problems in order (0=disabled)",
+    )
+    parser.add_argument(
+        "--sequence-seed",
+        type=int,
+        default=42,
+        help="Random seed for deterministic sequence generation (default: 42)",
+    )
     args = parser.parse_args()
 
     # Validate that --agent is provided when not using external harness
     if not args.use_external_harness and args.agent is None:
         parser.error("--agent is required when --use-external-harness is not set")
+
+    # Validate sequence mode constraints
+    if args.sequence_len > 0 and args.parallel > 1:
+        parser.error("--sequence-len requires --parallel 1 (sequential execution)")
+    if args.sequence_len > 0 and args.problem:
+        parser.error("--sequence-len and --problem are mutually exclusive")
 
     # Validate --seed-summary
     if args.seed_summary:

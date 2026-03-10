@@ -1395,10 +1395,134 @@ def plot_success_rates(d1, m1, n1, name1, d2, m2, n2, name2, output_path, colors
     print(f"Success rate plot saved to {output_path}")
 
 
+def plot_sequence_time(log_dir, output_path=None, window=5):
+    """Plot solving time (TTL, TTM, and total) vs sequence index.
+
+    Loads all *_results.csv files that contain a 'sequence_index' column,
+    then plots each metric as a scatter with a rolling-average trend line.
+
+    Args:
+        log_dir: Path to the experiment log directory.
+        output_path: Where to save the PNG (default: <log_dir>/sequence_time.png).
+        window: Rolling-average window size for the trend line.
+    """
+    if not HAS_PLOTTING:
+        print("Matplotlib/Numpy not found. Skipping sequence time plot.")
+        return
+
+    pattern = os.path.join(log_dir, "**", "*_results.csv")
+    files = glob.glob(pattern, recursive=True)
+
+    rows = []
+    for fpath in sorted(files):
+        if "ALL_results" in fpath or "_output.csv" in fpath:
+            continue
+        try:
+            with open(fpath, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                if not reader.fieldnames or "sequence_index" not in reader.fieldnames:
+                    continue
+                for row in reader:
+                    try:
+                        seq_idx = int(row["sequence_index"])
+                    except (ValueError, TypeError):
+                        continue
+                    try:
+                        ttl = float(row["TTL"]) if row.get("TTL") else None
+                    except (ValueError, TypeError):
+                        ttl = None
+                    try:
+                        ttm = float(row["TTM"]) if row.get("TTM") else None
+                    except (ValueError, TypeError):
+                        ttm = None
+                    rows.append({
+                        "seq_idx": seq_idx,
+                        "ttl": ttl,
+                        "ttm": ttm,
+                        "total": (ttl + ttm) if (ttl is not None and ttm is not None) else None,
+                        "pid": row.get("problem_id", ""),
+                    })
+        except Exception as e:
+            print(f"Warning: could not read {fpath}: {e}")
+
+    if not rows:
+        print("No sequence_index data found. Is this a sequence-mode run?")
+        return
+
+    rows.sort(key=lambda r: r["seq_idx"])
+
+    def rolling_avg(xs, ys, w):
+        """Return (x_centers, smoothed_y) for non-None ys."""
+        pairs = [(x, y) for x, y in zip(xs, ys) if y is not None]
+        if len(pairs) < w:
+            return [], []
+        xs_f, ys_f = zip(*pairs)
+        smoothed = []
+        xs_out = []
+        for i in range(len(ys_f) - w + 1):
+            smoothed.append(sum(ys_f[i:i + w]) / w)
+            xs_out.append(xs_f[i + w // 2])
+        return xs_out, smoothed
+
+    seq_idxs = [r["seq_idx"] for r in rows]
+    ttls  = [r["ttl"]   for r in rows]
+    ttms  = [r["ttm"]   for r in rows]
+    tots  = [r["total"] for r in rows]
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    # Scatter points
+    ttl_xs  = [x for x, y in zip(seq_idxs, ttls)  if y is not None]
+    ttl_ys  = [y for y in ttls  if y is not None]
+    ttm_xs  = [x for x, y in zip(seq_idxs, ttms)  if y is not None]
+    ttm_ys  = [y for y in ttms  if y is not None]
+    tot_xs  = [x for x, y in zip(seq_idxs, tots)  if y is not None]
+    tot_ys  = [y for y in tots  if y is not None]
+
+    if ttl_ys:
+        ax.scatter(ttl_xs, ttl_ys, color="tab:blue",   alpha=0.35, s=20, zorder=2)
+        rx, ry = rolling_avg(ttl_xs, ttl_ys, window)
+        if rx:
+            ax.plot(rx, ry, color="tab:blue",   linewidth=2, label=f"TTL (rolling avg w={window})")
+
+    if ttm_ys:
+        ax.scatter(ttm_xs, ttm_ys, color="tab:orange", alpha=0.35, s=20, zorder=2)
+        rx, ry = rolling_avg(ttm_xs, ttm_ys, window)
+        if rx:
+            ax.plot(rx, ry, color="tab:orange", linewidth=2, label=f"TTM (rolling avg w={window})")
+
+    if tot_ys:
+        ax.scatter(tot_xs, tot_ys, color="tab:green",  alpha=0.35, s=20, zorder=2)
+        rx, ry = rolling_avg(tot_xs, tot_ys, window)
+        if rx:
+            ax.plot(rx, ry, color="tab:green",  linewidth=2, label=f"Total (rolling avg w={window})")
+
+    ax.set_xlabel("Sequence Index")
+    ax.set_ylabel("Time (s)")
+    ax.set_title("Solving Time vs Sequence Index")
+    ax.grid(True, linestyle="--", alpha=0.5)
+    ax.legend()
+    fig.tight_layout()
+
+    if output_path is None:
+        output_path = os.path.join(log_dir, "sequence_time.png")
+    fig.savefig(output_path)
+    plt.close(fig)
+    print(f"Sequence time plot saved to {output_path}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Summarize SREGym benchmark results.")
     parser.add_argument(
         "--diff", nargs=2, metavar=("DIR1", "DIR2"), help="Compare results between two log directories."
+    )
+    parser.add_argument(
+        "--sequence", metavar="DIR",
+        help="Plot solving time vs sequence index for a sequence-mode run directory.",
+    )
+    parser.add_argument(
+        "--sequence-window", type=int, default=5, metavar="W",
+        help="Rolling-average window size for the sequence time plot (default: 5).",
     )
     parser.add_argument(
         "path",
@@ -1409,5 +1533,7 @@ if __name__ == "__main__":
 
     if args.diff:
         diff_results(args.diff[0], args.diff[1])
+    elif args.sequence:
+        plot_sequence_time(args.sequence, window=args.sequence_window)
     else:
         summarize_results(args.path)

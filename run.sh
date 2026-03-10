@@ -8,11 +8,13 @@ PARALLEL=${PARALLEL:-4}
 MODEL=${MODEL:-claude-sonnet-4-6}
 AGENT=${AGENT:-claudecode}
 ENABLE_RESOURCE_THROTTLING=${ENABLE_RESOURCE_THROTTLING:-false}
+SEQUENCE_LEN=${SEQUENCE_LEN:-0}
+SEQUENCE_SEED=${SEQUENCE_SEED:-42}
 
 # summary features
 ENABLE_SUMMARY=${ENABLE_SUMMARY:-true}
-NO_INJECT_SUMMARY=${NO_INJECT_SUMMARY:-true}
-SEED_SUMMARY=${SEED_SUMMARY:-""}
+NO_INJECT_SUMMARY=${NO_INJECT_SUMMARY:-false}
+SEED_SUMMARY=${SEED_SUMMARY:-"logs/0305_1823_claudecode/claudecode/long_term_summary.txt"}
 SUMMARY_MODEL=${SUMMARY_MODEL:-"vertex-ai-gemini-2.5-flash"}
 JUDGE_MODEL=${JUDGE_MODEL:-"vertex-ai-gemini-2.5-pro"}
 
@@ -41,6 +43,10 @@ fi
 
 if [ -n "$JUDGE_MODEL" ]; then
     ARGS="$ARGS --judge-model $JUDGE_MODEL"
+fi
+
+if [ "$SEQUENCE_LEN" -gt 0 ] 2>/dev/null; then
+    ARGS="$ARGS --sequence-len $SEQUENCE_LEN --sequence-seed $SEQUENCE_SEED"
 fi
 
 SREGYM_PRELOAD_INFRA_IMAGES=0
