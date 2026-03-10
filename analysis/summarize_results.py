@@ -86,13 +86,20 @@ def load_results(target_path=None):
             print(f"Error reading {file_path}: {e}")
 
     # --- Filter: Keep only latest run per problem_id ---
+    # In sequence mode (sequence_index present), treat each (problem_id, sequence_index) as distinct.
+    has_sequence = any(r.get("sequence_index") for r in all_runs_raw)
+
     runs_by_id = {}
     for run in all_runs_raw:
-        runs_by_id[run["problem_id"]] = run
+        if has_sequence and run.get("sequence_index") is not None:
+            key = (run["problem_id"], run.get("sequence_index", ""))
+        else:
+            key = run["problem_id"]
+        runs_by_id[key] = run
 
     sorted_runs = list(runs_by_id.values())
-    # Sort by source_file to restore roughly chronological order in the list
-    sorted_runs.sort(key=lambda x: x.get("source_file", ""))
+    # Sort by sequence_index (if present) then source_file for chronological order
+    sorted_runs.sort(key=lambda x: (x.get("source_file", ""), int(x["sequence_index"]) if x.get("sequence_index") else 0))
 
     return runs_by_id, sorted_runs
 
@@ -1395,6 +1402,101 @@ def plot_success_rates(d1, m1, n1, name1, d2, m2, n2, name2, output_path, colors
     print(f"Success rate plot saved to {output_path}")
 
 
+def _load_sequence_rows(log_dir):
+    """Shared helper: load all rows with sequence_index from a log directory."""
+    pattern = os.path.join(log_dir, "**", "*_results.csv")
+    files = glob.glob(pattern, recursive=True)
+    rows = []
+    for fpath in sorted(files):
+        if "ALL_results" in fpath or "_output.csv" in fpath:
+            continue
+        try:
+            with open(fpath, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                if not reader.fieldnames or "sequence_index" not in reader.fieldnames:
+                    continue
+                for row in reader:
+                    try:
+                        seq_idx = int(row["sequence_index"])
+                    except (ValueError, TypeError):
+                        continue
+                    rows.append({"seq_idx": seq_idx, "row": row})
+        except Exception as e:
+            print(f"Warning: could not read {fpath}: {e}")
+    rows.sort(key=lambda r: r["seq_idx"])
+    return rows
+
+
+def _rolling_avg(xs, ys, w):
+    """Return (x_centers, smoothed_y) using a sliding window over non-None ys."""
+    pairs = [(x, y) for x, y in zip(xs, ys) if y is not None]
+    if len(pairs) < w:
+        return [], []
+    xs_f, ys_f = zip(*pairs)
+    smoothed = [sum(ys_f[i:i + w]) / w for i in range(len(ys_f) - w + 1)]
+    xs_out = [xs_f[i + w // 2] for i in range(len(ys_f) - w + 1)]
+    return xs_out, smoothed
+
+
+def plot_sequence_success_rate(log_dir, output_path=None, window=5):
+    """Plot diagnosis and mitigation success rate vs sequence index.
+
+    Each data point is 1 (success) or 0 (failure); the rolling average gives
+    a smoothed success-rate trend line.
+
+    Args:
+        log_dir: Path to the experiment log directory.
+        output_path: Where to save the PNG (default: <log_dir>/sequence_success_rate.png).
+        window: Rolling-average window size for the trend line.
+    """
+    if not HAS_PLOTTING:
+        print("Matplotlib/Numpy not found. Skipping sequence success rate plot.")
+        return
+
+    raw = _load_sequence_rows(log_dir)
+    if not raw:
+        print("No sequence_index data found. Is this a sequence-mode run?")
+        return
+
+    seq_idxs = [r["seq_idx"] for r in raw]
+    diag_ys  = [1 if r["row"].get("Diagnosis.success") == "True" else 0 for r in raw]
+    mitig_ys = [1 if r["row"].get("Mitigation.success") == "True" else 0 for r in raw]
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    # Scatter: jitter y slightly so overlapping 0/1 points are visible
+    jitter = 0.03
+    diag_jitter  = [y + jitter  for y in diag_ys]
+    mitig_jitter = [y - jitter for y in mitig_ys]
+
+    ax.scatter(seq_idxs, diag_jitter,  color="tab:blue",   alpha=0.25, s=15, zorder=2)
+    ax.scatter(seq_idxs, mitig_jitter, color="tab:orange", alpha=0.25, s=15, zorder=2)
+
+    rx, ry = _rolling_avg(seq_idxs, diag_ys, window)
+    if rx:
+        ax.plot(rx, ry, color="tab:blue",   linewidth=2, label=f"Diagnosis (rolling avg w={window})")
+
+    rx, ry = _rolling_avg(seq_idxs, mitig_ys, window)
+    if rx:
+        ax.plot(rx, ry, color="tab:orange", linewidth=2, label=f"Mitigation (rolling avg w={window})")
+
+    ax.set_xlabel("Sequence Index")
+    ax.set_ylabel("Success Rate")
+    ax.set_ylim(-0.1, 1.1)
+    ax.set_yticks([0, 0.25, 0.5, 0.75, 1.0])
+    ax.set_yticklabels(["0%", "25%", "50%", "75%", "100%"])
+    ax.set_title("Success Rate vs Sequence Index")
+    ax.grid(True, linestyle="--", alpha=0.5)
+    ax.legend()
+    fig.tight_layout()
+
+    if output_path is None:
+        output_path = os.path.join(log_dir, "sequence_success_rate.png")
+    fig.savefig(output_path)
+    plt.close(fig)
+    print(f"Sequence success rate plot saved to {output_path}")
+
+
 def plot_sequence_time(log_dir, output_path=None, window=5):
     """Plot solving time (TTL, TTM, and total) vs sequence index.
 
@@ -1410,64 +1512,26 @@ def plot_sequence_time(log_dir, output_path=None, window=5):
         print("Matplotlib/Numpy not found. Skipping sequence time plot.")
         return
 
-    pattern = os.path.join(log_dir, "**", "*_results.csv")
-    files = glob.glob(pattern, recursive=True)
-
-    rows = []
-    for fpath in sorted(files):
-        if "ALL_results" in fpath or "_output.csv" in fpath:
-            continue
-        try:
-            with open(fpath, newline="", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                if not reader.fieldnames or "sequence_index" not in reader.fieldnames:
-                    continue
-                for row in reader:
-                    try:
-                        seq_idx = int(row["sequence_index"])
-                    except (ValueError, TypeError):
-                        continue
-                    try:
-                        ttl = float(row["TTL"]) if row.get("TTL") else None
-                    except (ValueError, TypeError):
-                        ttl = None
-                    try:
-                        ttm = float(row["TTM"]) if row.get("TTM") else None
-                    except (ValueError, TypeError):
-                        ttm = None
-                    rows.append({
-                        "seq_idx": seq_idx,
-                        "ttl": ttl,
-                        "ttm": ttm,
-                        "total": (ttl + ttm) if (ttl is not None and ttm is not None) else None,
-                        "pid": row.get("problem_id", ""),
-                    })
-        except Exception as e:
-            print(f"Warning: could not read {fpath}: {e}")
-
-    if not rows:
+    raw = _load_sequence_rows(log_dir)
+    if not raw:
         print("No sequence_index data found. Is this a sequence-mode run?")
         return
 
-    rows.sort(key=lambda r: r["seq_idx"])
-
-    def rolling_avg(xs, ys, w):
-        """Return (x_centers, smoothed_y) for non-None ys."""
-        pairs = [(x, y) for x, y in zip(xs, ys) if y is not None]
-        if len(pairs) < w:
-            return [], []
-        xs_f, ys_f = zip(*pairs)
-        smoothed = []
-        xs_out = []
-        for i in range(len(ys_f) - w + 1):
-            smoothed.append(sum(ys_f[i:i + w]) / w)
-            xs_out.append(xs_f[i + w // 2])
-        return xs_out, smoothed
-
-    seq_idxs = [r["seq_idx"] for r in rows]
-    ttls  = [r["ttl"]   for r in rows]
-    ttms  = [r["ttm"]   for r in rows]
-    tots  = [r["total"] for r in rows]
+    seq_idxs = [r["seq_idx"] for r in raw]
+    ttls, ttms, tots = [], [], []
+    for r in raw:
+        row = r["row"]
+        try:
+            ttl = float(row["TTL"]) if row.get("TTL") else None
+        except (ValueError, TypeError):
+            ttl = None
+        try:
+            ttm = float(row["TTM"]) if row.get("TTM") else None
+        except (ValueError, TypeError):
+            ttm = None
+        ttls.append(ttl)
+        ttms.append(ttm)
+        tots.append((ttl + ttm) if (ttl is not None and ttm is not None) else None)
 
     fig, ax = plt.subplots(figsize=(12, 6))
 
@@ -1481,19 +1545,19 @@ def plot_sequence_time(log_dir, output_path=None, window=5):
 
     if ttl_ys:
         ax.scatter(ttl_xs, ttl_ys, color="tab:blue",   alpha=0.35, s=20, zorder=2)
-        rx, ry = rolling_avg(ttl_xs, ttl_ys, window)
+        rx, ry = _rolling_avg(ttl_xs, ttl_ys, window)
         if rx:
             ax.plot(rx, ry, color="tab:blue",   linewidth=2, label=f"TTL (rolling avg w={window})")
 
     if ttm_ys:
         ax.scatter(ttm_xs, ttm_ys, color="tab:orange", alpha=0.35, s=20, zorder=2)
-        rx, ry = rolling_avg(ttm_xs, ttm_ys, window)
+        rx, ry = _rolling_avg(ttm_xs, ttm_ys, window)
         if rx:
             ax.plot(rx, ry, color="tab:orange", linewidth=2, label=f"TTM (rolling avg w={window})")
 
     if tot_ys:
         ax.scatter(tot_xs, tot_ys, color="tab:green",  alpha=0.35, s=20, zorder=2)
-        rx, ry = rolling_avg(tot_xs, tot_ys, window)
+        rx, ry = _rolling_avg(tot_xs, tot_ys, window)
         if rx:
             ax.plot(rx, ry, color="tab:green",  linewidth=2, label=f"Total (rolling avg w={window})")
 
@@ -1533,7 +1597,8 @@ if __name__ == "__main__":
 
     if args.diff:
         diff_results(args.diff[0], args.diff[1])
-    elif args.sequence:
-        plot_sequence_time(args.sequence, window=args.sequence_window)
     else:
-        summarize_results(args.path)
+        summarize_results(args.sequence or args.path)
+        if args.sequence:
+            plot_sequence_time(args.sequence, window=args.sequence_window)
+            plot_sequence_success_rate(args.sequence, window=args.sequence_window)
