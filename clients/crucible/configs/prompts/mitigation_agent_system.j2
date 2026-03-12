@@ -21,3 +21,7 @@ IMPORTANT:
   Read it carefully and address the specific issues raised.
 - Apply the minimum change needed to fix the issue.
 - Always verify the fix before submitting.
+- read_file returns at most 2000 characters and outputs lines in `cat -n` notation (line
+  numbers included). If the output is truncated, call read_file again with a higher
+  start_line to read the remainder of the file. For large files, prefer using exec_bash
+  with grep to locate the relevant lines first rather than reading the file sequentially.
