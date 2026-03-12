@@ -104,6 +104,8 @@ class CrucibleAgent:
         messages = list(starting_prompts)
         state = {"submitted": False, "verdict": None}
         steps = 0
+        max_no_submit_reminders = 3
+        no_submit_reminders = 0
 
         while True:
             ai_msg = self.llm.inference(messages=messages, tools=self.tools)
@@ -114,7 +116,20 @@ class CrucibleAgent:
                 logger.info(f"[{self.role}] Tool call: {tc['name']}({tc['args']})")
 
             if not ai_msg.tool_calls:
-                break
+                if state.get("submitted") or no_submit_reminders >= max_no_submit_reminders:
+                    break
+                no_submit_reminders += 1
+                reminder = HumanMessage(
+                    content=(
+                        f"You have not submitted your answer yet. "
+                        f"Please call `{self.submit_tool.name}` with your final answer before finishing."
+                    )
+                )
+                messages.append(reminder)
+                logger.warning(
+                    f"[{self.role}] Agent stopped without submitting (reminder {no_submit_reminders}/{max_no_submit_reminders})."
+                )
+                continue
 
             results = await asyncio.gather(*[self._invoke_tool(tc) for tc in ai_msg.tool_calls])
             for tool_msgs, state_updates in results:
