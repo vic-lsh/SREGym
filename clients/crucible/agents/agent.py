@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from collections import deque
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
@@ -40,18 +41,31 @@ class CrucibleAgent:
         self.context_window = get_context_window(model_name)
         self._sync_tools, self._async_tools = _build_tool_map(tools)
 
+    TOOL_TIMEOUT = 120
+
     async def _invoke_tool(self, tool_call: dict) -> tuple[list, dict]:
         """Invoke a single tool call. Returns (tool_messages, state_updates)."""
         name = tool_call["name"]
         tool_input = {"type": "tool_call", "name": name, "args": tool_call["args"], "id": tool_call["id"]}
 
-        if name in self._async_tools:
-            result = await self._async_tools[name].ainvoke(tool_input)
-        elif name in self._sync_tools:
-            result = self._sync_tools[name].invoke(tool_input)
-        else:
-            logger.warning(f"[{self.role}] Tool '{name}' not found.")
-            return [ToolMessage(content=f"Tool '{name}' not found.", tool_call_id=tool_call["id"])], {}
+        try:
+            if name in self._async_tools:
+                result = await asyncio.wait_for(
+                    self._async_tools[name].ainvoke(tool_input),
+                    timeout=self.TOOL_TIMEOUT,
+                )
+            elif name in self._sync_tools:
+                loop = asyncio.get_running_loop()
+                result = await asyncio.wait_for(
+                    loop.run_in_executor(None, self._sync_tools[name].invoke, tool_input),
+                    timeout=self.TOOL_TIMEOUT,
+                )
+            else:
+                logger.warning(f"[{self.role}] Tool '{name}' not found.")
+                return [ToolMessage(content=f"Tool '{name}' not found.", tool_call_id=tool_call["id"])], {}
+        except asyncio.TimeoutError:
+            logger.warning(f"[{self.role}] Tool '{name}' timed out after {self.TOOL_TIMEOUT}s.")
+            return [ToolMessage(content=f"Error: Tool '{name}' timed out after {self.TOOL_TIMEOUT} seconds.", tool_call_id=tool_call["id"])], {}
 
         if not isinstance(result, Command):
             logger.error(f"[{self.role}] Tool '{name}' returned {type(result)}, expected Command.")
@@ -122,6 +136,10 @@ class CrucibleAgent:
         max_loop_reminders = 3
         recent_fps: deque = deque(maxlen=max_loop_repeats)
         loop_reminders = 0
+        run_timeout_seconds = 30 * 60
+        max_timeout_reminders = 3
+        timeout_reminders = 0
+        start_time = time.monotonic()
 
         while True:
             ai_msg = self.llm.inference(messages=messages, tools=self.tools)
@@ -190,6 +208,26 @@ class CrucibleAgent:
                 messages.append(reminder)
                 logger.warning(
                     f"[{self.role}] Loop detected — injecting reminder ({loop_reminders}/{max_loop_reminders})."
+                )
+
+            if time.monotonic() - start_time > run_timeout_seconds:
+                if timeout_reminders >= max_timeout_reminders:
+                    logger.warning(
+                        f"[{self.role}] Run timeout exceeded after {timeout_reminders} reminders — breaking."
+                    )
+                    break
+                timeout_reminders += 1
+                reminder = HumanMessage(
+                    content=(
+                        f"You have been running for over {run_timeout_seconds // 60} minutes. "
+                        f"Please wrap up your investigation and call `{self.submit_tool.name}` "
+                        f"with your best findings now."
+                    )
+                )
+                messages.append(reminder)
+                logger.warning(
+                    f"[{self.role}] Run timeout — injecting submit reminder "
+                    f"({timeout_reminders}/{max_timeout_reminders})."
                 )
 
             messages, compact_usage = self._maybe_compact(messages)
