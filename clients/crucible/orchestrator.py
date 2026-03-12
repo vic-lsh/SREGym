@@ -85,6 +85,7 @@ async def _run_sre_agent(
         tools=[read_file, write_file, str_replace_file, exec_bash, complete_tool],
         submit_tool=complete_tool,
         model_name=model_name,
+        role=f"{stage}-agent",
     )
     return await agent.arun(_build_prompts(app_info, stage, "agent", iteration, shared_content))
 
@@ -104,6 +105,7 @@ async def _run_judge(
         tools=[read_file, exec_bash_readonly, approve_tool, reject_tool],
         submit_tool=approve_tool,
         model_name=model_name,
+        role=f"{stage}-judge",
     )
     return await agent.arun(_build_prompts(app_info, stage, "judge", iteration, shared_content))
 

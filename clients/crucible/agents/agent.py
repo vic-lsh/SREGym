@@ -30,11 +30,12 @@ class CrucibleAgent:
       4. Stop when submitted=True or the LLM produces no tool calls
     """
 
-    def __init__(self, llm, tools: list, submit_tool, model_name: str):
+    def __init__(self, llm, tools: list, submit_tool, model_name: str, role: str = "agent"):
         self.llm = llm
         self.tools = tools
         self.submit_tool = submit_tool
         self.model_name = model_name
+        self.role = role
         self.context_window = get_context_window(model_name)
         self._sync_tools, self._async_tools = _build_tool_map(tools)
 
@@ -48,11 +49,11 @@ class CrucibleAgent:
         elif name in self._sync_tools:
             result = self._sync_tools[name].invoke(tool_input)
         else:
-            logger.warning(f"Tool '{name}' not found.")
+            logger.warning(f"[{self.role}] Tool '{name}' not found.")
             return [ToolMessage(content=f"Tool '{name}' not found.", tool_call_id=tool_call["id"])], {}
 
         if not isinstance(result, Command):
-            logger.error(f"Tool '{name}' returned {type(result)}, expected Command.")
+            logger.error(f"[{self.role}] Tool '{name}' returned {type(result)}, expected Command.")
             return [ToolMessage(content=f"Tool '{name}' returned an invalid result.", tool_call_id=tool_call["id"])], {}
 
         update = result.update
@@ -66,7 +67,7 @@ class CrucibleAgent:
             return messages
 
         logger.warning(
-            f"Compacting context: {current_tokens} tokens >= {threshold:.0f} "
+            f"[{self.role}] Compacting context: {current_tokens} tokens >= {threshold:.0f} "
             f"(80% of {self.context_window})"
         )
 
@@ -96,7 +97,7 @@ class CrucibleAgent:
         ]
 
         after_tokens = count_tokens(self.model_name, compacted)
-        logger.warning(f"Context compacted: {current_tokens} → {after_tokens} tokens")
+        logger.warning(f"[{self.role}] Context compacted: {current_tokens} → {after_tokens} tokens")
         return compacted
 
     async def arun(self, starting_prompts: list) -> dict:
@@ -108,7 +109,9 @@ class CrucibleAgent:
             ai_msg = self.llm.inference(messages=messages, tools=self.tools)
             messages.append(ai_msg)
             steps += 1
-            ai_msg.pretty_print()
+            logger.info(f"[{self.role}] AI: {ai_msg.content}")
+            for tc in ai_msg.tool_calls:
+                logger.info(f"[{self.role}] Tool call: {tc['name']}({tc['args']})")
 
             if not ai_msg.tool_calls:
                 break
@@ -118,7 +121,7 @@ class CrucibleAgent:
                 messages.extend(tool_msgs)
                 state.update(state_updates)
                 for msg in tool_msgs:
-                    msg.pretty_print()
+                    logger.info(f"[{self.role}] Tool result ({msg.name if hasattr(msg, 'name') else '?'}): {msg.content}")
 
             if state.get("submitted"):
                 break
@@ -126,7 +129,7 @@ class CrucibleAgent:
             messages = self._maybe_compact(messages)
 
         logger.info(
-            f"Agent finished. submitted={state.get('submitted')}, "
+            f"[{self.role}] Finished. submitted={state.get('submitted')}, "
             f"verdict={state.get('verdict')!r}, steps={steps}"
         )
         return {"messages": messages, "steps": steps, **state}
