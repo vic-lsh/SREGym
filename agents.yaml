@@ -21,3 +21,7 @@ agents:
     kickoff_command: python -m clients.gemini_cli.driver
     kickoff_workdir: .
     kickoff_env: null
+  - name: crucible
+    kickoff_command: python -m clients.crucible.driver
+    kickoff_workdir: .
+    kickoff_env: null

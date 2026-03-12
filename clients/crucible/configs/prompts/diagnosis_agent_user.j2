@@ -10,6 +10,9 @@ Current shared session state:
 ---
 
 The shared session file is at: {{ shared_file }}
-
+{% if lt_summary_file %}
+IMPORTANT: A summary of findings from previous problems is available at: {{ lt_summary_file }}
+Read it before starting your investigation to avoid repeating known mistakes and to speed up diagnosis.
+{% endif %}
 Begin your investigation. Read the shared file first for any judge feedback from previous
 iterations, then diagnose the issue and call mark_hypothesis_complete when ready.

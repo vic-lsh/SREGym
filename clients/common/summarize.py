@@ -24,6 +24,19 @@ from logger import init_logger
 init_logger()
 logger = logging.getLogger("all.common.summarize")
 
+SUMMARY_FILENAME = "long_term_summary.txt"
+
+
+def get_llm_backend(model_id: str) -> LiteLLMBackend:
+    """Build an LLM backend using configs.yaml, with litellm fallback."""
+    try:
+        return get_llm_backend_for_model(model_id)
+    except ValueError:
+        logger.warning(
+            f"Model {model_id} not in configs.yaml, falling back to direct litellm construction"
+        )
+        return LiteLLMBackend(provider="litellm", model_name=model_id, temperature=0.0)
+
 
 class ResultSummarizer:
     def __init__(
@@ -39,19 +52,10 @@ class ResultSummarizer:
         self.summary_dir = summary_dir if summary_dir else logs_dir
 
         self.output_path = self.logs_dir / self.output_filename
-        self.summary_path = self.summary_dir / "long_term_summary.txt"
+        self.summary_path = self.summary_dir / SUMMARY_FILENAME
 
     def _get_llm(self) -> LiteLLMBackend:
-        """Build an LLM backend using configs.yaml, with litellm fallback."""
-        try:
-            return get_llm_backend_for_model(self.model_id)
-        except ValueError:
-            logger.warning(
-                f"Model {self.model_id} not in configs.yaml, falling back to direct litellm construction"
-            )
-            return LiteLLMBackend(
-                provider="litellm", model_name=self.model_id, temperature=0.0
-            )
+        return get_llm_backend(self.model_id)
 
     def _get_instruction_text(self) -> str:
         """Extract instruction from instruction.txt, or fall back to the output file."""

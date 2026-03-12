@@ -57,6 +57,7 @@ def _build_prompts(
     iteration: int,
     shared_content: str,
     shared_file: Path,
+    lt_summary_file: Path | None = None,
 ) -> list:
     ctx = dict(
         app_name=app_info.get("app_name", "unknown"),
@@ -64,7 +65,8 @@ def _build_prompts(
         descriptions=app_info.get("descriptions", ""),
         iteration=iteration,
         shared_content=shared_content,
-        shared_file=str(shared_file.resolve()),
+        shared_file=str(shared_file),
+        lt_summary_file=str(lt_summary_file) if lt_summary_file else None,
     )
     return [
         SystemMessage(content=_render(f"{stage}_{agent_type}_system")),
@@ -81,6 +83,7 @@ async def _run_sre_agent(
     shared_content: str,
     shared_file: Path,
     complete_tool,
+    lt_summary_file: Path | None = None,
 ) -> dict:
     agent = CrucibleAgent(
         llm=llm,
@@ -89,7 +92,7 @@ async def _run_sre_agent(
         model_name=model_name,
         role=f"{stage}-agent",
     )
-    return await agent.arun(_build_prompts(app_info, stage, "agent", iteration, shared_content, shared_file))
+    return await agent.arun(_build_prompts(app_info, stage, "agent", iteration, shared_content, shared_file, lt_summary_file=lt_summary_file))
 
 
 async def _run_judge(
@@ -120,6 +123,7 @@ async def _run_stage_loop(
     model_name: str,
     shared_file: Path,
     make_complete_tool,
+    lt_summary_file: Path | None = None,
 ) -> bool:
     """Run the agent→judge loop for one stage. Returns True if judge approved."""
     logger.info("=" * 60)
@@ -131,7 +135,7 @@ async def _run_stage_loop(
 
         shared_content = shared_file.read_text()
         complete_tool = make_complete_tool(shared_file, iteration)
-        await _run_sre_agent(llm, app_info, stage, iteration, model_name, shared_content, shared_file, complete_tool)
+        await _run_sre_agent(llm, app_info, stage, iteration, model_name, shared_content, shared_file, complete_tool, lt_summary_file=lt_summary_file)
 
         shared_content = shared_file.read_text()
         verdict_tool = make_submit_verdict(shared_file, iteration, stage)
@@ -156,6 +160,7 @@ async def run(
     problem_id: str,
     shared_file: Path,
     planned_stages: list[str],
+    lt_summary_file: Path | None = None,
 ) -> None:
     """Main orchestrator: runs diagnosis (and optionally mitigation) with judge-agent loop."""
     agent_cfg = _load_agent_config()
@@ -168,7 +173,11 @@ async def run(
 
     _init_shared_file(shared_file, app_info, problem_id)
 
-    await _run_stage_loop(llm, app_info, "diagnosis", max_diag_iters, model_name, shared_file, make_mark_hypothesis_complete)
+    # Resolve to absolute paths once so agents receive stable absolute paths in prompts.
+    shared_file = shared_file.resolve()
+    lt_summary_file = lt_summary_file.resolve() if lt_summary_file else None
+
+    await _run_stage_loop(llm, app_info, "diagnosis", max_diag_iters, model_name, shared_file, make_mark_hypothesis_complete, lt_summary_file=lt_summary_file)
 
     if "mitigation" not in planned_stages:
         logger.info("Diagnosis-only problem — orchestrator complete.")
@@ -183,7 +192,7 @@ async def run(
     except TimeoutError:
         logger.warning(f"Timed out waiting for mitigation stage after {wait_stage_timeout}s — proceeding anyway.")
 
-    await _run_stage_loop(llm, app_info, "mitigation", max_mit_iters, model_name, shared_file, make_mark_mitigation_complete)
+    await _run_stage_loop(llm, app_info, "mitigation", max_mit_iters, model_name, shared_file, make_mark_mitigation_complete, lt_summary_file=lt_summary_file)
 
     logger.info("=" * 60)
     logger.info("CRUCIBLE: Orchestrator complete.")
