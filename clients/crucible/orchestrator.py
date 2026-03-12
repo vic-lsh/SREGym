@@ -9,7 +9,7 @@ from clients.common.driver_utils import wait_for_ready_stage
 from clients.crucible.agents.agent import CrucibleAgent
 from clients.crucible.tools.bash_tool import exec_bash, exec_bash_readonly
 from clients.crucible.tools.file_tools import read_file, str_replace_file, write_file
-from clients.crucible.tools.judge_tools import make_approve_and_submit, make_reject_with_feedback
+from clients.crucible.tools.judge_tools import make_submit_verdict
 from clients.crucible.tools.sre_complete_tool import (
     make_mark_hypothesis_complete,
     make_mark_mitigation_complete,
@@ -42,7 +42,6 @@ def _init_shared_file(shared_file: Path, app_info: dict, problem_id: str) -> Non
     content = (
         "# SRE Judged Session State\n"
         "## Session\n"
-        f"- Problem ID: {problem_id}\n"
         f"- App: {app_info.get('app_name', 'unknown')} "
         f"/ Namespace: {app_info.get('namespace', 'default')}\n\n"
         "## Diagnosis\n"
@@ -101,13 +100,12 @@ async def _run_judge(
     model_name: str,
     shared_content: str,
     shared_file: Path,
-    approve_tool,
-    reject_tool,
+    verdict_tool,
 ) -> dict:
     agent = CrucibleAgent(
         llm=llm,
-        tools=[read_file, exec_bash_readonly, approve_tool, reject_tool],
-        submit_tool=approve_tool,
+        tools=[read_file, exec_bash_readonly, verdict_tool],
+        submit_tool=verdict_tool,
         model_name=model_name,
         role=f"{stage}-judge",
     )
@@ -136,10 +134,9 @@ async def _run_stage_loop(
         await _run_sre_agent(llm, app_info, stage, iteration, model_name, shared_content, shared_file, complete_tool)
 
         shared_content = shared_file.read_text()
-        approve_tool = make_approve_and_submit(shared_file, iteration, stage)
-        reject_tool = make_reject_with_feedback(shared_file, iteration, stage)
+        verdict_tool = make_submit_verdict(shared_file, iteration, stage)
         judge_state = await _run_judge(
-            llm, app_info, stage, iteration, model_name, shared_content, shared_file, approve_tool, reject_tool,
+            llm, app_info, stage, iteration, model_name, shared_content, shared_file, verdict_tool,
         )
 
         verdict = judge_state.get("verdict")
