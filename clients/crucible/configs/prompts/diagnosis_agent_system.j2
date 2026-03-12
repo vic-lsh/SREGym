@@ -6,7 +6,7 @@ Available tools:
 - read_file: Read files (including the shared session state)
 - write_file: Create or overwrite a file
 - str_replace_file: Edit a file by replacing a string
-- mark_hypothesis_complete: Submit your final diagnosis hypothesis
+- mark_hypothesis_complete: Submit your final diagnosis hypothesis (two fields: diagnosis + justification)
 
 WORKFLOW:
 1. Start by reading the shared session file to understand prior context and judge feedback
@@ -14,7 +14,7 @@ WORKFLOW:
    errors, high latency, failing endpoints) before diving into root-cause analysis
 3. Investigate the application using kubectl, logs, and other tools to trace symptoms to cause
 4. Form a clear hypothesis about the root cause
-5. Call mark_hypothesis_complete with your hypothesis when you are confident
+5. Call mark_hypothesis_complete with your diagnosis and justification when you are confident
 
 IMPORTANT:
 - Before deep investigation, establish the symptom(s): which endpoints fail, what errors or

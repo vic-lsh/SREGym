@@ -9,39 +9,75 @@ from langgraph.types import Command
 logger = logging.getLogger(__name__)
 
 
-def _make_complete_tool(tool_name: str, section_title: str, shared_file: Path, iteration: int):
-    @tool(tool_name)
-    async def complete(
-        answer: str,
+def make_mark_hypothesis_complete(shared_file: Path, iteration: int):
+    """Returns a tool that records the diagnosis hypothesis for the given iteration."""
+
+    @tool
+    async def mark_hypothesis_complete(
+        diagnosis: str,
+        justification: str,
         tool_call_id: Annotated[str, InjectedToolCallId],
     ) -> Command:
-        """Submit your completed answer for this stage.
+        """Submit your completed diagnosis hypothesis for this stage.
 
         Args:
-            answer: Your final answer (hypothesis or mitigation strategy).
+            diagnosis: Your final diagnosis — the specific root cause of the issue.
+            justification: Detailed justification explaining the evidence that supports
+                           your diagnosis.
         """
-        section = f"\n### Iteration {iteration} — {section_title}\n{answer}\n"
+        section = (
+            f"\n### Iteration {iteration} — Agent Hypothesis\n"
+            f"**Diagnosis**: {diagnosis}\n"
+            f"**Justification**: {justification}\n"
+        )
         try:
             with open(shared_file, "a") as f:
                 f.write(section)
-            logger.info(f"{section_title} written to {shared_file} (iteration {iteration})")
-            result = f"{section_title} recorded. The judge will now evaluate. No further action needed."
+            logger.info(f"Agent Hypothesis written to {shared_file} (iteration {iteration})")
+            result = "Agent Hypothesis recorded. The judge will now evaluate. No further action needed."
         except Exception as e:
-            logger.error(f"Failed to write {section_title.lower()}: {e}")
-            result = f"Error recording {section_title.lower()}: {e}"
+            logger.error(f"Failed to write agent hypothesis: {e}")
+            result = f"Error recording agent hypothesis: {e}"
 
         return Command(
             update={"submitted": True, "messages": [ToolMessage(content=result, tool_call_id=tool_call_id)]}
         )
 
-    return complete
-
-
-def make_mark_hypothesis_complete(shared_file: Path, iteration: int):
-    """Returns a tool that records the diagnosis hypothesis for the given iteration."""
-    return _make_complete_tool("mark_hypothesis_complete", "Agent Hypothesis", shared_file, iteration)
+    return mark_hypothesis_complete
 
 
 def make_mark_mitigation_complete(shared_file: Path, iteration: int):
     """Returns a tool that records the mitigation strategy for the given iteration."""
-    return _make_complete_tool("mark_mitigation_complete", "Agent Strategy", shared_file, iteration)
+
+    @tool
+    async def mark_mitigation_complete(
+        mitigation: str,
+        justification: str,
+        tool_call_id: Annotated[str, InjectedToolCallId],
+    ) -> Command:
+        """Submit your completed mitigation for this stage.
+
+        Args:
+            mitigation: A concise description of the fix you applied.
+            justification: Detailed justification explaining why this fix addresses the
+                           root cause and evidence that it has taken effect.
+        """
+        section = (
+            f"\n### Iteration {iteration} — Agent Strategy\n"
+            f"**Mitigation**: {mitigation}\n"
+            f"**Justification**: {justification}\n"
+        )
+        try:
+            with open(shared_file, "a") as f:
+                f.write(section)
+            logger.info(f"Agent Strategy written to {shared_file} (iteration {iteration})")
+            result = "Agent Strategy recorded. The judge will now evaluate. No further action needed."
+        except Exception as e:
+            logger.error(f"Failed to write agent strategy: {e}")
+            result = f"Error recording agent strategy: {e}"
+
+        return Command(
+            update={"submitted": True, "messages": [ToolMessage(content=result, tool_call_id=tool_call_id)]}
+        )
+
+    return mark_mitigation_complete

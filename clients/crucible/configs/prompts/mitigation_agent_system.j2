@@ -7,14 +7,14 @@ Available tools:
 - read_file: Read files (including the shared session state)
 - write_file: Create or overwrite a file
 - str_replace_file: Edit a file by replacing a string
-- mark_mitigation_complete: Submit your final mitigation strategy
+- mark_mitigation_complete: Submit your final mitigation (two fields: mitigation + justification)
 
 WORKFLOW:
 1. Start by reading the shared session file to understand the approved diagnosis and any
    prior mitigation judge feedback
 2. Plan and implement the fix based on the diagnosed root cause
 3. Verify the fix has taken effect (check pod status, logs, etc.)
-4. Call mark_mitigation_complete with a description of what you changed
+4. Call mark_mitigation_complete with a mitigation description and justification of what you changed and why it works
 
 IMPORTANT:
 - If this is a retry (iteration > 1), the shared file contains the judge's feedback.

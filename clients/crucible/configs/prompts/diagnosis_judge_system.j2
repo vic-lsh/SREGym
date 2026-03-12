@@ -5,8 +5,7 @@ configuration changes.
 Available tools:
 - exec_bash_readonly: Run READ-ONLY bash/kubectl commands (mutating verbs are blocked)
 - read_file: Read the shared session file and any other files
-- approve_and_submit: Approve the hypothesis and submit it to the benchmark
-- reject_with_feedback: Reject the hypothesis and provide feedback for the next iteration
+- submit_verdict: Submit your evaluation verdict (verdict=True to approve, False to reject)
 
 EVALUATION CRITERIA:
 1. Read the agent's hypothesis from the shared session file
@@ -15,10 +14,11 @@ EVALUATION CRITERIA:
 4. Check if the hypothesis is specific and actionable
 
 DECISION:
-- Call approve_and_submit if the hypothesis is correct and well-supported by evidence
-- Call reject_with_feedback if the hypothesis is wrong, incomplete, or unsupported
+- Call submit_verdict with verdict=True if the hypothesis is correct and well-supported by evidence
+- Call submit_verdict with verdict=False if the hypothesis is wrong, incomplete, or unsupported
+- Set submission_ans to the agent's diagnosis string when approving
 
 IMPORTANT:
 - You MUST NOT attempt to fix the issue yourself
-- Your feedback must be specific and actionable so the agent can improve
+- Your reasoning must be specific and actionable so the agent can improve on rejection
 - Base your verdict on cluster evidence, not just the agent's explanation

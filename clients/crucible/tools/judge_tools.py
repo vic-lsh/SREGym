@@ -51,102 +51,65 @@ async def _submit_to_benchmark(submission_ans: str) -> tuple[bool, str, dict | N
         return False, f"Submission error: {e}", None
 
 
-def make_approve_and_submit(shared_file: Path, iteration: int, stage: str):
-    """Factory: returns an approve_and_submit tool bound to the given shared file, iteration, and stage."""
+def make_submit_verdict(shared_file: Path, iteration: int, stage: str):
+    """Factory: returns a submit_verdict tool bound to the given shared file, iteration, and stage."""
 
     @tool
-    async def approve_and_submit(
-        submission_ans: str,
+    async def submit_verdict(
+        verdict: bool,
         reasoning: str,
+        submission_ans: str,
         tool_call_id: Annotated[str, InjectedToolCallId],
     ) -> Command:
-        """Approve the agent's work and submit the answer to the benchmark.
-
-        Call this ONLY when you are confident the agent's work is correct.
+        """Submit your evaluation verdict.
 
         Args:
-            submission_ans: The answer string to submit to the benchmark.
-            reasoning: Your detailed reasoning for approving this answer.
+            verdict: True to approve the agent's work, False to reject it.
+            reasoning: Detailed reasoning for your verdict, including evidence from
+                       cluster inspection.
+            submission_ans: The answer string to submit to the benchmark. Use the
+                            agent's hypothesis for diagnosis, empty string for mitigation.
         """
+        status = "APPROVED" if verdict else "REJECTED"
         section = (
             f"\n### Iteration {iteration} — Judge Verdict ({stage})\n"
-            f"- Status: APPROVED\n"
+            f"- Status: {status}\n"
             f"- Reasoning: {reasoning}\n"
         )
         try:
             with open(shared_file, "a") as f:
                 f.write(section)
         except Exception as e:
-            logger.error(f"Failed to write approval to shared file: {e}")
+            logger.error(f"Failed to write verdict to shared file: {e}")
 
-        success, msg, oracle_result = await _submit_to_benchmark(submission_ans)
-        if success:
-            content = f"APPROVED. {msg}"
-            logger.info(f"Judge approved and submitted (iteration {iteration}, stage {stage})")
+        if verdict:
+            success, msg, oracle_result = await _submit_to_benchmark(submission_ans)
+            if success:
+                content = f"APPROVED. {msg}"
+                logger.info(f"Judge approved and submitted (iteration {iteration}, stage {stage})")
+            else:
+                logger.warning(f"Judge approved but benchmark evaluated as incorrect: {msg}")
+                content = f"APPROVED and submitted, but benchmark evaluated as incorrect: {msg}"
+
+            try:
+                with open(shared_file, "a") as f:
+                    f.write(
+                        "\nThis is an oracle response that supersedes the previous findings"
+                        " from the agent and the judge.\n"
+                        f"<benchmark_result>\n{json.dumps(oracle_result, indent=2) if oracle_result is not None else msg}\n</benchmark_result>\n"
+                    )
+            except Exception as e:
+                logger.error(f"Failed to write benchmark result to shared file: {e}")
         else:
-            logger.warning(f"Judge approved but benchmark evaluated as incorrect: {msg}")
-            content = f"APPROVED and submitted, but benchmark evaluated as incorrect: {msg}"
-
-        try:
-            with open(shared_file, "a") as f:
-                f.write(
-                    "\nThis is an oracle response that supersedes the previous findings"
-                    " from the agent and the judge.\n"
-                    f"<benchmark_result>\n{json.dumps(oracle_result, indent=2) if oracle_result is not None else msg}\n</benchmark_result>\n"
-                )
-        except Exception as e:
-            logger.error(f"Failed to write benchmark result to shared file: {e}")
+            content = "REJECTED. Feedback recorded in the shared session file. The agent will retry."
+            logger.info(f"Judge rejected with feedback (iteration {iteration}, stage {stage})")
 
         return Command(
             update={
                 "submitted": True,
-                "verdict": "APPROVED",
+                "verdict": status,
                 "messages": [ToolMessage(content=content, tool_call_id=tool_call_id)],
             }
         )
 
-    return approve_and_submit
-
-
-def make_reject_with_feedback(shared_file: Path, iteration: int, stage: str):
-    """Factory: returns a reject_with_feedback tool bound to the given shared file, iteration, and stage."""
-
-    @tool
-    async def reject_with_feedback(
-        feedback: str,
-        tool_call_id: Annotated[str, InjectedToolCallId],
-    ) -> Command:
-        """Reject the agent's work and provide actionable feedback for the next iteration.
-
-        Call this when the agent's work is incorrect or incomplete.
-
-        Args:
-            feedback: Specific, actionable feedback explaining what is wrong and what
-                      the agent should investigate or do differently on the next attempt.
-        """
-        section = (
-            f"\n### Iteration {iteration} — Judge Verdict ({stage})\n"
-            f"- Status: REJECTED\n"
-            f"- Feedback: {feedback}\n"
-        )
-        try:
-            with open(shared_file, "a") as f:
-                f.write(section)
-            logger.info(f"Judge rejected with feedback (iteration {iteration}, stage {stage})")
-        except Exception as e:
-            logger.error(f"Failed to write rejection to shared file: {e}")
-
-        return Command(
-            update={
-                "submitted": True,
-                "verdict": "REJECTED",
-                "messages": [
-                    ToolMessage(
-                        content="REJECTED. Feedback recorded in the shared session file. The agent will retry.",
-                        tool_call_id=tool_call_id,
-                    )
-                ],
-            }
-        )
-
-    return reject_with_feedback
+    return submit_verdict
