@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections import deque
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langgraph.types import Command
@@ -106,6 +107,10 @@ class CrucibleAgent:
         steps = 0
         max_no_submit_reminders = 3
         no_submit_reminders = 0
+        max_loop_repeats = 3
+        max_loop_reminders = 3
+        recent_fps: deque = deque(maxlen=max_loop_repeats)
+        loop_reminders = 0
 
         while True:
             ai_msg = self.llm.inference(messages=messages, tools=self.tools)
@@ -140,6 +145,31 @@ class CrucibleAgent:
 
             if state.get("submitted"):
                 break
+
+            # Detect repetitive tool-call loops
+            current_fp = frozenset(
+                (tc["name"], repr(sorted(tc["args"].items())))
+                for tc in ai_msg.tool_calls
+            )
+            recent_fps.append(current_fp)
+            if len(recent_fps) == max_loop_repeats and len(set(recent_fps)) == 1:
+                if loop_reminders >= max_loop_reminders:
+                    logger.warning(
+                        f"[{self.role}] Loop detected after {loop_reminders} reminders — breaking."
+                    )
+                    break
+                loop_reminders += 1
+                reminder = HumanMessage(
+                    content=(
+                        "You have been calling the same tool(s) with the same arguments repeatedly without making progress. "
+                        "Please try a different approach — run a different command, inspect the system from another angle, "
+                        f"or call `{self.submit_tool.name}` if you have gathered enough information to submit your answer."
+                    )
+                )
+                messages.append(reminder)
+                logger.warning(
+                    f"[{self.role}] Loop detected — injecting reminder ({loop_reminders}/{max_loop_reminders})."
+                )
 
             messages = self._maybe_compact(messages)
 
