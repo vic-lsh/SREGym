@@ -1,0 +1,8 @@
+# Maximum number of diagnosis agent + judge iterations before forcing submission
+max_diagnosis_iterations: 3
+
+# Maximum number of mitigation agent + judge iterations before forcing submission
+max_mitigation_iterations: 3
+
+# Seconds to wait for the benchmark to transition to the mitigation stage
+wait_stage_timeout: 300

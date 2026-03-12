@@ -1,0 +1,12 @@
+Application: {{ app_name }}
+Namespace: {{ namespace }}
+
+This is judge evaluation for mitigation iteration {{ iteration }}.
+
+Current shared session state:
+---
+{{ shared_content }}
+---
+
+Review the agent's mitigation strategy above, verify the fix against the cluster state,
+then call approve_and_submit (with submission_ans="") or reject_with_feedback.

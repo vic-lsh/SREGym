@@ -1,0 +1,12 @@
+Application: {{ app_name }}
+Namespace: {{ namespace }}
+
+This is judge evaluation for diagnosis iteration {{ iteration }}.
+
+Current shared session state:
+---
+{{ shared_content }}
+---
+
+Review the agent's hypothesis above, verify it against the cluster state, then call
+approve_and_submit or reject_with_feedback with your verdict.

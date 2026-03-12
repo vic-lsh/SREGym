@@ -65,7 +65,7 @@ class LiteLLMBackend:
         messages: str | list[SystemMessage | HumanMessage | AIMessage],
         system_prompt: str | None = None,
         tools: list[any] | None = None,
-    ):
+    ) -> AIMessage:
         if isinstance(messages, str):
             # logger.info(f"NL input as str received: {messages}")
             # FIXME: This should be deprecated as it does not contain prior history of chat.
