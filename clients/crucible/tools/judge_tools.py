@@ -38,7 +38,7 @@ async def _submit_to_benchmark(submission_ans: str) -> tuple[bool, str]:
 def make_approve_and_submit(shared_file: Path, iteration: int, stage: str):
     """Factory: returns an approve_and_submit tool bound to the given shared file, iteration, and stage."""
 
-    @tool(name="approve_and_submit")
+    @tool
     async def approve_and_submit(
         submission_ans: str,
         reasoning: str,
@@ -85,7 +85,7 @@ def make_approve_and_submit(shared_file: Path, iteration: int, stage: str):
 def make_reject_with_feedback(shared_file: Path, iteration: int, stage: str):
     """Factory: returns a reject_with_feedback tool bound to the given shared file, iteration, and stage."""
 
-    @tool(name="reject_with_feedback")
+    @tool
     async def reject_with_feedback(
         feedback: str,
         tool_call_id: Annotated[str, InjectedToolCallId],
