@@ -915,6 +915,27 @@ def _load_preloaded_images_into_cluster(cluster_name: str) -> None:
             pass
 
 
+def _build_kind_config_with_registry_auth(base_config_path: str, docker_user: str, docker_password: str) -> str:
+    """Return path to a temp kind config with Docker Hub auth injected into containerdConfigPatches."""
+    import tempfile, yaml
+
+    with open(base_config_path) as f:
+        config = yaml.safe_load(f)
+
+    auth_patch = (
+        '[plugins."io.containerd.grpc.v1.cri".registry.configs."registry-1.docker.io".auth]\n'
+        f'  username = "{docker_user}"\n'
+        f'  password = "{docker_password}"\n'
+    )
+    config.setdefault("containerdConfigPatches", [])
+    config["containerdConfigPatches"].append(auth_patch)
+
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False)
+    yaml.dump(config, tmp)
+    tmp.flush()
+    return tmp.name
+
+
 def _create_worker_cluster(worker_id: int, experiment_log_dir: str) -> tuple[str, str]:
     """Create a dedicated kind cluster for one worker and return (cluster_name, kubeconfig_path)."""
     cluster_name = f"{KIND_CLUSTER_PREFIX}{worker_id}"
@@ -925,6 +946,16 @@ def _create_worker_cluster(worker_id: int, experiment_log_dir: str) -> tuple[str
 
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"Kind config file not found: {config_path}")
+
+    docker_user = os.environ.get("DOCKER_USERNAME")
+    docker_password = os.environ.get("DOCKER_PASSWORD")
+    patched_config_path = None
+    if docker_user and docker_password:
+        patched_config_path = _build_kind_config_with_registry_auth(config_path, docker_user, docker_password)
+        config_path = patched_config_path
+        logger.info("Docker Hub credentials will be injected into containerd on all kind nodes.")
+    else:
+        logger.warning("DOCKER_USERNAME/DOCKER_PASSWORD not set. Kind nodes will pull Docker Hub images unauthenticated.")
 
     logger.info(f"Preparing isolated kind cluster for worker {worker_id}: {cluster_name}")
 
@@ -971,6 +1002,8 @@ def _create_worker_cluster(worker_id: int, experiment_log_dir: str) -> tuple[str
         ],
         check=True,
     )
+    if patched_config_path and os.path.exists(patched_config_path):
+        os.unlink(patched_config_path)
     _load_preloaded_images_into_cluster(cluster_name)
 
     os.environ["KUBECONFIG"] = kubeconfig_path
