@@ -116,6 +116,14 @@ class CrucibleAgent:
             ai_msg = self.llm.inference(messages=messages, tools=self.tools)
             messages.append(ai_msg)
             steps += 1
+            thinking = ai_msg.additional_kwargs.get("reasoning_content") or ai_msg.additional_kwargs.get("thinking")
+            if not thinking and isinstance(ai_msg.content, list):
+                for block in ai_msg.content:
+                    if isinstance(block, dict) and block.get("type") == "thinking":
+                        thinking = block.get("thinking", "")
+                        break
+            if thinking:
+                logger.info(f"[{self.role}] Thinking: {thinking}")
             logger.info(f"[{self.role}] AI: {ai_msg.content}")
             for tc in ai_msg.tool_calls:
                 logger.info(f"[{self.role}] Tool call: {tc['name']}({tc['args']})")
