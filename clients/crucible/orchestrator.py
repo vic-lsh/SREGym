@@ -108,6 +108,46 @@ async def _run_judge(
     return await agent.arun(_build_prompts(app_info, stage, "judge", iteration, shared_content))
 
 
+async def _run_stage_loop(
+    llm,
+    app_info: dict,
+    stage: str,
+    max_iters: int,
+    model_name: str,
+    shared_file: Path,
+    make_complete_tool,
+) -> bool:
+    """Run the agent→judge loop for one stage. Returns True if judge approved."""
+    logger.info("=" * 60)
+    logger.info(f"CRUCIBLE: Starting {stage.upper()} stage")
+    logger.info("=" * 60)
+
+    for iteration in range(1, max_iters + 1):
+        logger.info(f"--- {stage.capitalize()} iteration {iteration}/{max_iters} ---")
+
+        shared_content = shared_file.read_text()
+        complete_tool = make_complete_tool(shared_file, iteration)
+        await _run_sre_agent(llm, app_info, stage, iteration, model_name, shared_content, complete_tool)
+
+        shared_content = shared_file.read_text()
+        approve_tool = make_approve_and_submit(shared_file, iteration, stage)
+        reject_tool = make_reject_with_feedback(shared_file, iteration, stage)
+        judge_state = await _run_judge(
+            llm, app_info, stage, iteration, model_name, shared_content, approve_tool, reject_tool,
+        )
+
+        verdict = judge_state.get("verdict")
+        logger.info(f"{stage.capitalize()} iteration {iteration} verdict: {verdict!r}")
+
+        if verdict == "APPROVED":
+            logger.info(f"Judge APPROVED {stage}.")
+            return True
+        logger.info(f"Judge REJECTED {stage} (iteration {iteration}). Looping...")
+
+    logger.warning(f"Max {stage} iterations reached without APPROVED verdict.")
+    return False
+
+
 async def run(
     app_info: dict,
     problem_id: str,
@@ -125,44 +165,12 @@ async def run(
 
     _init_shared_file(shared_file, app_info, problem_id)
 
-    # ── DIAGNOSIS STAGE ──────────────────────────────────────────────────────
-    logger.info("=" * 60)
-    logger.info("CRUCIBLE: Starting DIAGNOSIS stage")
-    logger.info("=" * 60)
-
-    diag_approved = False
-    for diag_iter in range(1, max_diag_iters + 1):
-        logger.info(f"--- Diagnosis iteration {diag_iter}/{max_diag_iters} ---")
-
-        shared_content = shared_file.read_text()
-        complete_tool = make_mark_hypothesis_complete(shared_file, diag_iter)
-        await _run_sre_agent(llm, app_info, "diagnosis", diag_iter, model_name, shared_content, complete_tool)
-
-        shared_content = shared_file.read_text()
-        approve_tool = make_approve_and_submit(shared_file, diag_iter, "diagnosis")
-        reject_tool = make_reject_with_feedback(shared_file, diag_iter, "diagnosis")
-        judge_state = await _run_judge(
-            llm, app_info, "diagnosis", diag_iter, model_name, shared_content, approve_tool, reject_tool,
-        )
-
-        verdict = judge_state.get("verdict")
-        logger.info(f"Diagnosis iteration {diag_iter} verdict: {verdict!r}")
-
-        if verdict == "APPROVED":
-            diag_approved = True
-            logger.info("Judge APPROVED diagnosis.")
-            break
-        else:
-            logger.info(f"Judge REJECTED diagnosis (iteration {diag_iter}). Looping...")
-
-    if not diag_approved:
-        logger.warning("Max diagnosis iterations reached without APPROVED verdict.")
+    await _run_stage_loop(llm, app_info, "diagnosis", max_diag_iters, model_name, shared_file, make_mark_hypothesis_complete)
 
     if "mitigation" not in planned_stages:
         logger.info("Diagnosis-only problem — orchestrator complete.")
         return
 
-    # Append mitigation header to shared file and wait for stage transition
     with open(shared_file, "a") as f:
         f.write("\n## Mitigation\n")
 
@@ -172,38 +180,7 @@ async def run(
     except TimeoutError:
         logger.warning(f"Timed out waiting for mitigation stage after {wait_stage_timeout}s — proceeding anyway.")
 
-    # ── MITIGATION STAGE ─────────────────────────────────────────────────────
-    logger.info("=" * 60)
-    logger.info("CRUCIBLE: Starting MITIGATION stage")
-    logger.info("=" * 60)
-
-    mit_approved = False
-    for mit_iter in range(1, max_mit_iters + 1):
-        logger.info(f"--- Mitigation iteration {mit_iter}/{max_mit_iters} ---")
-
-        shared_content = shared_file.read_text()
-        complete_tool = make_mark_mitigation_complete(shared_file, mit_iter)
-        await _run_sre_agent(llm, app_info, "mitigation", mit_iter, model_name, shared_content, complete_tool)
-
-        shared_content = shared_file.read_text()
-        approve_tool = make_approve_and_submit(shared_file, mit_iter, "mitigation")
-        reject_tool = make_reject_with_feedback(shared_file, mit_iter, "mitigation")
-        judge_state = await _run_judge(
-            llm, app_info, "mitigation", mit_iter, model_name, shared_content, approve_tool, reject_tool,
-        )
-
-        verdict = judge_state.get("verdict")
-        logger.info(f"Mitigation iteration {mit_iter} verdict: {verdict!r}")
-
-        if verdict == "APPROVED":
-            mit_approved = True
-            logger.info("Judge APPROVED mitigation.")
-            break
-        else:
-            logger.info(f"Judge REJECTED mitigation (iteration {mit_iter}). Looping...")
-
-    if not mit_approved:
-        logger.warning("Max mitigation iterations reached without APPROVED verdict.")
+    await _run_stage_loop(llm, app_info, "mitigation", max_mit_iters, model_name, shared_file, make_mark_mitigation_complete)
 
     logger.info("=" * 60)
     logger.info("CRUCIBLE: Orchestrator complete.")
