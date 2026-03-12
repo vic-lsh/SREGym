@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 _tool_config = LanggraphToolConfig()
 
 
-async def _submit_to_benchmark(submission_ans: str) -> tuple[bool, str, dict | None]:
+async def _submit_to_benchmark(submission_ans: str, stage: str) -> tuple[bool, str, dict | None]:
     """Submit answer via MCP SSE. Returns (success, message, oracle_result_dict)."""
     try:
         async with AsyncExitStack() as stack:
@@ -34,16 +34,16 @@ async def _submit_to_benchmark(submission_ans: str) -> tuple[bool, str, dict | N
             # HTTP 200 means the request was received; check the actual evaluation result
             try:
                 eval_result = json.loads(result.get("text", "{}"))
-                for stage_key in ("Diagnosis", "Mitigation"):
-                    if stage_key in eval_result:
-                        stage_result = eval_result[stage_key]
-                        if not stage_result.get("success", False):
-                            reasoning = stage_result.get("reasoning", "")
-                            return False, (
-                                f"Benchmark evaluated submission as incorrect. "
-                                f"Reasoning: {reasoning}"
-                            ), stage_result
-                        return True, "Submission accepted by benchmark.", stage_result
+                stage_key = stage.capitalize()
+                if stage_key in eval_result:
+                    stage_result = eval_result[stage_key]
+                    if not stage_result.get("success", False):
+                        reasoning = stage_result.get("reasoning", "")
+                        return False, (
+                            f"Benchmark evaluated submission as incorrect. "
+                            f"Reasoning: {reasoning}"
+                        ), stage_result
+                    return True, "Submission accepted by benchmark.", stage_result
             except (json.JSONDecodeError, AttributeError):
                 pass
             return True, "Submission accepted by benchmark.", None
@@ -83,7 +83,7 @@ def make_submit_verdict(shared_file: Path, iteration: int, stage: str):
             logger.error(f"Failed to write verdict to shared file: {e}")
 
         if verdict:
-            success, msg, oracle_result = await _submit_to_benchmark(submission_ans)
+            success, msg, oracle_result = await _submit_to_benchmark(submission_ans, stage)
             if success:
                 content = f"APPROVED. {msg}"
                 logger.info(f"Judge approved and submitted (iteration {iteration}, stage {stage})")
