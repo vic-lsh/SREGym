@@ -11,6 +11,7 @@ from clients.common.driver_utils import (
     get_app_info,
     get_planned_stages,
     get_problem_id,
+    save_results,
     wait_for_ready_stage,
 )
 from clients.crucible import orchestrator
@@ -26,6 +27,12 @@ logger = logging.getLogger(__name__)
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Crucible judge-agent benchmark client")
+    parser.add_argument(
+        "--logs-dir",
+        type=str,
+        default=None,
+        help="Directory for result JSON output (e.g. token usage)",
+    )
     parser.add_argument(
         "--summary-dir",
         type=str,
@@ -85,13 +92,20 @@ async def main() -> None:
             except FileNotFoundError:
                 logger.info("Long-term summary: no prior summary found; starting fresh.")
 
-    await orchestrator.run(
+    usage_metrics = await orchestrator.run(
         app_info=app_info,
         problem_id=problem_id,
         shared_file=shared_file,
         planned_stages=planned_stages,
         lt_summary_file=lt_summary_file,
     )
+
+    if args.logs_dir:
+        logs_dir = Path(args.logs_dir)
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        save_results(logs_dir, problem_id, 0, usage_metrics, prefix="crucible")
+        logger.info(f"Usage metrics: {usage_metrics}")
+
 
     env_log_file = os.environ.get("SREGYM_LOG_FILE")
     if env_log_file and shared_file.exists():

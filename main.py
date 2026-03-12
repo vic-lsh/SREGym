@@ -492,6 +492,8 @@ def driver_loop(
                                 extra_args += f" --logs-dir {agent_log_dir} --summary-dir {agent_base_dir}"
 
                             # Crucible handles summarization internally via --summary-dir
+                            if agent_to_run in AGENT_LT_SUMMARY:
+                                extra_args += f" --logs-dir {agent_log_dir}"
                             if agent_to_run in AGENT_LT_SUMMARY and enable_summary:
                                 effective_summary_model = summary_model or os.environ.get("MODEL_ID", "gpt-4o")
                                 extra_args += f" --summary-dir {agent_base_dir} --summary-model {effective_summary_model}"

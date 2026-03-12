@@ -189,10 +189,14 @@ class LiteLLMBackend:
             else:
                 print("No vertex location provided")
 
+            if self.thinking_budget_tokens is not None:
+                vertex_kwargs["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget_tokens}
+                model_config["temperature"] = 1
+
             if vertex_kwargs:
                 model_config["model_kwargs"] = vertex_kwargs
 
-            if self.temperature is not None:
+            if self.thinking_budget_tokens is None and self.temperature is not None:
                 model_config["temperature"] = self.temperature
             if self.top_p is not None:
                 model_config["top_p"] = self.top_p
@@ -223,7 +227,6 @@ class LiteLLMBackend:
                     logger.info(f"Trimming the {trim_sum}/{len(prompt_messages)} messages")
                     prompt_messages = new_prompt_messages
                 completion = llm.invoke(input=prompt_messages)
-                # logger.info(f">>> llm response: {completion}")
                 return completion
             except openai.BadRequestError as e:
                 # BadRequestError indicates malformed request (e.g., missing tool responses)

@@ -60,12 +60,22 @@ class CrucibleAgent:
         update = result.update
         return update.get("messages", []), {k: v for k, v in update.items() if k != "messages"}
 
-    def _maybe_compact(self, messages: list) -> list:
-        """Summarize history into a compact message if approaching the context limit."""
+    @staticmethod
+    def _extract_usage(ai_msg) -> dict:
+        meta = ai_msg.usage_metadata or {}
+        return {
+            "input_tokens": meta.get("input_tokens", 0),
+            "output_tokens": meta.get("output_tokens", 0),
+            "cached_input_tokens": (meta.get("input_token_details") or {}).get("cache_read", 0),
+        }
+
+    def _maybe_compact(self, messages: list) -> tuple[list, dict]:
+        """Summarize history into a compact message if approaching the context limit.
+        Returns (messages, usage) where usage is from the compaction LLM call (empty if no compaction)."""
         threshold = self.context_window * 0.80
         current_tokens = count_tokens(self.model_name, messages)
         if current_tokens < threshold:
-            return messages
+            return messages, {}
 
         logger.warning(
             f"[{self.role}] Compacting context: {current_tokens} tokens >= {threshold:.0f} "
@@ -99,11 +109,12 @@ class CrucibleAgent:
 
         after_tokens = count_tokens(self.model_name, compacted)
         logger.warning(f"[{self.role}] Context compacted: {current_tokens} → {after_tokens} tokens")
-        return compacted
+        return compacted, self._extract_usage(summary_ai_msg)
 
     async def arun(self, starting_prompts: list) -> dict:
         messages = list(starting_prompts)
         state = {"submitted": False, "verdict": None}
+        usage = {"input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0}
         steps = 0
         max_no_submit_reminders = 3
         no_submit_reminders = 0
@@ -116,6 +127,8 @@ class CrucibleAgent:
             ai_msg = self.llm.inference(messages=messages, tools=self.tools)
             messages.append(ai_msg)
             steps += 1
+            for k, v in self._extract_usage(ai_msg).items():
+                usage[k] += v
             thinking = ai_msg.additional_kwargs.get("reasoning_content") or ai_msg.additional_kwargs.get("thinking")
             if not thinking and isinstance(ai_msg.content, list):
                 for block in ai_msg.content:
@@ -179,10 +192,12 @@ class CrucibleAgent:
                     f"[{self.role}] Loop detected — injecting reminder ({loop_reminders}/{max_loop_reminders})."
                 )
 
-            messages = self._maybe_compact(messages)
+            messages, compact_usage = self._maybe_compact(messages)
+            for k, v in compact_usage.items():
+                usage[k] += v
 
         logger.info(
             f"[{self.role}] Finished. submitted={state.get('submitted')}, "
             f"verdict={state.get('verdict')!r}, steps={steps}"
         )
-        return {"messages": messages, "steps": steps, **state}
+        return {"messages": messages, "steps": steps, "usage": usage, **state}

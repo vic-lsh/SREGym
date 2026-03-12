@@ -115,6 +115,21 @@ async def _run_judge(
     return await agent.arun(_build_prompts(app_info, stage, "judge", iteration, shared_content, shared_file))
 
 
+def _build_usage_result(usage_by_agent: dict) -> dict:
+    total = {"input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0}
+    for agent_data in usage_by_agent.values():
+        total = _add_usage(total, agent_data["total"])
+    return {"by_agent": usage_by_agent, "total": total}
+
+
+def _zero_usage() -> dict:
+    return {"input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0}
+
+
+def _add_usage(a: dict, b: dict) -> dict:
+    return {k: a[k] + b.get(k, 0) for k in a}
+
+
 async def _run_stage_loop(
     llm,
     app_info: dict,
@@ -124,35 +139,48 @@ async def _run_stage_loop(
     shared_file: Path,
     make_complete_tool,
     lt_summary_file: Path | None = None,
-) -> bool:
-    """Run the agent→judge loop for one stage. Returns True if judge approved."""
+) -> tuple[bool, dict]:
+    """Run the agent→judge loop for one stage. Returns (approved, usage_by_role)."""
     logger.info("=" * 60)
     logger.info(f"CRUCIBLE: Starting {stage.upper()} stage")
     logger.info("=" * 60)
+
+    agent_role = f"{stage}-agent"
+    judge_role = f"{stage}-judge"
+    usage_by_role: dict[str, dict] = {
+        agent_role: {"iterations": [], "total": _zero_usage()},
+        judge_role: {"iterations": [], "total": _zero_usage()},
+    }
 
     for iteration in range(1, max_iters + 1):
         logger.info(f"--- {stage.capitalize()} iteration {iteration}/{max_iters} ---")
 
         shared_content = shared_file.read_text()
         complete_tool = make_complete_tool(shared_file, iteration)
-        await _run_sre_agent(llm, app_info, stage, iteration, model_name, shared_content, shared_file, complete_tool, lt_summary_file=lt_summary_file)
+        agent_state = await _run_sre_agent(llm, app_info, stage, iteration, model_name, shared_content, shared_file, complete_tool, lt_summary_file=lt_summary_file)
+        agent_usage = agent_state.get("usage", _zero_usage())
+        usage_by_role[agent_role]["iterations"].append(agent_usage)
+        usage_by_role[agent_role]["total"] = _add_usage(usage_by_role[agent_role]["total"], agent_usage)
 
         shared_content = shared_file.read_text()
         verdict_tool = make_submit_verdict(shared_file, iteration, stage)
         judge_state = await _run_judge(
             llm, app_info, stage, iteration, model_name, shared_content, shared_file, verdict_tool,
         )
+        judge_usage = judge_state.get("usage", _zero_usage())
+        usage_by_role[judge_role]["iterations"].append(judge_usage)
+        usage_by_role[judge_role]["total"] = _add_usage(usage_by_role[judge_role]["total"], judge_usage)
 
         verdict = judge_state.get("verdict")
         logger.info(f"{stage.capitalize()} iteration {iteration} verdict: {verdict!r}")
 
         if verdict == "APPROVED":
             logger.info(f"Judge APPROVED {stage}.")
-            return True
+            return True, usage_by_role
         logger.info(f"Judge REJECTED {stage} (iteration {iteration}). Looping...")
 
     logger.warning(f"Max {stage} iterations reached without APPROVED verdict.")
-    return False
+    return False, usage_by_role
 
 
 async def run(
@@ -161,7 +189,7 @@ async def run(
     shared_file: Path,
     planned_stages: list[str],
     lt_summary_file: Path | None = None,
-) -> None:
+) -> dict:
     """Main orchestrator: runs diagnosis (and optionally mitigation) with judge-agent loop."""
     agent_cfg = _load_agent_config()
     llm = get_llm_backend_for_tools()
@@ -177,11 +205,12 @@ async def run(
     shared_file = shared_file.resolve()
     lt_summary_file = lt_summary_file.resolve() if lt_summary_file else None
 
-    await _run_stage_loop(llm, app_info, "diagnosis", max_diag_iters, model_name, shared_file, make_mark_hypothesis_complete, lt_summary_file=lt_summary_file)
+    _, diag_usage = await _run_stage_loop(llm, app_info, "diagnosis", max_diag_iters, model_name, shared_file, make_mark_hypothesis_complete, lt_summary_file=lt_summary_file)
+    usage_by_agent = diag_usage
 
     if "mitigation" not in planned_stages:
         logger.info("Diagnosis-only problem — orchestrator complete.")
-        return
+        return _build_usage_result(usage_by_agent)
 
     with open(shared_file, "a") as f:
         f.write("\n## Mitigation\n")
@@ -192,8 +221,10 @@ async def run(
     except TimeoutError:
         logger.warning(f"Timed out waiting for mitigation stage after {wait_stage_timeout}s — proceeding anyway.")
 
-    await _run_stage_loop(llm, app_info, "mitigation", max_mit_iters, model_name, shared_file, make_mark_mitigation_complete, lt_summary_file=lt_summary_file)
+    _, mit_usage = await _run_stage_loop(llm, app_info, "mitigation", max_mit_iters, model_name, shared_file, make_mark_mitigation_complete, lt_summary_file=lt_summary_file)
+    usage_by_agent = {**diag_usage, **mit_usage}
 
     logger.info("=" * 60)
     logger.info("CRUCIBLE: Orchestrator complete.")
     logger.info("=" * 60)
+    return _build_usage_result(usage_by_agent)
