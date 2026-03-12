@@ -94,9 +94,8 @@ def make_submit_verdict(shared_file: Path, iteration: int, stage: str):
             try:
                 with open(shared_file, "a") as f:
                     f.write(
-                        "\nThis is an oracle response that supersedes the previous findings"
-                        " from the agent and the judge.\n"
-                        f"<benchmark_result>\n{json.dumps(oracle_result, indent=2) if oracle_result is not None else msg}\n</benchmark_result>\n"
+                        f"<benchmark_result>\nThis is an oracle response that supersedes the previous findings"
+                        f" from the agent and the judge.\n{json.dumps(oracle_result, indent=2) if oracle_result is not None else msg}\n</benchmark_result>\n"
                     )
             except Exception as e:
                 logger.error(f"Failed to write benchmark result to shared file: {e}")
