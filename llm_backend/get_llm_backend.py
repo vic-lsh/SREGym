@@ -43,6 +43,7 @@ class LiteLLMBackend:
         extra_headers: dict[str, str] | None = None,
         project_id: str | None = None,
         location: str | None = None,
+        thinking_budget_tokens: int | None = None,
     ):
         self.provider = provider
         self.model_name = model_name
@@ -57,8 +58,26 @@ class LiteLLMBackend:
         self.extra_headers = extra_headers
         self.project_id = project_id
         self.location = location
+        self.thinking_budget_tokens = thinking_budget_tokens
         litellm.drop_params = True
         litellm.modify_params = True  # for Anthropic
+        logger.info(
+            "LiteLLMBackend initialized: %s",
+            {
+                "provider": self.provider,
+                "model_name": self.model_name,
+                "url": self.url,
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+                "max_tokens": self.max_tokens,
+                "seed": self.seed,
+                "thinking_budget_tokens": self.thinking_budget_tokens,
+                "wx_project_id": self.wx_project_id,
+                "azure_version": self.azure_version,
+                "project_id": self.project_id,
+                "location": self.location,
+            },
+        )
 
     def inference(
         self,
@@ -128,8 +147,15 @@ class LiteLLMBackend:
                 "model": self.model_name,
             }
 
-            if self.temperature is not None:
-                model_config["temperature"] = self.temperature
+            if self.thinking_budget_tokens is not None and "anthropic" in self.model_name.lower():
+                # Extended thinking requires temperature=1 for Anthropic models
+                model_config["temperature"] = 1
+                model_config["model_kwargs"] = {
+                    "thinking": {"type": "enabled", "budget_tokens": self.thinking_budget_tokens}
+                }
+            else:
+                if self.temperature is not None:
+                    model_config["temperature"] = self.temperature
             if self.top_p is not None:
                 model_config["top_p"] = self.top_p
             if self.api_key is not None:
