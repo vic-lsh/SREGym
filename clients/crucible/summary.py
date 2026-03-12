@@ -48,12 +48,14 @@ class CrucibleLTSummarizer:
 
     def _summarize_session(self, content: str) -> str:
         """Generate a concise summary of the current session from the shared markdown."""
-        prompt = f"""You are analyzing an SRE session log written in Markdown. Summarize:
-0) What is the symptom / problem?
-1) What is the root cause (if identified)?
-2) What fixes were applied or proposed (if any)?
+        prompt = f"""You are analyzing an SRE session log written in Markdown. Extract the following:
+0) Application name (the specific service or component that had the incident).
+1) Observed symptoms of that application (what was externally visible / what alerts fired).
+2) Root cause (if identified).
+3) Fixes or mitigations applied or proposed (if any).
 
 DO NOT use external knowledge. Base your answer strictly on the text below.
+Be concise and structured.
 
 Session log:
 ---
@@ -74,9 +76,18 @@ Current Long-Term Summary:
 New Session Summary:
 {session_summary}
 
-Task: Update the Long-Term Summary.
-- If the new session reveals a NEW problem, symptom, or solution, add it.
-- If it is a recurrence of a previous problem, note the recurrence and increment the count.
+Task: Update the Long-Term Summary using the following structure:
+
+## <Application Name>
+
+### Symptom: <observed symptom or alert>
+- **Root Causes:** <list of root causes seen for this symptom>
+- **Mitigations:** <list of fixes or mitigations applied or proposed>
+
+Rules:
+- Group all incidents first by application name, then by observed symptom within that application.
+- If the new session is for an application/symptom already in the summary, merge the new root causes and mitigations into the existing entry (avoid duplicates; note recurrences with a count if the same root cause appears again).
+- If the new session reveals a new application or a new symptom for an existing application, add a new entry.
 - Output the updated Long-Term Summary text only, with no preamble.
 """
         llm = get_llm_backend(self.model_id)
