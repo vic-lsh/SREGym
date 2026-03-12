@@ -8,5 +8,8 @@ Current shared session state:
 {{ shared_content }}
 ---
 
-Review the agent's hypothesis above, verify it against the cluster state, then call
+The shared session file is at: {{ shared_file }}
+
+Evaluate only the most recent hypothesis (Iteration {{ iteration }}) above. Earlier iterations
+are provided for context only. Verify the latest hypothesis against the cluster state, then call
 approve_and_submit or reject_with_feedback with your verdict.

@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import shutil
 from pathlib import Path
 
 from clients.common.driver_utils import (
@@ -40,6 +41,12 @@ async def main() -> None:
         shared_file=shared_file,
         planned_stages=planned_stages,
     )
+
+    env_log_file = os.environ.get("SREGYM_LOG_FILE")
+    if env_log_file and shared_file.exists():
+        dest = Path(env_log_file).with_suffix(".md")
+        shutil.copy2(shared_file, dest)
+        logger.info(f"Saved session markdown to {dest}")
 
     logger.info("Crucible driver complete.")
 

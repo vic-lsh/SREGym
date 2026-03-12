@@ -57,6 +57,7 @@ def _build_prompts(
     agent_type: str,  # "agent" or "judge"
     iteration: int,
     shared_content: str,
+    shared_file: Path,
 ) -> list:
     ctx = dict(
         app_name=app_info.get("app_name", "unknown"),
@@ -64,6 +65,7 @@ def _build_prompts(
         descriptions=app_info.get("descriptions", ""),
         iteration=iteration,
         shared_content=shared_content,
+        shared_file=str(shared_file.resolve()),
     )
     return [
         SystemMessage(content=_render(f"{stage}_{agent_type}_system")),
@@ -78,6 +80,7 @@ async def _run_sre_agent(
     iteration: int,
     model_name: str,
     shared_content: str,
+    shared_file: Path,
     complete_tool,
 ) -> dict:
     agent = CrucibleAgent(
@@ -87,7 +90,7 @@ async def _run_sre_agent(
         model_name=model_name,
         role=f"{stage}-agent",
     )
-    return await agent.arun(_build_prompts(app_info, stage, "agent", iteration, shared_content))
+    return await agent.arun(_build_prompts(app_info, stage, "agent", iteration, shared_content, shared_file))
 
 
 async def _run_judge(
@@ -97,6 +100,7 @@ async def _run_judge(
     iteration: int,
     model_name: str,
     shared_content: str,
+    shared_file: Path,
     approve_tool,
     reject_tool,
 ) -> dict:
@@ -107,7 +111,7 @@ async def _run_judge(
         model_name=model_name,
         role=f"{stage}-judge",
     )
-    return await agent.arun(_build_prompts(app_info, stage, "judge", iteration, shared_content))
+    return await agent.arun(_build_prompts(app_info, stage, "judge", iteration, shared_content, shared_file))
 
 
 async def _run_stage_loop(
@@ -129,13 +133,13 @@ async def _run_stage_loop(
 
         shared_content = shared_file.read_text()
         complete_tool = make_complete_tool(shared_file, iteration)
-        await _run_sre_agent(llm, app_info, stage, iteration, model_name, shared_content, complete_tool)
+        await _run_sre_agent(llm, app_info, stage, iteration, model_name, shared_content, shared_file, complete_tool)
 
         shared_content = shared_file.read_text()
         approve_tool = make_approve_and_submit(shared_file, iteration, stage)
         reject_tool = make_reject_with_feedback(shared_file, iteration, stage)
         judge_state = await _run_judge(
-            llm, app_info, stage, iteration, model_name, shared_content, approve_tool, reject_tool,
+            llm, app_info, stage, iteration, model_name, shared_content, shared_file, approve_tool, reject_tool,
         )
 
         verdict = judge_state.get("verdict")

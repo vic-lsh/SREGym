@@ -8,5 +8,8 @@ Current shared session state:
 {{ shared_content }}
 ---
 
-Review the agent's mitigation strategy above, verify the fix against the cluster state,
-then call approve_and_submit (with submission_ans="") or reject_with_feedback.
+The shared session file is at: {{ shared_file }}
+
+Evaluate only the most recent mitigation (Iteration {{ iteration }}) above. Earlier iterations
+are provided for context only. Verify the latest mitigation against the cluster state, then call
+approve_and_submit (with submission_ans="") or reject_with_feedback.

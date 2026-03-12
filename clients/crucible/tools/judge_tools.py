@@ -71,6 +71,13 @@ def make_approve_and_submit(shared_file: Path, iteration: int, stage: str):
             logger.warning(f"Approval recorded but submission failed: {msg}")
             content = f"APPROVED and recorded, but submission encountered an error: {msg}"
 
+        benchmark_status = "Accepted" if success else f"Rejected — {msg}"
+        try:
+            with open(shared_file, "a") as f:
+                f.write(f"<benchmark_result>{benchmark_status}</benchmark_result>\n")
+        except Exception as e:
+            logger.error(f"Failed to write benchmark result to shared file: {e}")
+
         return Command(
             update={
                 "submitted": True,
