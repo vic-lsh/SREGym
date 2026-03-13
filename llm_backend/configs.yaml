@@ -163,6 +163,7 @@
   model_name: "gemini-2.5-pro"
   project_id: "$GOOGLE_CLOUD_PROJECT"
   location: "$GOOGLE_CLOUD_LOCATION"
+  thinking_budget_tokens: 3200
   temperature: 0.0
   top_p: 0.95
 
@@ -171,6 +172,7 @@
   model_name: "gemini-2.5-flash"
   project_id: "$GOOGLE_CLOUD_PROJECT"
   location: "$GOOGLE_CLOUD_LOCATION"
+  thinking_budget_tokens: 3200
   temperature: 0.0
   top_p: 0.95
 

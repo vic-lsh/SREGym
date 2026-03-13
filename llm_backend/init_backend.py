@@ -124,6 +124,7 @@ def get_llm_backend_for_model(model_id: str) -> LiteLLMBackend:
         set_param(config_params, model_config, "top_p", 0.95)
         set_param(config_params, model_config, "temperature", 0.0)
         set_param(config_params, model_config, "max_tokens", None)
+        set_param(config_params, model_config, "thinking_budget_tokens", None)
 
         print("Making LiteLLMBackend with config_params: ", config_params)
 
