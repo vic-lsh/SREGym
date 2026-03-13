@@ -1,0 +1,90 @@
+all:
+  problems:
+    # --- config_image (4/12 = 33%) ---
+    missing_configmap_social_network:
+      - diagnosis
+      - mitigation
+    rolling_update_misconfigured_hotel_reservation:
+      - diagnosis
+      - mitigation
+    rolling_update_misconfigured_social_network:
+      - diagnosis
+      - mitigation
+    wrong_bin_usage:
+      - diagnosis
+      - mitigation
+    # --- metastable (5/18 = 28%) ---
+    loadgenerator_flood_homepage:
+      - diagnosis
+      - mitigation
+    trainticket_f17_nested_sql_select_clause_error:
+      - diagnosis
+      - mitigation
+    trainticket_f22_sql_column_name_mismatch_error:
+      - diagnosis
+      - mitigation
+    social_net_hotel_res_astro_shop_concurrent_failures:
+      - diagnosis
+      - mitigation
+    workload_imbalance:
+      - diagnosis
+      - mitigation
+    # --- network (6/21 = 29%) ---
+    wrong_service_selector_astronomy_shop:
+      - diagnosis
+      - mitigation
+    wrong_service_selector_hotel_reservation:
+      - diagnosis
+      - mitigation
+    wrong_service_selector_social_network:
+      - diagnosis
+      - mitigation
+    ingress_misroute:
+      - diagnosis
+      - mitigation
+    network_policy_block:
+      - diagnosis
+      - mitigation
+    rbac_misconfiguration:
+      - diagnosis
+      - mitigation
+    # --- probes (3/9 = 33%) ---
+    readiness_probe_misconfiguration_astronomy_shop:
+      - diagnosis
+      - mitigation
+    readiness_probe_misconfiguration_hotel_reservation:
+      - diagnosis
+      - mitigation
+    readiness_probe_misconfiguration_social_network:
+      - diagnosis
+      - mitigation
+    # --- resource_storage (6/19 = 32%) ---
+    persistent_volume_affinity_violation:
+      - diagnosis
+      - mitigation
+    pvc_claim_mismatch:
+      - diagnosis
+      - mitigation
+    resource_request_too_large:
+      - diagnosis
+      - mitigation
+    resource_request_too_small:
+      - diagnosis
+      - mitigation
+    scale_pod_zero_social_net:
+      - diagnosis
+      - mitigation
+    taint_no_toleration_social_network:
+      - diagnosis
+      - mitigation
+    # --- hardware_data (1/2 = 50%) ---
+    kubelet_crash:
+      - diagnosis
+      - mitigation
+    # --- operator (2/5 = 40%) ---
+    operator_security_context_fault:
+      - diagnosis
+      - mitigation
+    operator_wrong_update_strategy_fault:
+      - diagnosis
+      - mitigation
