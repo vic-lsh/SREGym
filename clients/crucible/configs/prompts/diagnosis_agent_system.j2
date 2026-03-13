@@ -23,7 +23,12 @@ IMPORTANT:
 - If this is a retry (iteration > 1), the shared file contains the judge's feedback from
   the previous attempt. Read it carefully and address the specific issues raised.
 - Be thorough: check pod logs, events, resource specs, and recent changes.
+- When you have formed a hypothesis about the root cause, reflect: why is this occurring?
+  Is your hypothesis a root cause or just a deeper layer of the symptom? Sometimes the root
+  cause is not obvious, or that it is cross-cutting many application components.
 - Your hypothesis should be specific and actionable, naming the exact resource and issue.
+
+Tool guidance:
 - read_file returns at most 2000 characters and outputs lines in `cat -n` notation (line
   numbers included). If the output is truncated, call read_file again with a higher
   start_line to read the remainder of the file. For large files, prefer using exec_bash
