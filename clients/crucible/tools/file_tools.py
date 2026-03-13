@@ -8,6 +8,8 @@ from langgraph.types import Command
 
 logger = logging.getLogger(__name__)
 
+READ_FILE_MAX_CHARS = 2000
+
 
 @tool
 def read_file(
@@ -16,7 +18,10 @@ def read_file(
     end_line: int,
     tool_call_id: Annotated[str, InjectedToolCallId],
 ) -> Command:
-    """Read lines [start_line, end_line) from a file with 1-based line numbers.
+    """Read lines [start_line, end_line) from a file in cat -n notation.
+
+    Output is truncated at READ_FILE_MAX_CHARS characters. Call again with
+    adjusted start_line/end_line to read further.
 
     Args:
         path: Absolute path to the file.
@@ -27,8 +32,10 @@ def read_file(
         lines = Path(path).read_text().splitlines()
         start = max(0, start_line)
         end = len(lines) if end_line == -1 else min(end_line, len(lines))
-        numbered = "\n".join(f"{start + i + 1}: {line}" for i, line in enumerate(lines[start:end]))
+        numbered = "\n".join(f"{start + i + 1:6}\t{line}" for i, line in enumerate(lines[start:end]))
         content = numbered or "(empty range)"
+        if len(content) > READ_FILE_MAX_CHARS:
+            content = content[:READ_FILE_MAX_CHARS] + f"\n... (truncated at {READ_FILE_MAX_CHARS} chars — call read_file again with a higher start_line to continue)"
     except FileNotFoundError:
         content = f"Error: File not found: {path}"
     except Exception as e:
