@@ -25,6 +25,15 @@ def make_mark_hypothesis_complete(shared_file: Path, iteration: int):
             justification: Detailed justification explaining the evidence that supports
                            your diagnosis.
         """
+        if not diagnosis.strip():
+            return Command(
+                update={"messages": [ToolMessage(content="Error: 'diagnosis' must not be empty.", tool_call_id=tool_call_id)]}
+            )
+        if not justification.strip():
+            return Command(
+                update={"messages": [ToolMessage(content="Error: 'justification' must not be empty.", tool_call_id=tool_call_id)]}
+            )
+
         section = (
             f"\n### Iteration {iteration} — Agent Hypothesis\n"
             f"**Diagnosis**: {diagnosis}\n"
@@ -62,6 +71,15 @@ def make_mark_mitigation_complete(shared_file: Path, iteration: int):
             justification: Detailed justification explaining why this fix addresses the
                            root cause and evidence that it has taken effect.
         """
+        if not mitigation.strip():
+            return Command(
+                update={"messages": [ToolMessage(content="Error: 'mitigation' must not be empty.", tool_call_id=tool_call_id)]}
+            )
+        if not justification.strip():
+            return Command(
+                update={"messages": [ToolMessage(content="Error: 'justification' must not be empty.", tool_call_id=tool_call_id)]}
+            )
+
         section = (
             f"\n### Iteration {iteration} — Agent Strategy\n"
             f"**Mitigation**: {mitigation}\n"
