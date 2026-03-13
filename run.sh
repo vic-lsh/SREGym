@@ -2,11 +2,12 @@
 
 set -x
 
-RESUME_LAST=${RESUME_LAST:-false}
+RESUME_LAST=${RESUME_LAST:-true}
 RESUME_FROM=${RESUME_FROM:-""}
-PARALLEL=${PARALLEL:-4}
-MODEL=${MODEL:-claude-sonnet-4-6}
-AGENT=${AGENT:-claudecode}
+PARALLEL=${PARALLEL:-1}
+MODEL=${MODEL:-vertex-ai-gemini-2.5-flash}
+#AGENT=${AGENT:-gemini_cli}
+AGENT=${AGENT:-crucible}
 ENABLE_RESOURCE_THROTTLING=${ENABLE_RESOURCE_THROTTLING:-false}
 SEQUENCE_LEN=${SEQUENCE_LEN:-0}
 SEQUENCE_SEED=${SEQUENCE_SEED:-42}
@@ -14,7 +15,7 @@ SEQUENCE_SEED=${SEQUENCE_SEED:-42}
 # summary features
 ENABLE_SUMMARY=${ENABLE_SUMMARY:-true}
 NO_INJECT_SUMMARY=${NO_INJECT_SUMMARY:-false}
-SEED_SUMMARY=${SEED_SUMMARY:-"logs/0305_1823_claudecode/claudecode/long_term_summary.txt"}
+SEED_SUMMARY=${SEED_SUMMARY:-""}
 SUMMARY_MODEL=${SUMMARY_MODEL:-"vertex-ai-gemini-2.5-flash"}
 JUDGE_MODEL=${JUDGE_MODEL:-"vertex-ai-gemini-2.5-pro"}
 
