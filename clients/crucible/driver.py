@@ -109,7 +109,7 @@ async def main() -> None:
 
     env_log_file = os.environ.get("SREGYM_LOG_FILE")
     if env_log_file and shared_file.exists():
-        dest = Path(env_log_file).with_suffix(".md")
+        dest = Path(env_log_file).with_name(f"{Path(env_log_file).stem}_{problem_id}.md")
         shutil.copy2(shared_file, dest)
         logger.info(f"Saved session markdown to {dest}")
 
