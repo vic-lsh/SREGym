@@ -1,0 +1,108 @@
+all:
+  problems:
+    # Correlated Failures
+    faulty_image_correlated:
+    - diagnosis
+    - mitigation
+
+    # Application Software Failures
+    incorrect_image:
+    - diagnosis
+    - mitigation
+    astronomy_shop_ad_service_failure:
+    - diagnosis
+    - mitigation
+    astronomy_shop_ad_service_high_cpu:
+    - diagnosis
+    - mitigation
+
+    # Misconfiguration Failures
+    missing_env_variable_astronomy_shop:
+    - diagnosis
+    - mitigation
+    configmap_drift_hotel_reservation:
+    - diagnosis
+    - mitigation
+    k8s_target_port-misconfig:
+    - diagnosis
+    - mitigation
+
+    # Security Failures
+    revoke_auth_mongodb-1:
+    - diagnosis
+    - mitigation
+    rbac_misconfiguration:
+    - diagnosis
+    - mitigation
+
+    # Database/Cache Failures
+    valkey_memory_disruption:
+    - diagnosis
+    - mitigation
+
+    # Metastable Failures
+    capacity_decrease_rpc_retry_storm:
+    - diagnosis
+    - mitigation
+
+    # Cloud Management System (K8s) Failures
+    liveness_probe_misconfiguration_astronomy_shop:
+    - diagnosis
+    - mitigation
+    missing_service_astronomy_shop:
+    - diagnosis
+    - mitigation
+    pod_anti_affinity_deadlock:
+    - diagnosis
+    - mitigation
+    pvc_claim_mismatch:
+    - diagnosis
+    - mitigation
+    resource_request_too_large:
+    - diagnosis
+    - mitigation
+    wrong_service_selector_astronomy_shop:
+    - diagnosis
+    - mitigation
+
+    # Network Failures
+    service_dns_resolution_failure_astronomy_shop:
+    - diagnosis
+    - mitigation
+    ingress_misroute:
+    - diagnosis
+    - mitigation
+    network_policy_block:
+    - diagnosis
+    - mitigation
+
+    # Hardware Failures
+    read_error:
+    - diagnosis
+    - mitigation
+
+    # Train Ticket Failures
+    trainticket_f17_nested_sql_select_clause_error:
+    - diagnosis
+    - mitigation
+
+    # K8s Operator Misoperation
+    operator_overload_replicas:
+    - diagnosis
+    - mitigation
+    operator_security_context_fault:
+    - diagnosis
+    - mitigation
+
+    # Special / Infrastructure
+    kubelet_crash:
+    - diagnosis
+    - mitigation
+    wrong_bin_usage:
+    - diagnosis
+    - mitigation
+
+    # Multiple Independent Failures
+    social_net_hotel_res_astro_shop_concurrent_failures:
+    - diagnosis
+    - mitigation

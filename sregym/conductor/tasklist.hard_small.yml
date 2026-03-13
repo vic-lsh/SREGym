@@ -1,0 +1,46 @@
+all:
+  problems:
+    # Both diag+mit failed
+    trainticket_f17_nested_sql_select_clause_error:
+    - diagnosis
+    - mitigation
+
+    wrong_service_selector_astronomy_shop:
+    - diagnosis
+    - mitigation
+
+    valkey_auth_disruption:
+    - diagnosis
+    - mitigation
+
+    # Diag succeeded, mitigation failed
+    readiness_probe_misconfiguration_social_network:
+    - diagnosis
+    - mitigation
+
+    incorrect_port_assignment:
+    - diagnosis
+    - mitigation
+
+    # Very slow
+    storage_user_unregistered-1:
+    - diagnosis
+    - mitigation
+
+    rbac_misconfiguration:
+    - diagnosis
+    - mitigation
+
+    # Timed out
+    network_policy_block:
+    - diagnosis
+    - mitigation
+
+    kubelet_crash:
+    - diagnosis
+    - mitigation
+
+    # Diag-only: diagnosis failed
+    astronomy_shop_payment_service_unreachable:
+    - diagnosis
+    - mitigation
