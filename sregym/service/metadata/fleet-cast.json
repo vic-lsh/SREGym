@@ -1,7 +1,6 @@
 {
     "Name": "Fleet Cast",
     "Namespace": "fleetcast",
-    "Parallel Namespace Suffix": false,
     "Desc": "FleetCast is a TiDB based application for satellite orbital data",
     "Supported Operations": [
         "Serves satellite data from TiDB."

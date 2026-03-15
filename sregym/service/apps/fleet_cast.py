@@ -155,14 +155,6 @@ class FleetCast(Application):
             "ingress.hosts[0].paths[1].backend.servicePort=5000",
         ]
 
-        # Support per-worker TiDB namespaces when explicitly enabled.
-        worker_id = os.getenv("SREGYM_WORKER_ID")
-        per_worker_tidb_ns = os.getenv("SREGYM_TIDB_PER_WORKER_NS", "").lower() in {"1", "true", "yes"}
-        if worker_id and per_worker_tidb_ns:
-            tidb_ns = f"tidb-cluster-w{worker_id}"
-            tidb_host = f"basic-tidb.{tidb_ns}.svc.cluster.local"
-            ingress_args.extend(["--set", f"tidb.host={tidb_host}"])
-
         extra = self.helm_configs.get("extra_args", [])
         if isinstance(extra, str):
             extra = [extra]
@@ -178,9 +170,7 @@ class FleetCast(Application):
         tidb_prometheus.main()
         print("PROMETHEUS: deployed TiDB monitoring stack.")
 
-        # Determine namespace for Jaeger
-        worker_id = os.getenv("SREGYM_WORKER_ID")
-        jaeger_ns = f"observe-w{worker_id}" if worker_id else "observe"
+        jaeger_ns = "observe"
         Jaeger(namespace=jaeger_ns).deploy()
 
     def _get_ingress_svc_info(self) -> dict:

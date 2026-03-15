@@ -38,32 +38,12 @@ class Prometheus:
         self.name = metadata.get("Name")
         self.namespace = metadata.get("Namespace")
 
-        # Handle worker ID for parallel execution
-        worker_id = os.getenv("SREGYM_WORKER_ID")
-        if worker_id:
-            self.namespace = f"{self.namespace}-w{worker_id}"
-
         self.helm_configs = metadata.get("Helm Config", {})
-        
+
         # Override namespace in helm config
         if self.helm_configs:
             self.helm_configs["namespace"] = self.namespace
             self.helm_configs["kubeconfig_path"] = self.kubectl.kubeconfig_path
-            
-            if worker_id and "release_name" in self.helm_configs:
-                 self.helm_configs["release_name"] = f"{self.helm_configs['release_name']}-w{worker_id}"
-                 
-                 # Initialize extra_args if not present
-                 if "extra_args" not in self.helm_configs:
-                     self.helm_configs["extra_args"] = []
-                 
-                 # Force ClusterIP to avoid nodePort conflicts
-                 # Disable node-exporter to avoid host port 9100 conflicts
-                 self.helm_configs["extra_args"].extend([
-                     "--set", "server.service.type=ClusterIP",
-                     "--set", "server.service.nodePort=null",
-                     "--set", "prometheus-node-exporter.enabled=false"
-                 ])
 
             if "chart_path" in self.helm_configs:
                 chart_path = self.helm_configs["chart_path"]
@@ -134,9 +114,7 @@ class Prometheus:
         for attempt in range(3):
             self.logger.debug(f"Attempt {attempt + 1} of 3 in starting port-forwarding.")
             if self.is_port_in_use(self.port):
-                self.logger.debug(
-                    f"Port {self.port} is already in use. Picking a new one..."
-                )
+                self.logger.debug(f"Port {self.port} is already in use. Picking a new one...")
                 self.port = self.find_free_port()
 
             command = f"kubectl port-forward svc/{service_name} {self.port}:80 -n {self.namespace}"

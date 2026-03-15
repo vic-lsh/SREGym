@@ -20,11 +20,7 @@ class TiDBClusterDeployer:
 
         self.name = self.metadata["Name"]
 
-        # FleetCast operator resources are cluster-scoped; use shared namespaces by default.
-        # Set SREGYM_TIDB_PER_WORKER_NS=1 to restore worker-suffixed namespaces.
-        worker_id = os.getenv("SREGYM_WORKER_ID")
-        per_worker_ns = os.getenv("SREGYM_TIDB_PER_WORKER_NS", "").lower() in {"1", "true", "yes"}
-        suffix = f"-w{worker_id}" if worker_id and per_worker_ns else ""
+        suffix = ""
 
         self.namespace_tidb_cluster = self.metadata["K8S Config"]["namespace"] + suffix
         self.cluster_config_url = self.metadata["K8S Config"]["config_url"]

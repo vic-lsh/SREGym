@@ -2,7 +2,6 @@
     "Name": "OpenTelemetry Demo Astronomy Shop",
     "Namespace": "astronomy-shop",
     "Desc": "An online shopping platform built with a microservices architecture, showcasing OpenTelemetry instrumentation for distributed tracing across services.",
-    "Parallel Namespace Suffix": false,
     "Supported Operations": [
         "Add item to cart",
         "View product catalog",

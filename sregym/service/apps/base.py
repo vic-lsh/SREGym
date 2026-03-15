@@ -30,18 +30,8 @@ class Application:
         self.name = metadata["Name"]
         self.namespace = metadata["Namespace"]
 
-        # Support parallel execution by appending worker ID to namespace.
-        # Some charts create global cluster-scoped resources and cannot be safely installed
-        # under many worker-specific namespaces. Those apps can opt out in metadata.
-        use_parallel_namespace_suffix = metadata.get("Parallel Namespace Suffix", True)
-        worker_id = os.getenv("SREGYM_WORKER_ID")
-        if worker_id and use_parallel_namespace_suffix:
-            self.namespace = f"{self.namespace}-w{worker_id}"
-
         if "Helm Config" in metadata:
             self.helm_configs = metadata["Helm Config"]
-            if worker_id and use_parallel_namespace_suffix:
-                self.helm_configs["namespace"] = self.namespace
             chart_path = self.helm_configs.get("chart_path")
 
             if chart_path and not self.helm_configs.get("remote_chart", False):

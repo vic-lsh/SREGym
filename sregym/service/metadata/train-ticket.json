@@ -1,7 +1,6 @@
 {
     "Name": "Train Ticket",
     "Namespace": "train-ticket",
-    "Parallel Namespace Suffix": false,
     "Desc": "The project is a train ticket booking system based on microservice architecture which contains 41 microservices.",
     "Supported Operations": [
         ""
