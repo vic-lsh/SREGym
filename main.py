@@ -246,7 +246,9 @@ def driver_loop(
 
         # Verify agent exists in registry (skip if using external harness)
         if not use_external_harness:
-            available_agents = list_agents(path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml").keys()
+            _default_registry = Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml"
+            _registry_path = Path(os.environ.get("SREGYM_AGENT_REGISTRY", _default_registry))
+            available_agents = list_agents(path=_registry_path).keys()
             if agent_to_run not in available_agents:
                 console.log(f"⚠️ Agent '{agent_to_run}' not found in registry. Available agents: {available_agents}")
                 sys.exit(1)
@@ -482,9 +484,9 @@ def driver_loop(
 
                         # Defensive: ensure no stale agent from previous problem before starting
                         LAUNCHER.cleanup_agent(agent_to_run)
-                        reg = get_agent(
-                            agent_to_run, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml"
-                        )
+                        _default_registry = Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml"
+                        _registry_path = Path(os.environ.get("SREGYM_AGENT_REGISTRY", _default_registry))
+                        reg = get_agent(agent_to_run, path=_registry_path)
                         if reg:
                             extra_args = ""
                             # Pass explicit log dir to external-summarizer agents (e.g. gemini_cli)
