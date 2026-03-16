@@ -8,30 +8,29 @@ import logging
 import multiprocessing
 import os
 import platform
+import queue
 import random
 import re
 import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
-
-import psutil
 from datetime import datetime
 from pathlib import Path
-import tempfile
-import queue
 
+import psutil
 import uvicorn
-from rich.console import Console, Group
+from rich.console import Console
 from rich.markup import escape
 from rich.progress import (
+    BarColumn,
     Progress,
     SpinnerColumn,
-    TextColumn,
-    BarColumn,
     TaskProgressColumn,
+    TextColumn,
     TimeElapsedColumn,
 )
 
@@ -169,7 +168,7 @@ def get_latest_log_dir():
 def is_result_complete(csv_path):
     """Checks if a result CSV file contains evaluation results and is not just a header with problem_id."""
     try:
-        with open(csv_path, "r", newline="", encoding="utf-8") as f:
+        with open(csv_path, newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             if not reader.fieldnames:
                 return False
@@ -498,7 +497,9 @@ def driver_loop(
                                 extra_args += f" --logs-dir {agent_log_dir}"
                             if agent_to_run in AGENT_LT_SUMMARY and enable_summary:
                                 effective_summary_model = summary_model or os.environ.get("MODEL_ID", "gpt-4o")
-                                extra_args += f" --summary-dir {agent_base_dir} --summary-model {effective_summary_model}"
+                                extra_args += (
+                                    f" --summary-dir {agent_base_dir} --summary-model {effective_summary_model}"
+                                )
 
                             if enable_summary and agent_to_run in AGENT_OUTPUT_FILES:
                                 extra_args += " --enable-summary"
@@ -508,6 +509,7 @@ def driver_loop(
                             await LAUNCHER.ensure_started(reg, extra_args=extra_args.strip())
 
                     # Poll until grading completes or agent exits
+                    agent_exit_code: int | None = None
                     while conductor.submission_stage != "done":
                         if status_dict is not None:
                             # Update stage
@@ -525,7 +527,8 @@ def driver_loop(
                         if agent_proc:
                             agent_proc.proc.poll()
                             if agent_proc.proc.returncode is not None:
-                                console.log(f"⚠️  Agent process exited with return code {agent_proc.proc.returncode}")
+                                agent_exit_code = agent_proc.proc.returncode
+                                console.log(f"⚠️  Agent process exited with return code {agent_exit_code}")
                                 break
                         await asyncio.sleep(1)
 
@@ -545,7 +548,7 @@ def driver_loop(
                     if not use_external_harness:
                         agent_proc = LAUNCHER._procs.get(agent_to_run)
                         if agent_proc:
-                            console.log(f"⏳ Waiting for agent process to complete...")
+                            console.log("⏳ Waiting for agent process to complete...")
                             timeout = 30  # seconds
                             elapsed = 0
                             while elapsed < timeout:
@@ -569,6 +572,9 @@ def driver_loop(
                                 snapshot[f"{stage}.{k}"] = v
                         else:
                             snapshot[stage] = outcome
+                    if agent_exit_code is not None and agent_exit_code != 0:
+                        snapshot["agent_error"] = True
+                        snapshot["agent_exit_code"] = agent_exit_code
                     all_results_for_agent.append(snapshot)
 
                     fieldnames = sorted(snapshot.keys())
@@ -581,12 +587,20 @@ def driver_loop(
                             f"{current_date_time}_{seq_idx:05d}_{pid}_{agent_to_run}_results.csv",
                         )
                     else:
-                        csv_path = os.path.join(experiment_log_dir, f"{current_date_time}_{pid}_{agent_to_run}_results.csv")
+                        csv_path = os.path.join(
+                            experiment_log_dir, f"{current_date_time}_{pid}_{agent_to_run}_results.csv"
+                        )
                     with open(csv_path, "w", newline="") as csvfile:
                         writer = csv.DictWriter(csvfile, fieldnames=fieldnames, quoting=csv.QUOTE_NONNUMERIC)
                         writer.writeheader()
                         writer.writerows([snapshot])
-                    logger.info(f"✅ Problem {pid} for agent {agent_to_run} complete! Results written to {csv_path}")
+                    if snapshot.get("agent_error"):
+                        logger.warning(
+                            f"⚠️  Problem {pid} for agent {agent_to_run} finished with agent crash "
+                            f"(exit {agent_exit_code})! Results written to {csv_path}"
+                        )
+                    else:
+                        logger.info(f"✅ Problem {pid} for agent {agent_to_run} complete! Results written to {csv_path}")
 
                     # Cleanup agent process so a fresh one can be started for the next problem
                     if not use_external_harness:
@@ -734,7 +748,7 @@ def _run_driver_and_shutdown(
             sequence=sequence,
             sequence_start_idx=sequence_start_idx,
         )
-        setattr(main, "results", results)
+        main.results = results
     except Exception as e:
         logger.error(f"Driver loop crashed: {e}")
     finally:
@@ -932,7 +946,9 @@ def _load_preloaded_images_into_cluster(cluster_name: str) -> None:
 
 def _build_kind_config_with_registry_auth(base_config_path: str, docker_user: str, docker_password: str) -> str:
     """Return path to a temp kind config with Docker Hub auth injected into containerdConfigPatches."""
-    import tempfile, yaml
+    import tempfile
+
+    import yaml
 
     with open(base_config_path) as f:
         config = yaml.safe_load(f)
@@ -970,7 +986,9 @@ def _create_worker_cluster(worker_id: int, experiment_log_dir: str) -> tuple[str
         config_path = patched_config_path
         logger.info("Docker Hub credentials will be injected into containerd on all kind nodes.")
     else:
-        logger.warning("DOCKER_USERNAME/DOCKER_PASSWORD not set. Kind nodes will pull Docker Hub images unauthenticated.")
+        logger.warning(
+            "DOCKER_USERNAME/DOCKER_PASSWORD not set. Kind nodes will pull Docker Hub images unauthenticated."
+        )
 
     logger.info(f"Preparing isolated kind cluster for worker {worker_id}: {cluster_name}")
 
@@ -1158,8 +1176,8 @@ def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict,
 
 def run_parallel(args, config: SchedulerConfig):
     """Split problems and run in parallel workers."""
+
     from sregym.conductor.problems.registry import ProblemRegistry
-    import math
 
     registry = ProblemRegistry()
     # Use the same logic as conductor to get problem IDs
@@ -1255,9 +1273,7 @@ def run_parallel(args, config: SchedulerConfig):
         agent_to_run = args.agent
         sequence_start_idx = 0
         for idx, pid in enumerate(sequence):
-            search_pattern = os.path.join(
-                experiment_log_dir, f"*_{idx:05d}_{pid}_{agent_to_run}_results.csv"
-            )
+            search_pattern = os.path.join(experiment_log_dir, f"*_{idx:05d}_{pid}_{agent_to_run}_results.csv")
             existing_files = glob.glob(search_pattern)
             completed = any(is_result_complete(f) for f in existing_files)
             if completed:
@@ -1311,7 +1327,9 @@ def run_parallel(args, config: SchedulerConfig):
     worker_map = {}  # Map process to worker ID
     logger.info(f"Resource Capacity set to: {RESOURCE_CAPACITY} (System Cores: {_system_cores})")
     if sequence is not None:
-        logger.info(f"Running sequence of {len(sequence)} problems (starting at {sequence_start_idx}) with {args.parallel} workers.")
+        logger.info(
+            f"Running sequence of {len(sequence)} problems (starting at {sequence_start_idx}) with {args.parallel} workers."
+        )
     else:
         logger.info(f"Running {len(problems_to_run)} problems with {args.parallel} workers.")
 
@@ -1697,7 +1715,16 @@ def run_parallel(args, config: SchedulerConfig):
             p.join()
 
 
-def main(args, problem_list=None, experiment_log_dir=None, status_dict=None, problem_queue=None, worker_id=None, sequence=None, sequence_start_idx=0):
+def main(
+    args,
+    problem_list=None,
+    experiment_log_dir=None,
+    status_dict=None,
+    problem_queue=None,
+    worker_id=None,
+    sequence=None,
+    sequence_start_idx=0,
+):
     # Generate session ID and log directory
     session_timestamp = get_current_datetime_formatted()
     # Ensure logs root exists
@@ -1892,14 +1919,14 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Model ID for summarization LLM (default: same as --model / MODEL_ID). "
-             "Useful to use a cheaper model for summarization, e.g. gemini-2.5-flash.",
+        "Useful to use a cheaper model for summarization, e.g. gemini-2.5-flash.",
     )
     parser.add_argument(
         "--judge-model",
         type=str,
         default=None,
         help="Model ID for the LLM-as-a-judge (default: same as --model / MODEL_ID). "
-             "Useful to use a different model for evaluation, e.g. 'gpt-4o'.",
+        "Useful to use a different model for evaluation, e.g. 'gpt-4o'.",
     )
     parser.add_argument(
         "--resume-from",
@@ -1948,7 +1975,9 @@ if __name__ == "__main__":
         if args.resume_last or args.resume_from:
             parser.error("--seed-summary cannot be combined with --resume-last or --resume-from")
         if not agent_supports_summary(args.agent):
-            parser.error(f"--seed-summary can only be used with agents that support summaries: {sorted(set(AGENT_OUTPUT_FILES) | AGENT_LT_SUMMARY)}")
+            parser.error(
+                f"--seed-summary can only be used with agents that support summaries: {sorted(set(AGENT_OUTPUT_FILES) | AGENT_LT_SUMMARY)}"
+            )
         seed_path = Path(args.seed_summary)
         if not seed_path.is_file():
             parser.error(f"--seed-summary: path does not exist or is not a file: {args.seed_summary}")
