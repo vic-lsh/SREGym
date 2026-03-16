@@ -18,13 +18,11 @@ logger = logging.getLogger(__name__)
 _tool_config = LanggraphToolConfig()
 
 
-async def _submit_to_benchmark(submission_ans: str, stage: str) -> tuple[bool, str, dict | None]:
+async def submit_to_benchmark(submission_ans: str, stage: str) -> tuple[bool, str, dict | None]:
     """Submit answer via MCP SSE. Returns (success, message, oracle_result_dict)."""
     try:
         async with AsyncExitStack() as stack:
-            http_transport = await stack.enter_async_context(
-                sse_client(url=_tool_config.submit_mcp_url)
-            )
+            http_transport = await stack.enter_async_context(sse_client(url=_tool_config.submit_mcp_url))
             session = await stack.enter_async_context(ClientSession(*http_transport))
             await session.initialize()
             result = await session.call_tool("submit", arguments={"ans": submission_ans})
@@ -39,10 +37,11 @@ async def _submit_to_benchmark(submission_ans: str, stage: str) -> tuple[bool, s
                     stage_result = eval_result[stage_key]
                     if not stage_result.get("success", False):
                         reasoning = stage_result.get("reasoning", "")
-                        return False, (
-                            f"Benchmark evaluated submission as incorrect. "
-                            f"Reasoning: {reasoning}"
-                        ), stage_result
+                        return (
+                            False,
+                            (f"Benchmark evaluated submission as incorrect. Reasoning: {reasoning}"),
+                            stage_result,
+                        )
                     return True, "Submission accepted by benchmark.", stage_result
             except (json.JSONDecodeError, AttributeError):
                 pass
@@ -72,9 +71,7 @@ def make_submit_verdict(shared_file: Path, iteration: int, stage: str):
         """
         status = "APPROVED" if verdict else "REJECTED"
         section = (
-            f"\n### Iteration {iteration} — Judge Verdict ({stage})\n"
-            f"- Status: {status}\n"
-            f"- Reasoning: {reasoning}\n"
+            f"\n### Iteration {iteration} — Judge Verdict ({stage})\n- Status: {status}\n- Reasoning: {reasoning}\n"
         )
         try:
             with open(shared_file, "a") as f:
@@ -83,7 +80,7 @@ def make_submit_verdict(shared_file: Path, iteration: int, stage: str):
             logger.error(f"Failed to write verdict to shared file: {e}")
 
         if verdict:
-            success, msg, oracle_result = await _submit_to_benchmark(submission_ans, stage)
+            success, msg, oracle_result = await submit_to_benchmark(submission_ans, stage)
             if success:
                 content = f"APPROVED. {msg}"
                 logger.info(f"Judge approved and submitted (iteration {iteration}, stage {stage})")

@@ -9,7 +9,7 @@ from clients.common.driver_utils import wait_for_ready_stage
 from clients.crucible.agents.agent import CrucibleAgent
 from clients.crucible.tools.bash_tool import exec_bash, exec_bash_readonly
 from clients.crucible.tools.file_tools import read_file, str_replace_file, write_file
-from clients.crucible.tools.judge_tools import make_submit_verdict
+from clients.crucible.tools.judge_tools import make_submit_verdict, submit_to_benchmark
 from clients.crucible.tools.sre_complete_tool import (
     make_mark_hypothesis_complete,
     make_mark_mitigation_complete,
@@ -92,7 +92,11 @@ async def _run_sre_agent(
         model_name=model_name,
         role=f"{stage}-agent",
     )
-    return await agent.arun(_build_prompts(app_info, stage, "agent", iteration, shared_content, shared_file, lt_summary_file=lt_summary_file))
+    return await agent.arun(
+        _build_prompts(
+            app_info, stage, "agent", iteration, shared_content, shared_file, lt_summary_file=lt_summary_file
+        )
+    )
 
 
 async def _run_judge(
@@ -157,7 +161,17 @@ async def _run_stage_loop(
 
         shared_content = shared_file.read_text()
         complete_tool = make_complete_tool(shared_file, iteration)
-        agent_state = await _run_sre_agent(llm, app_info, stage, iteration, model_name, shared_content, shared_file, complete_tool, lt_summary_file=lt_summary_file)
+        agent_state = await _run_sre_agent(
+            llm,
+            app_info,
+            stage,
+            iteration,
+            model_name,
+            shared_content,
+            shared_file,
+            complete_tool,
+            lt_summary_file=lt_summary_file,
+        )
         agent_usage = agent_state.get("usage", _zero_usage())
         usage_by_role[agent_role]["iterations"].append(agent_usage)
         usage_by_role[agent_role]["total"] = _add_usage(usage_by_role[agent_role]["total"], agent_usage)
@@ -165,7 +179,14 @@ async def _run_stage_loop(
         shared_content = shared_file.read_text()
         verdict_tool = make_submit_verdict(shared_file, iteration, stage)
         judge_state = await _run_judge(
-            llm, app_info, stage, iteration, model_name, shared_content, shared_file, verdict_tool,
+            llm,
+            app_info,
+            stage,
+            iteration,
+            model_name,
+            shared_content,
+            shared_file,
+            verdict_tool,
         )
         judge_usage = judge_state.get("usage", _zero_usage())
         usage_by_role[judge_role]["iterations"].append(judge_usage)
@@ -179,7 +200,8 @@ async def _run_stage_loop(
             return True, usage_by_role
         logger.info(f"Judge REJECTED {stage} (iteration {iteration}). Looping...")
 
-    logger.warning(f"Max {stage} iterations reached without APPROVED verdict.")
+    logger.warning(f"Max {stage} iterations reached without APPROVED verdict. Submitting to benchmark to record timing.")
+    await submit_to_benchmark("", stage)
     return False, usage_by_role
 
 
@@ -205,7 +227,16 @@ async def run(
     shared_file = shared_file.resolve()
     lt_summary_file = lt_summary_file.resolve() if lt_summary_file else None
 
-    _, diag_usage = await _run_stage_loop(llm, app_info, "diagnosis", max_diag_iters, model_name, shared_file, make_mark_hypothesis_complete, lt_summary_file=lt_summary_file)
+    _, diag_usage = await _run_stage_loop(
+        llm,
+        app_info,
+        "diagnosis",
+        max_diag_iters,
+        model_name,
+        shared_file,
+        make_mark_hypothesis_complete,
+        lt_summary_file=lt_summary_file,
+    )
     usage_by_agent = diag_usage
 
     if "mitigation" not in planned_stages:
@@ -221,7 +252,16 @@ async def run(
     except TimeoutError:
         logger.warning(f"Timed out waiting for mitigation stage after {wait_stage_timeout}s — proceeding anyway.")
 
-    _, mit_usage = await _run_stage_loop(llm, app_info, "mitigation", max_mit_iters, model_name, shared_file, make_mark_mitigation_complete, lt_summary_file=lt_summary_file)
+    _, mit_usage = await _run_stage_loop(
+        llm,
+        app_info,
+        "mitigation",
+        max_mit_iters,
+        model_name,
+        shared_file,
+        make_mark_mitigation_complete,
+        lt_summary_file=lt_summary_file,
+    )
     usage_by_agent = {**diag_usage, **mit_usage}
 
     logger.info("=" * 60)
