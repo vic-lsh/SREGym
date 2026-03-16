@@ -90,19 +90,6 @@ PRELOAD_IMAGE_PATTERN = re.compile(r"^\s*image:\s*['\"]?([^'\"\s]+)['\"]?\s*$", 
 # Train Ticket: ~10 containers -> 10 units
 # Light apps: ~5 units
 #
-# System Capacity = Total Cores.
-
-try:
-    _system_cores = multiprocessing.cpu_count()
-    RESOURCE_CAPACITY = int(_system_cores * 1.2)
-except Exception:
-    RESOURCE_CAPACITY = 64  # Fallback
-
-
-class SchedulerConfig:
-    def __init__(self):
-        self.enable_resource_throttling = os.getenv("SREGYM_ENABLE_RESOURCE_THROTTLING", "true").lower() == "true"
-
 
 def _resolve_progress_mode(stream, parallel_workers: int) -> str:
     """
@@ -128,21 +115,6 @@ def _resolve_progress_mode(stream, parallel_workers: int) -> str:
         return "plain"
     return "rich"
 
-
-def get_resource_cost(problem_id: str) -> int:
-    pid = problem_id.lower()
-    if "social_network" in pid or "social-network" in pid:
-        return 27
-    if "hotel_reservation" in pid or "hotel-reservation" in pid:
-        return 19
-    if "astronomy_shop" in pid or "astronomy-shop" in pid:
-        # 14 microservices + kafka/redis/etc.
-        # Plus heavier memory footprint as seen in resource audit.
-        return 20
-    if "train_ticket" in pid or "trainticket" in pid:
-        # Train ticket has ~65 deployments!
-        return 65
-    return 5
 
 
 def get_current_datetime_formatted():
@@ -600,7 +572,9 @@ def driver_loop(
                             f"(exit {agent_exit_code})! Results written to {csv_path}"
                         )
                     else:
-                        logger.info(f"✅ Problem {pid} for agent {agent_to_run} complete! Results written to {csv_path}")
+                        logger.info(
+                            f"✅ Problem {pid} for agent {agent_to_run} complete! Results written to {csv_path}"
+                        )
 
                     # Cleanup agent process so a fresh one can be started for the next problem
                     if not use_external_harness:
@@ -1175,7 +1149,7 @@ def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict,
             _delete_worker_cluster(cluster_name)
 
 
-def run_parallel(args, config: SchedulerConfig):
+def run_parallel(args):
     """Split problems and run in parallel workers."""
 
     from sregym.conductor.problems.registry import ProblemRegistry
@@ -1326,18 +1300,12 @@ def run_parallel(args, config: SchedulerConfig):
 
     processes = []
     worker_map = {}  # Map process to worker ID
-    logger.info(f"Resource Capacity set to: {RESOURCE_CAPACITY} (System Cores: {_system_cores})")
     if sequence is not None:
         logger.info(
             f"Running sequence of {len(sequence)} problems (starting at {sequence_start_idx}) with {args.parallel} workers."
         )
     else:
         logger.info(f"Running {len(problems_to_run)} problems with {args.parallel} workers.")
-
-    if not config.enable_resource_throttling:
-        logger.warning(
-            "⚠️ Resource throttling is DISABLED. Workers will be assigned tasks regardless of estimated cost."
-        )
 
     for i in range(args.parallel):
         # Pass the PRIVATE queue for this worker
@@ -1427,12 +1395,7 @@ def run_parallel(args, config: SchedulerConfig):
                                 ):
                                     del assigned_tasks[wid]
 
-                        # 2. Calculate Resource Usage
-                        current_resource_usage = 0
-                        for pid in assigned_tasks.values():
-                            current_resource_usage += get_resource_cost(pid)
-
-                        # 3. Assign New Tasks to Idle Workers
+                        # 2. Assign New Tasks to Idle Workers
                         idle_workers = []
                         for i in range(args.parallel):
                             # Worker must be running, not assigned a task, and not failed
@@ -1445,35 +1408,9 @@ def run_parallel(args, config: SchedulerConfig):
                             if not pending_problems:
                                 break
 
-                            # Try to find a problem that fits
-                            # We iterate to find the first one that fits (simple First-Fit)
-                            problem_to_assign = None
-                            for p in pending_problems:
-                                cost = get_resource_cost(p)
-                                if not config.enable_resource_throttling or (
-                                    current_resource_usage + cost <= RESOURCE_CAPACITY
-                                ):
-                                    problem_to_assign = p
-                                    current_resource_usage += cost
-                                    break
-
-                            if problem_to_assign:
-                                pending_problems.remove(problem_to_assign)
-                                assigned_tasks[wid] = problem_to_assign
-                                worker_queues[wid].put(problem_to_assign)
-                                # Update status dict to show it's queued (optional, improves UI latency)
-                                # status_dict[problem_to_assign] = ...
-                            else:
-                                # No problem fits in current resources. Stop looking for this worker.
-                                meta_key = _worker_meta_key(wid)
-                                current_meta = status_dict.get(meta_key, {})
-                                if current_meta.get("status") != "Waiting for resources":
-                                    status_dict[meta_key] = {
-                                        "status": "Waiting for resources",
-                                        "start_time": time.time(),
-                                        "elapsed": 0.0,
-                                        "worker_id": wid,
-                                    }
+                            problem_to_assign = pending_problems.pop(0)
+                            assigned_tasks[wid] = problem_to_assign
+                            worker_queues[wid].put(problem_to_assign)
 
                         # 4. Check Termination
                         if sequence is not None:
@@ -1985,5 +1922,4 @@ if __name__ == "__main__":
 
     # Always run through the parallel wrapper to ensure consistent logging and behavior
     # even for single-worker runs (capture stdout/stderr, etc.)
-    config = SchedulerConfig()
-    run_parallel(args, config)
+    run_parallel(args)
