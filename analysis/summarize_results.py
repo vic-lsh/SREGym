@@ -16,7 +16,7 @@ try:
     plt.rcParams.update(
         {
             "font.size": _base * 1.25,
-            "axes.titlesize": _base * 1.5,    # default "large" ~= 1.2x base
+            "axes.titlesize": _base * 1.5,  # default "large" ~= 1.2x base
             "axes.labelsize": _base * 1.25,
             "xtick.labelsize": _base * 1.25,
             "ytick.labelsize": _base * 1.25,
@@ -61,12 +61,13 @@ def load_results(target_path=None):
                 continue
 
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 reader = csv.DictReader(f)
                 if not reader.fieldnames:
                     continue
 
                 has_results_columns = "Diagnosis.success" in reader.fieldnames
+                has_mitigation = "Mitigation.success" in reader.fieldnames or "Mitigation.judgment" in reader.fieldnames
 
                 for row in reader:
                     pid = row.get("problem_id")
@@ -74,9 +75,21 @@ def load_results(target_path=None):
                         continue
 
                     row["source_file"] = os.path.basename(file_path)
+                    row["has_mitigation"] = has_mitigation
 
-                    if has_results_columns and row.get("Diagnosis.success"):
-                        row["status"] = "Completed"
+                    if has_results_columns:
+                        if has_mitigation:
+                            row["status"] = (
+                                "Completed"
+                                if (row.get("Diagnosis.success") and row.get("Mitigation.success"))
+                                else "Incomplete"
+                            )
+                        else:
+                            row["status"] = (
+                                "Completed"
+                                if (row.get("Diagnosis.success") is not None and row.get("Diagnosis.success") != "")
+                                else "Incomplete"
+                            )
                     else:
                         row["status"] = "Incomplete"
 
@@ -99,7 +112,9 @@ def load_results(target_path=None):
 
     sorted_runs = list(runs_by_id.values())
     # Sort by sequence_index (if present) then source_file for chronological order
-    sorted_runs.sort(key=lambda x: (x.get("source_file", ""), int(x["sequence_index"]) if x.get("sequence_index") else 0))
+    sorted_runs.sort(
+        key=lambda x: (x.get("source_file", ""), int(x["sequence_index"]) if x.get("sequence_index") else 0)
+    )
 
     return runs_by_id, sorted_runs
 
@@ -127,7 +142,7 @@ def load_stratus_tokens(log_dir):
         problem_id = parts[2]
 
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 reader = csv.DictReader(f)
                 total = 0
                 for row in reader:
@@ -163,7 +178,7 @@ def load_gemini_tokens(log_dir):
             problem_id = m.group(1)
 
             try:
-                with open(file_path, "r", encoding="utf-8") as f:
+                with open(file_path, encoding="utf-8") as f:
                     data = json.load(f)
                 um = data.get("usage_metrics", {})
                 inp = int(um.get("input_tokens", 0) or 0)
@@ -197,7 +212,7 @@ def load_crucible_tokens(log_dir):
             continue
         problem_id = m.group(1)
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 data = json.load(f)
             by_agent = data.get("usage_metrics", {}).get("by_agent", {})
 
@@ -243,7 +258,8 @@ def summarize_results(target_path=None):
     incomplete_count = total_runs - len(completed_runs)
 
     diag_success_count = sum(1 for r in completed_runs if r.get("Diagnosis.success") == "True")
-    mitig_success_count = sum(1 for r in completed_runs if r.get("Mitigation.success") == "True")
+    runs_with_mitigation = [r for r in completed_runs if r.get("has_mitigation")]
+    mitig_success_count = sum(1 for r in runs_with_mitigation if r.get("Mitigation.success") == "True")
 
     ttls = []
     ttms = []
@@ -251,7 +267,7 @@ def summarize_results(target_path=None):
         try:
             if r.get("TTL"):
                 ttls.append(float(r["TTL"]))
-            if r.get("TTM"):
+            if r.get("has_mitigation") and r.get("TTM"):
                 ttms.append(float(r["TTM"]))
         except ValueError:
             pass
@@ -272,14 +288,26 @@ def summarize_results(target_path=None):
     print(
         f"Diagnosis Success Rate (of completed): {diag_success_count}/{len(completed_runs)} ({diag_success_count / len(completed_runs) * 100 if completed_runs else 0:.1f}%)"
     )
-    print(
-        f"Mitigation Success Rate (of completed): {mitig_success_count}/{len(completed_runs)} ({mitig_success_count / len(completed_runs) * 100 if completed_runs else 0:.1f}%)"
-    )
+    if runs_with_mitigation:
+        print(
+            f"Mitigation Success Rate (of runs with mitigation): {mitig_success_count}/{len(runs_with_mitigation)} ({mitig_success_count / len(runs_with_mitigation) * 100:.1f}%)"
+        )
+    else:
+        print("Mitigation Success Rate: No runs with mitigation.")
     print(f"Average Time to Locate:   {avg_ttl:.2f}s")
     print(f"Average Time to Mitigate: {avg_ttm:.2f}s")
     print("-" * table_width)
 
-    header = f"{'Run Date':<14} | {'Problem ID':<{problem_id_width}} | {'Diag':<8} | {'Mitig':<8} | {'TTL(s)':<7} | {'TTM(s)':<7} | {'Status'}"
+    def pad_emoji(s, width):
+        """Pad so visual width aligns; emojis render as 2 cols in many terminals."""
+        has_emoji = "✅" in s or "❌" in s or "⚠️" in s
+        visual_len = len(s) + (1 if has_emoji else 0)
+        return s + " " * max(0, width - visual_len)
+
+    diag_width = 8   # "✅ PASS" / "❌ FAIL"
+    mitig_width = 8
+    status_width = 16  # "DONE" / "⚠️  INCOMPLETE"
+    header = f"{'Run Date':<14} | {'Problem ID':<{problem_id_width}} | {'Diag':<{diag_width}} | {'Mitig':<{mitig_width}} | {'TTL(s)':<7} | {'TTM(s)':<7} | {'Status':<{status_width}}"
     print(header)
     print("-" * table_width)
 
@@ -294,15 +322,21 @@ def summarize_results(target_path=None):
 
         if r["status"] == "Completed":
             d_res = "✅ PASS" if r.get("Diagnosis.success") == "True" else "❌ FAIL"
-            m_res = "✅ PASS" if r.get("Mitigation.success") == "True" else "❌ FAIL"
+            if r.get("has_mitigation"):
+                m_res = "✅ PASS" if r.get("Mitigation.success") == "True" else "❌ FAIL"
+            else:
+                m_res = "-"
             try:
                 ttl = f"{float(r.get('TTL', 0)):.1f}"
-            except:
+            except Exception:
                 ttl = "N/A"
-            try:
-                ttm = f"{float(r.get('TTM', 0)):.1f}"
-            except:
-                ttm = "N/A"
+            if r.get("has_mitigation"):
+                try:
+                    ttm = f"{float(r.get('TTM', 0)):.1f}"
+                except Exception:
+                    ttm = "N/A"
+            else:
+                ttm = "-"
             status = "DONE"
         else:
             d_res = "-"
@@ -311,7 +345,10 @@ def summarize_results(target_path=None):
             ttm = "-"
             status = "⚠️  INCOMPLETE"
 
-        print(f"{run_date:<14} | {pid:<{problem_id_width}} | {d_res:<8} | {m_res:<8} | {ttl:<7} | {ttm:<7} | {status}")
+        d_str = pad_emoji(d_res, diag_width)
+        m_str = pad_emoji(m_res, mitig_width)
+        status_str = pad_emoji(status, status_width)
+        print(f"{run_date:<14} | {pid:<{problem_id_width}} | {d_str} | {m_str} | {ttl:<7} | {ttm:<7} | {status_str}")
 
     print("=" * table_width + "\n")
 
@@ -372,9 +409,9 @@ def summarize_results(target_path=None):
     any_tokens = any(tokens_phases[p] for p in ("diagnosis", "mitigation", "resolution"))
     if any_tokens:
         phase_cfg = [
-            ("diagnosis",  "Diagnosis",           "tab:blue"),
-            ("mitigation", "Mitigation",          "tab:orange"),
-            ("resolution", "Resolution (D+M)",    "tab:green"),
+            ("diagnosis", "Diagnosis", "tab:blue"),
+            ("mitigation", "Mitigation", "tab:orange"),
+            ("resolution", "Resolution (D+M)", "tab:green"),
         ]
         for phase_key, phase_label, color in phase_cfg:
             phase_map = tokens_phases[phase_key]
@@ -382,13 +419,19 @@ def summarize_results(target_path=None):
                 continue
             toks = sorted(phase_map.values())
             avg = sum(toks) / len(toks)
-            print(f"Average Tokens — {phase_label}: {avg/1e6:,.2f}M  (n={len(toks)})")
+            print(f"Average Tokens — {phase_label}: {avg / 1e6:,.2f}M  (n={len(toks)})")
             if not HAS_PLOTTING:
                 continue
             y = np.arange(1, len(toks) + 1) / len(toks)
             plt.figure(figsize=(10, 6))
-            plt.plot([t / 1e6 for t in toks], y, marker=".", linestyle="-", color=color,
-                     label=f"{phase_label} (n={len(toks)})")
+            plt.plot(
+                [t / 1e6 for t in toks],
+                y,
+                marker=".",
+                linestyle="-",
+                color=color,
+                label=f"{phase_label} (n={len(toks)})",
+            )
             plt.xlabel("Tokens (M)")
             plt.ylabel("CDF")
             plt.title(f"CDF of Token Usage — {phase_label}")
@@ -421,7 +464,9 @@ def diff_results(dir1, dir2):
         completed = [r for r in runs if r["status"] == "Completed"]
         n_comp = len(completed)
         d_succ = sum(1 for r in completed if r.get("Diagnosis.success") == "True")
-        m_succ = sum(1 for r in completed if r.get("Mitigation.success") == "True")
+        runs_with_mitig = [r for r in completed if r.get("has_mitigation")]
+        m_succ = sum(1 for r in runs_with_mitig if r.get("Mitigation.success") == "True")
+        n_mitig = len(runs_with_mitig)
         ttls, ttms, tres = [], [], []
         for r in completed:
             try:
@@ -430,22 +475,19 @@ def diff_results(dir1, dir2):
             except (ValueError, TypeError):
                 pass
             try:
-                if r.get("TTM"):
+                if r.get("has_mitigation") and r.get("TTM"):
                     ttms.append(float(r["TTM"]))
-            except (ValueError, TypeError):
-                pass
-            try:
-                if r.get("TTL") and r.get("TTM"):
-                    tres.append(float(r["TTL"]) + float(r["TTM"]))
+                    if r.get("TTL"):
+                        tres.append(float(r["TTL"]) + float(r["TTM"]))
             except (ValueError, TypeError):
                 pass
         avg_ttl = sum(ttls) / len(ttls) if ttls else 0.0
         avg_ttm = sum(ttms) / len(ttms) if ttms else 0.0
         avg_tres = sum(tres) / len(tres) if tres else 0.0
-        return total, n_comp, d_succ, m_succ, avg_ttl, avg_ttm, avg_tres
+        return total, n_comp, d_succ, m_succ, n_mitig, avg_ttl, avg_ttm, avg_tres
 
-    t1, c1, d1, m1, attl1, attm1, atres1 = get_stats(runs1_map)
-    t2, c2, d2, m2, attl2, attm2, atres2 = get_stats(runs2_map)
+    t1, c1, d1, m1, n_mitig1, attl1, attm1, atres1 = get_stats(runs1_map)
+    t2, c2, d2, m2, n_mitig2, attl2, attm2, atres2 = get_stats(runs2_map)
 
     w_col = max(len(name1), len(name2), 18)
 
@@ -462,11 +504,12 @@ def diff_results(dir1, dir2):
     d2_s = f"{d2}/{c2} ({d2_pct:.1f}%)"
     print(f"{'Diagnosis Success':<25} | {d1_s:<{w_col}} | {d2_s:<{w_col}} | {d1_pct - d2_pct:+.1f}%")
 
-    m1_pct = (m1 / c1 * 100) if c1 else 0.0
-    m2_pct = (m2 / c2 * 100) if c2 else 0.0
-    m1_s = f"{m1}/{c1} ({m1_pct:.1f}%)"
-    m2_s = f"{m2}/{c2} ({m2_pct:.1f}%)"
-    print(f"{'Mitigation Success':<25} | {m1_s:<{w_col}} | {m2_s:<{w_col}} | {m1_pct - m2_pct:+.1f}%")
+    m1_pct = (m1 / n_mitig1 * 100) if n_mitig1 else 0.0
+    m2_pct = (m2 / n_mitig2 * 100) if n_mitig2 else 0.0
+    m1_s = f"{m1}/{n_mitig1} ({m1_pct:.1f}%)" if n_mitig1 else "N/A"
+    m2_s = f"{m2}/{n_mitig2} ({m2_pct:.1f}%)" if n_mitig2 else "N/A"
+    m_diff = f"{m1_pct - m2_pct:+.1f}%" if (n_mitig1 and n_mitig2) else "-"
+    print(f"{'Mitigation Success (of mitig)':<25} | {m1_s:<{w_col}} | {m2_s:<{w_col}} | {m_diff}")
 
     attl1_s = f"{attl1:.1f}s"
     attl2_s = f"{attl2:.1f}s"
@@ -484,7 +527,11 @@ def diff_results(dir1, dir2):
     if is_crucible_dir(dir1) and is_crucible_dir(dir2):
         _pre1 = load_crucible_tokens(dir1)
         _pre2 = load_crucible_tokens(dir2)
-        for _phase, _label in [("diagnosis", "Avg Tokens Diag"), ("mitigation", "Avg Tokens Mitig"), ("resolution", "Avg Tokens Res")]:
+        for _phase, _label in [
+            ("diagnosis", "Avg Tokens Diag"),
+            ("mitigation", "Avg Tokens Mitig"),
+            ("resolution", "Avg Tokens Res"),
+        ]:
             _l1 = [t for t in _pre1[_phase].values() if t > 0]
             _l2 = [t for t in _pre2[_phase].values() if t > 0]
             _avg1 = sum(_l1) / len(_l1) / 1e6 if _l1 else 0.0
@@ -561,7 +608,10 @@ def diff_results(dir1, dir2):
 
             if r["status"] == "Completed":
                 d_stat = "✅ PASS" if r.get("Diagnosis.success") == "True" else "❌ FAIL"
-                m_stat = "✅ PASS" if r.get("Mitigation.success") == "True" else "❌ FAIL"
+                if r.get("has_mitigation"):
+                    m_stat = "✅ PASS" if r.get("Mitigation.success") == "True" else "❌ FAIL"
+                else:
+                    m_stat = "-"
             else:
                 d_stat = "-"
                 m_stat = "-"
@@ -990,7 +1040,7 @@ def diff_results(dir1, dir2):
 
         # 1) Per-phase CDFs
         for phase_key, phase_label in [
-            ("diagnosis",  "Diagnosis"),
+            ("diagnosis", "Diagnosis"),
             ("mitigation", "Mitigation"),
             ("resolution", "Resolution"),
         ]:
@@ -1105,14 +1155,21 @@ def diff_results(dir1, dir2):
                     m2 = r2 and r2.get("Mitigation.success") == "True"
                     comp_token_data.append((pid, t1 or 0, t2 or 0, d1 and m1, d2 and m2))
             plot_token_comparison_by_problem(
-                comp_token_data, name1, name2,
+                comp_token_data,
+                name1,
+                name2,
                 os.path.join(output_dir, "comparison_tokens.png"),
-                colors=["#004d99", "#66b3ff"], use_status_colors=True,
+                colors=["#004d99", "#66b3ff"],
+                use_status_colors=True,
             )
             plot_token_comparison_by_problem(
-                comp_token_data, name1, name2,
+                comp_token_data,
+                name1,
+                name2,
                 os.path.join(output_dir, "comparison_tokens_by_name.png"),
-                colors=["#004d99", "#66b3ff"], use_status_colors=True, sort_by_name=True,
+                colors=["#004d99", "#66b3ff"],
+                use_status_colors=True,
+                sort_by_name=True,
             )
 
             tokens_time_data1 = []
@@ -1141,7 +1198,10 @@ def diff_results(dir1, dir2):
                     tokens_time_data2.append((tok2, agg2, pid))
 
             plot_tokens_vs_time(
-                tokens_time_data1, tokens_time_data2, name1, name2,
+                tokens_time_data1,
+                tokens_time_data2,
+                name1,
+                name2,
                 os.path.join(output_dir, "scatter_tokens_vs_time.png"),
                 colors=["#004d99", "#66b3ff"],
             )
@@ -1590,12 +1650,13 @@ def _load_sequence_rows(log_dir):
                 reader = csv.DictReader(f)
                 if not reader.fieldnames or "sequence_index" not in reader.fieldnames:
                     continue
+                has_mitigation = "Mitigation.success" in reader.fieldnames or "Mitigation.judgment" in reader.fieldnames
                 for row in reader:
                     try:
                         seq_idx = int(row["sequence_index"])
                     except (ValueError, TypeError):
                         continue
-                    rows.append({"seq_idx": seq_idx, "row": row})
+                    rows.append({"seq_idx": seq_idx, "row": row, "has_mitigation": has_mitigation})
         except Exception as e:
             print(f"Warning: could not read {fpath}: {e}")
     rows.sort(key=lambda r: r["seq_idx"])
@@ -1608,7 +1669,7 @@ def _rolling_avg(xs, ys, w):
     if len(pairs) < w:
         return [], []
     xs_f, ys_f = zip(*pairs)
-    smoothed = [sum(ys_f[i:i + w]) / w for i in range(len(ys_f) - w + 1)]
+    smoothed = [sum(ys_f[i : i + w]) / w for i in range(len(ys_f) - w + 1)]
     xs_out = [xs_f[i + w // 2] for i in range(len(ys_f) - w + 1)]
     return xs_out, smoothed
 
@@ -1634,22 +1695,27 @@ def plot_sequence_success_rate(log_dir, output_path=None, window=5):
         return
 
     seq_idxs = [r["seq_idx"] for r in raw]
-    diag_ys  = [1 if r["row"].get("Diagnosis.success") == "True" else 0 for r in raw]
-    mitig_ys = [1 if r["row"].get("Mitigation.success") == "True" else 0 for r in raw]
+    diag_ys = [1 if r["row"].get("Diagnosis.success") == "True" else 0 for r in raw]
+    mitig_ys = [
+        1 if r["row"].get("Mitigation.success") == "True" else (0 if r.get("has_mitigation") else None) for r in raw
+    ]
 
     fig, ax = plt.subplots(figsize=(12, 6))
 
     # Scatter: jitter y slightly so overlapping 0/1 points are visible
     jitter = 0.03
-    diag_jitter  = [y + jitter  for y in diag_ys]
-    mitig_jitter = [y - jitter for y in mitig_ys]
+    diag_jitter = [y + jitter for y in diag_ys]
+    mitig_xs = [r["seq_idx"] for r in raw if r.get("has_mitigation")]
+    mitig_ys_plot = [1 if r["row"].get("Mitigation.success") == "True" else 0 for r in raw if r.get("has_mitigation")]
+    mitig_jitter = [y - jitter for y in mitig_ys_plot]
 
-    ax.scatter(seq_idxs, diag_jitter,  color="tab:blue",   alpha=0.25, s=15, zorder=2)
-    ax.scatter(seq_idxs, mitig_jitter, color="tab:orange", alpha=0.25, s=15, zorder=2)
+    ax.scatter(seq_idxs, diag_jitter, color="tab:blue", alpha=0.25, s=15, zorder=2)
+    if mitig_xs:
+        ax.scatter(mitig_xs, mitig_jitter, color="tab:orange", alpha=0.25, s=15, zorder=2)
 
     rx, ry = _rolling_avg(seq_idxs, diag_ys, window)
     if rx:
-        ax.plot(rx, ry, color="tab:blue",   linewidth=2, label=f"Diagnosis (rolling avg w={window})")
+        ax.plot(rx, ry, color="tab:blue", linewidth=2, label=f"Diagnosis (rolling avg w={window})")
 
     rx, ry = _rolling_avg(seq_idxs, mitig_ys, window)
     if rx:
@@ -1711,18 +1777,18 @@ def plot_sequence_time(log_dir, output_path=None, window=5):
     fig, ax = plt.subplots(figsize=(12, 6))
 
     # Scatter points
-    ttl_xs  = [x for x, y in zip(seq_idxs, ttls)  if y is not None]
-    ttl_ys  = [y for y in ttls  if y is not None]
-    ttm_xs  = [x for x, y in zip(seq_idxs, ttms)  if y is not None]
-    ttm_ys  = [y for y in ttms  if y is not None]
-    tot_xs  = [x for x, y in zip(seq_idxs, tots)  if y is not None]
-    tot_ys  = [y for y in tots  if y is not None]
+    ttl_xs = [x for x, y in zip(seq_idxs, ttls) if y is not None]
+    ttl_ys = [y for y in ttls if y is not None]
+    ttm_xs = [x for x, y in zip(seq_idxs, ttms) if y is not None]
+    ttm_ys = [y for y in ttms if y is not None]
+    tot_xs = [x for x, y in zip(seq_idxs, tots) if y is not None]
+    tot_ys = [y for y in tots if y is not None]
 
     if ttl_ys:
-        ax.scatter(ttl_xs, ttl_ys, color="tab:blue",   alpha=0.35, s=20, zorder=2)
+        ax.scatter(ttl_xs, ttl_ys, color="tab:blue", alpha=0.35, s=20, zorder=2)
         rx, ry = _rolling_avg(ttl_xs, ttl_ys, window)
         if rx:
-            ax.plot(rx, ry, color="tab:blue",   linewidth=2, label=f"TTL (rolling avg w={window})")
+            ax.plot(rx, ry, color="tab:blue", linewidth=2, label=f"TTL (rolling avg w={window})")
 
     if ttm_ys:
         ax.scatter(ttm_xs, ttm_ys, color="tab:orange", alpha=0.35, s=20, zorder=2)
@@ -1731,10 +1797,10 @@ def plot_sequence_time(log_dir, output_path=None, window=5):
             ax.plot(rx, ry, color="tab:orange", linewidth=2, label=f"TTM (rolling avg w={window})")
 
     if tot_ys:
-        ax.scatter(tot_xs, tot_ys, color="tab:green",  alpha=0.35, s=20, zorder=2)
+        ax.scatter(tot_xs, tot_ys, color="tab:green", alpha=0.35, s=20, zorder=2)
         rx, ry = _rolling_avg(tot_xs, tot_ys, window)
         if rx:
-            ax.plot(rx, ry, color="tab:green",  linewidth=2, label=f"Total (rolling avg w={window})")
+            ax.plot(rx, ry, color="tab:green", linewidth=2, label=f"Total (rolling avg w={window})")
 
     ax.set_xlabel("Sequence Index")
     ax.set_ylabel("Time (s)")
@@ -1756,11 +1822,15 @@ if __name__ == "__main__":
         "--diff", nargs=2, metavar=("DIR1", "DIR2"), help="Compare results between two log directories."
     )
     parser.add_argument(
-        "--sequence", metavar="DIR",
+        "--sequence",
+        metavar="DIR",
         help="Plot solving time vs sequence index for a sequence-mode run directory.",
     )
     parser.add_argument(
-        "--sequence-window", type=int, default=5, metavar="W",
+        "--sequence-window",
+        type=int,
+        default=5,
+        metavar="W",
         help="Rolling-average window size for the sequence time plot (default: 5).",
     )
     parser.add_argument(
