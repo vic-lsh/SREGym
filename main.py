@@ -910,6 +910,34 @@ def _apply_worker_cpu_limit(cluster_name: str) -> None:
     logger.info(f"Applied CPU limit of {cpu_limit} to {len(node_containers)} node containers for {cluster_name}")
 
 
+def _log_cpu_oversubscription(num_workers: int) -> None:
+    """Log CPU oversubscription ratio when SREGYM_WORKER_CPU_LIMIT is set."""
+    cpu_limit = os.getenv("SREGYM_WORKER_CPU_LIMIT", "").strip()
+    if not cpu_limit:
+        return
+    try:
+        limit_per_node = float(cpu_limit)
+    except ValueError:
+        return
+    # Count nodes in the KIND config
+    config_path = _worker_kind_config_path()
+    try:
+        with open(config_path) as f:
+            nodes_per_cluster = sum(1 for line in f if line.strip().startswith("- role:"))
+    except OSError:
+        return
+    host_cpus = os.cpu_count() or 1
+    total_allocated = limit_per_node * nodes_per_cluster * num_workers
+    ratio = total_allocated / host_cpus
+    logger.info(
+        f"CPU oversubscription: {limit_per_node} cpus/node × {nodes_per_cluster} nodes/cluster "
+        f"× {num_workers} workers = {total_allocated:.0f} allocated vs {host_cpus} host CPUs "
+        f"(ratio: {ratio:.2f}x)"
+    )
+    if ratio > 1.0:
+        logger.warning(f"CPU is oversubscribed by {ratio:.2f}x — expect contention under load.")
+
+
 def _load_preloaded_images_into_cluster(cluster_name: str) -> None:
     if not _should_preload_infra_images():
         return
@@ -1322,6 +1350,7 @@ def run_parallel(args):
     # Let's keep original order or shuffle. Original order is fine.
 
     _prefetch_infra_images_once()
+    _log_cpu_oversubscription(args.parallel)
 
     processes = []
     worker_map = {}  # Map process to worker ID
