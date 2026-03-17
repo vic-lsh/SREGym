@@ -457,12 +457,13 @@ def driver_loop(
                         reg = get_agent(agent_to_run, path=_registry_path)
                         if reg:
                             extra_args = ""
-                            # Pass explicit log dir to external-summarizer agents (e.g. gemini_cli)
+                            # Pass log dir and KB dir to agents that support them
                             if agent_to_run in AGENT_OUTPUT_FILES:
                                 extra_args += f" --logs-dir {agent_log_dir} --kb-dir {agent_base_dir}"
-
-                            if enable_summary and agent_to_run in AGENT_OUTPUT_FILES:
-                                extra_args += " --enable-summary"
+                                if enable_summary:
+                                    extra_args += " --enable-summary"
+                            elif enable_summary:
+                                extra_args += f" --kb-dir {agent_base_dir}"
                             if not inject_summary:
                                 extra_args += " --no-inject-kb"
 
