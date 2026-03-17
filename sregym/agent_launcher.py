@@ -52,7 +52,11 @@ class AgentLauncher:
         if extra_args:
             command += f" {extra_args}"
 
-        # Ensure exp_env directory exists
+        # SREGYM_EXP_ENV is the per-worker scratch directory where agents run.
+        # It serves as the agent's working directory (cwd) and is where shared
+        # files (instruction.txt, trajectories, summaries) are written. Each
+        # parallel worker gets its own exp_env (set by main.py) to avoid conflicts.
+        # Cleaned between problems by _clean_exp_env().
         exp_env_dir = os.getenv("SREGYM_EXP_ENV", "exp_env")
         os.makedirs(exp_env_dir, exist_ok=True)
 
@@ -62,7 +66,7 @@ class AgentLauncher:
         proc = subprocess.Popen(
             command,
             shell=True,
-            cwd=reg.kickoff_workdir or os.getcwd(),
+            cwd=exp_env_dir,
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
