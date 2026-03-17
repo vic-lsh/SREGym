@@ -932,84 +932,84 @@ def diff_results(dir1, dir2):
     )
 
     tokens1_map = load_stratus_tokens(dir1) or load_gemini_tokens(dir1)
-        tokens2_map = load_stratus_tokens(dir2) or load_gemini_tokens(dir2)
+    tokens2_map = load_stratus_tokens(dir2) or load_gemini_tokens(dir2)
 
-        if tokens1_map or tokens2_map:
-            tokens1_list = [t for t in tokens1_map.values() if t and t > 0]
-            tokens2_list = [t for t in tokens2_map.values() if t and t > 0]
+    if tokens1_map or tokens2_map:
+        tokens1_list = [t for t in tokens1_map.values() if t and t > 0]
+        tokens2_list = [t for t in tokens2_map.values() if t and t > 0]
 
-            plot_cdf_tokens(
-                tokens1_list,
-                tokens2_list,
-                name1,
-                name2,
-                os.path.join(output_dir, "cdf_tokens.png"),
-                colors=["#004d99", "#66b3ff"],
-            )
+        plot_cdf_tokens(
+            tokens1_list,
+            tokens2_list,
+            name1,
+            name2,
+            os.path.join(output_dir, "cdf_tokens.png"),
+            colors=["#004d99", "#66b3ff"],
+        )
 
-            comp_token_data = []
-            for pid in all_pids:
-                t1 = tokens1_map.get(pid)
-                t2 = tokens2_map.get(pid)
-                if (t1 is not None and t1 > 0) or (t2 is not None and t2 > 0):
-                    r1 = runs1_map.get(pid)
-                    r2 = runs2_map.get(pid)
-                    d1 = r1 and r1.get("Diagnosis.success") == "True"
-                    m1 = r1 and r1.get("Mitigation.success") == "True"
-                    d2 = r2 and r2.get("Diagnosis.success") == "True"
-                    m2 = r2 and r2.get("Mitigation.success") == "True"
-                    comp_token_data.append((pid, t1 or 0, t2 or 0, d1 and m1, d2 and m2))
-            plot_token_comparison_by_problem(
-                comp_token_data,
-                name1,
-                name2,
-                os.path.join(output_dir, "comparison_tokens.png"),
-                colors=["#004d99", "#66b3ff"],
-                use_status_colors=True,
-            )
-            plot_token_comparison_by_problem(
-                comp_token_data,
-                name1,
-                name2,
-                os.path.join(output_dir, "comparison_tokens_by_name.png"),
-                colors=["#004d99", "#66b3ff"],
-                use_status_colors=True,
-                sort_by_name=True,
-            )
-
-            tokens_time_data1 = []
-            tokens_time_data2 = []
-            for pid in all_pids:
-                tok1 = tokens1_map.get(pid)
-                tok2 = tokens2_map.get(pid)
+        comp_token_data = []
+        for pid in all_pids:
+            t1 = tokens1_map.get(pid)
+            t2 = tokens2_map.get(pid)
+            if (t1 is not None and t1 > 0) or (t2 is not None and t2 > 0):
                 r1 = runs1_map.get(pid)
                 r2 = runs2_map.get(pid)
+                d1 = r1 and r1.get("Diagnosis.success") == "True"
+                m1 = r1 and r1.get("Mitigation.success") == "True"
+                d2 = r2 and r2.get("Diagnosis.success") == "True"
+                m2 = r2 and r2.get("Mitigation.success") == "True"
+                comp_token_data.append((pid, t1 or 0, t2 or 0, d1 and m1, d2 and m2))
+        plot_token_comparison_by_problem(
+            comp_token_data,
+            name1,
+            name2,
+            os.path.join(output_dir, "comparison_tokens.png"),
+            colors=["#004d99", "#66b3ff"],
+            use_status_colors=True,
+        )
+        plot_token_comparison_by_problem(
+            comp_token_data,
+            name1,
+            name2,
+            os.path.join(output_dir, "comparison_tokens_by_name.png"),
+            colors=["#004d99", "#66b3ff"],
+            use_status_colors=True,
+            sort_by_name=True,
+        )
 
-                def parse_float(val):
-                    try:
-                        return float(val)
-                    except (ValueError, TypeError):
-                        return None
+        tokens_time_data1 = []
+        tokens_time_data2 = []
+        for pid in all_pids:
+            tok1 = tokens1_map.get(pid)
+            tok2 = tokens2_map.get(pid)
+            r1 = runs1_map.get(pid)
+            r2 = runs2_map.get(pid)
 
-                ttl1 = parse_float(r1.get("TTL")) if r1 else None
-                ttm1 = parse_float(r1.get("TTM")) if r1 else None
-                ttl2 = parse_float(r2.get("TTL")) if r2 else None
-                ttm2 = parse_float(r2.get("TTM")) if r2 else None
-                agg1 = (ttl1 or 0) + (ttm1 or 0)
-                agg2 = (ttl2 or 0) + (ttm2 or 0)
-                if tok1 and tok1 > 0 and agg1 > 0:
-                    tokens_time_data1.append((tok1, agg1, pid))
-                if tok2 and tok2 > 0 and agg2 > 0:
-                    tokens_time_data2.append((tok2, agg2, pid))
+            def parse_float(val):
+                try:
+                    return float(val)
+                except (ValueError, TypeError):
+                    return None
 
-            plot_tokens_vs_time(
-                tokens_time_data1,
-                tokens_time_data2,
-                name1,
-                name2,
-                os.path.join(output_dir, "scatter_tokens_vs_time.png"),
-                colors=["#004d99", "#66b3ff"],
-            )
+            ttl1 = parse_float(r1.get("TTL")) if r1 else None
+            ttm1 = parse_float(r1.get("TTM")) if r1 else None
+            ttl2 = parse_float(r2.get("TTL")) if r2 else None
+            ttm2 = parse_float(r2.get("TTM")) if r2 else None
+            agg1 = (ttl1 or 0) + (ttm1 or 0)
+            agg2 = (ttl2 or 0) + (ttm2 or 0)
+            if tok1 and tok1 > 0 and agg1 > 0:
+                tokens_time_data1.append((tok1, agg1, pid))
+            if tok2 and tok2 > 0 and agg2 > 0:
+                tokens_time_data2.append((tok2, agg2, pid))
+
+        plot_tokens_vs_time(
+            tokens_time_data1,
+            tokens_time_data2,
+            name1,
+            name2,
+            os.path.join(output_dir, "scatter_tokens_vs_time.png"),
+            colors=["#004d99", "#66b3ff"],
+        )
 
 
 def plot_tokens_vs_time(data1, data2, label1, label2, output_path, colors=None):
