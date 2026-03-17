@@ -30,7 +30,7 @@ if [ "$ENABLE_SUMMARY" = true ]; then
 fi
 
 if [ "$NO_INJECT_SUMMARY" = true ]; then
-    ARGS="$ARGS --no-inject-summary"
+    ARGS="$ARGS --no-inject-kb"
 fi
 
 if [ -n "$SEED_SUMMARY" ]; then
@@ -38,7 +38,7 @@ if [ -n "$SEED_SUMMARY" ]; then
 fi
 
 if [ -n "$SUMMARY_MODEL" ]; then
-    ARGS="$ARGS --summary-model $SUMMARY_MODEL"
+    ARGS="$ARGS --kb-model $SUMMARY_MODEL"
 fi
 
 if [ -n "$JUDGE_MODEL" ]; then

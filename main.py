@@ -462,7 +462,7 @@ def driver_loop(
                             extra_args = ""
                             # Pass explicit log dir to external-summarizer agents (e.g. gemini_cli)
                             if agent_to_run in AGENT_OUTPUT_FILES:
-                                extra_args += f" --logs-dir {agent_log_dir} --summary-dir {agent_base_dir}"
+                                extra_args += f" --logs-dir {agent_log_dir} --kb-dir {agent_base_dir}"
 
                             # Crucible handles summarization internally via --summary-dir
                             if agent_to_run in AGENT_LT_SUMMARY:
@@ -470,13 +470,13 @@ def driver_loop(
                             if agent_to_run in AGENT_LT_SUMMARY and enable_summary:
                                 effective_summary_model = summary_model or os.environ.get("MODEL_ID", "gpt-4o")
                                 extra_args += (
-                                    f" --summary-dir {agent_base_dir} --summary-model {effective_summary_model}"
+                                    f" --kb-dir {agent_base_dir} --kb-model {effective_summary_model}"
                                 )
 
                             if enable_summary and agent_to_run in AGENT_OUTPUT_FILES:
                                 extra_args += " --enable-summary"
                             if not inject_summary:
-                                extra_args += " --no-inject-summary"
+                                extra_args += " --no-inject-kb"
 
                             await LAUNCHER.ensure_started(reg, extra_args=extra_args.strip())
 
@@ -1795,8 +1795,8 @@ def main(
             use_external_harness=args.use_external_harness,
             repeat=args.repeat,
             enable_summary=args.enable_summary,
-            inject_summary=not args.no_inject_summary,
-            summary_model=getattr(args, "summary_model", None),
+            inject_summary=not args.no_inject_kb,
+            summary_model=getattr(args, "kb_model", None),
             problem_list=problem_list,
             status_dict=status_dict,
             problem_queue=problem_queue,
@@ -1902,15 +1902,19 @@ if __name__ == "__main__":
         help="Enable summarization of results using an LLM",
     )
     parser.add_argument(
+        "--no-inject-kb",
         "--no-inject-summary",
         action="store_true",
+        dest="no_inject_kb",
         help="Build summaries but do not pass them to the agent",
     )
     parser.add_argument(
+        "--kb-model",
         "--summary-model",
         type=str,
         default=None,
-        help="Model ID for summarization LLM (default: same as --model / MODEL_ID). "
+        dest="kb_model",
+        help="Model ID for knowledge base LLM (default: same as --model / MODEL_ID). "
         "Useful to use a cheaper model for summarization, e.g. gemini-2.5-flash.",
     )
     parser.add_argument(
