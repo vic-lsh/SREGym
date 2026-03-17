@@ -193,57 +193,6 @@ def load_gemini_tokens(log_dir):
     return {}
 
 
-def load_crucible_tokens(log_dir):
-    """Load per-phase token usage from crucible JSON result files.
-
-    Returns dict with keys "diagnosis", "mitigation", "resolution", each
-    mapping problem_id -> total tokens for that phase.  Empty dicts if not found.
-    """
-    pattern = os.path.join(log_dir, "**", "crucible_results_*.json")
-    files = glob.glob(pattern, recursive=True)
-    if not files:
-        return {"diagnosis": {}, "mitigation": {}, "resolution": {}}
-
-    diagnosis, mitigation, resolution = {}, {}, {}
-    for file_path in files:
-        basename = os.path.basename(file_path)
-        m = re.match(r"crucible_results_(.+)_\d{8}_\d{6}\.json", basename)
-        if not m:
-            continue
-        problem_id = m.group(1)
-        try:
-            with open(file_path, encoding="utf-8") as f:
-                data = json.load(f)
-            by_agent = data.get("usage_metrics", {}).get("by_agent", {})
-
-            def _phase_tokens(*agent_keys):
-                total = 0
-                for key in agent_keys:
-                    ag = by_agent.get(key, {}).get("total", {})
-                    total += int(ag.get("input_tokens", 0) or 0)
-                    total += int(ag.get("output_tokens", 0) or 0)
-                return total
-
-            diag_tok = _phase_tokens("diagnosis-agent", "diagnosis-judge")
-            mitig_tok = _phase_tokens("mitigation-agent", "mitigation-judge")
-            res_tok = diag_tok + mitig_tok
-
-            if diag_tok > 0:
-                diagnosis[problem_id] = diag_tok
-            if mitig_tok > 0:
-                mitigation[problem_id] = mitig_tok
-            if res_tok > 0:
-                resolution[problem_id] = res_tok
-        except Exception as e:
-            print(f"Warning: could not read {file_path}: {e}")
-    return {"diagnosis": diagnosis, "mitigation": mitigation, "resolution": resolution}
-
-
-def is_crucible_dir(log_dir):
-    """Return True if log_dir contains crucible agent results."""
-    pattern = os.path.join(log_dir, "**", "*_crucible_results.csv")
-    return bool(glob.glob(pattern, recursive=True))
-
 
 def summarize_results(target_path=None):
     _, all_runs = load_results(target_path)
@@ -304,7 +253,7 @@ def summarize_results(target_path=None):
         visual_len = len(s) + (1 if has_emoji else 0)
         return s + " " * max(0, width - visual_len)
 
-    diag_width = 8   # "✅ PASS" / "❌ FAIL"
+    diag_width = 8  # "✅ PASS" / "❌ FAIL"
     mitig_width = 8
     status_width = 16  # "DONE" / "⚠️  INCOMPLETE"
     header = f"{'Run Date':<14} | {'Problem ID':<{problem_id_width}} | {'Diag':<{diag_width}} | {'Mitig':<{mitig_width}} | {'TTL(s)':<7} | {'TTM(s)':<7} | {'Status':<{status_width}}"
@@ -404,44 +353,6 @@ def summarize_results(target_path=None):
     plt.savefig(output_plot)
     print(f"CDF plot saved to {output_plot}")
 
-    # --- Crucible token usage ---
-    tokens_phases = load_crucible_tokens(target_path or ".")
-    any_tokens = any(tokens_phases[p] for p in ("diagnosis", "mitigation", "resolution"))
-    if any_tokens:
-        phase_cfg = [
-            ("diagnosis", "Diagnosis", "tab:blue"),
-            ("mitigation", "Mitigation", "tab:orange"),
-            ("resolution", "Resolution (D+M)", "tab:green"),
-        ]
-        for phase_key, phase_label, color in phase_cfg:
-            phase_map = tokens_phases[phase_key]
-            if not phase_map:
-                continue
-            toks = sorted(phase_map.values())
-            avg = sum(toks) / len(toks)
-            print(f"Average Tokens — {phase_label}: {avg / 1e6:,.2f}M  (n={len(toks)})")
-            if not HAS_PLOTTING:
-                continue
-            y = np.arange(1, len(toks) + 1) / len(toks)
-            plt.figure(figsize=(10, 6))
-            plt.plot(
-                [t / 1e6 for t in toks],
-                y,
-                marker=".",
-                linestyle="-",
-                color=color,
-                label=f"{phase_label} (n={len(toks)})",
-            )
-            plt.xlabel("Tokens (M)")
-            plt.ylabel("CDF")
-            plt.title(f"CDF of Token Usage — {phase_label}")
-            plt.grid(True)
-            plt.legend()
-            fname = f"cdf_tokens_{phase_key}.png"
-            out_path = os.path.join(target_path, fname) if target_path and os.path.isdir(target_path) else fname
-            plt.savefig(out_path)
-            plt.close()
-            print(f"Token CDF plot saved to {out_path}")
 
 
 def diff_results(dir1, dir2):
@@ -523,20 +434,6 @@ def diff_results(dir1, dir2):
     atres2_s = f"{atres2:.1f}s"
     print(f"{'Avg Resolution (Diag+Mitig)':<25} | {atres1_s:<{w_col}} | {atres2_s:<{w_col}} | {atres1 - atres2:+.1f}s")
 
-    # Avg tokens row (crucible only) — computed eagerly so it fits in the table
-    if is_crucible_dir(dir1) and is_crucible_dir(dir2):
-        _pre1 = load_crucible_tokens(dir1)
-        _pre2 = load_crucible_tokens(dir2)
-        for _phase, _label in [
-            ("diagnosis", "Avg Tokens Diag"),
-            ("mitigation", "Avg Tokens Mitig"),
-            ("resolution", "Avg Tokens Res"),
-        ]:
-            _l1 = [t for t in _pre1[_phase].values() if t > 0]
-            _l2 = [t for t in _pre2[_phase].values() if t > 0]
-            _avg1 = sum(_l1) / len(_l1) / 1e6 if _l1 else 0.0
-            _avg2 = sum(_l2) / len(_l2) / 1e6 if _l2 else 0.0
-            print(f"{_label:<25} | {_avg1:>{w_col}.2f}M | {_avg2:>{w_col}.2f}M | {_avg1 - _avg2:+.2f}M")
 
     print("=" * (30 + 2 * w_col + 15) + "\n")
 
@@ -1034,99 +931,7 @@ def diff_results(dir1, dir2):
         colors=["#1f77b4", "#ff7f0e"],
     )
 
-    if is_crucible_dir(dir1) and is_crucible_dir(dir2):
-        tokens1_phases = load_crucible_tokens(dir1)
-        tokens2_phases = load_crucible_tokens(dir2)
-
-        # 1) Per-phase CDFs
-        for phase_key, phase_label in [
-            ("diagnosis", "Diagnosis"),
-            ("mitigation", "Mitigation"),
-            ("resolution", "Resolution"),
-        ]:
-            tl1 = sorted(t for t in tokens1_phases[phase_key].values() if t > 0)
-            tl2 = sorted(t for t in tokens2_phases[phase_key].values() if t > 0)
-            plot_cdf_tokens(
-                tl1,
-                tl2,
-                name1,
-                name2,
-                os.path.join(output_dir, f"cdf_tokens_{phase_key}.png"),
-                colors=["#004d99", "#66b3ff"],
-                phase_label=phase_label,
-            )
-
-        # 2) Scatter: Y=problem labels, X=resolution token usage
-        res1_map = tokens1_phases["resolution"]
-        res2_map = tokens2_phases["resolution"]
-        comp_token_data = []
-        for pid in all_pids:
-            t1 = res1_map.get(pid)
-            t2 = res2_map.get(pid)
-            if (t1 is not None and t1 > 0) or (t2 is not None and t2 > 0):
-                r1 = runs1_map.get(pid)
-                r2 = runs2_map.get(pid)
-                d1 = r1 and r1.get("Diagnosis.success") == "True"
-                m1 = r1 and r1.get("Mitigation.success") == "True"
-                d2 = r2 and r2.get("Diagnosis.success") == "True"
-                m2 = r2 and r2.get("Mitigation.success") == "True"
-                comp_token_data.append((pid, t1 or 0, t2 or 0, d1 and m1, d2 and m2))
-        plot_token_comparison_by_problem(
-            comp_token_data,
-            name1,
-            name2,
-            os.path.join(output_dir, "comparison_tokens.png"),
-            colors=["#004d99", "#66b3ff"],
-            use_status_colors=True,
-        )
-        plot_token_comparison_by_problem(
-            comp_token_data,
-            name1,
-            name2,
-            os.path.join(output_dir, "comparison_tokens_by_name.png"),
-            colors=["#004d99", "#66b3ff"],
-            use_status_colors=True,
-            sort_by_name=True,
-        )
-
-        # 3) Scatter: resolution tokens vs aggregate time (TTL + TTM)
-        tokens_time_data1 = []
-        tokens_time_data2 = []
-        for pid in all_pids:
-            tok1 = res1_map.get(pid)
-            tok2 = res2_map.get(pid)
-            r1 = runs1_map.get(pid)
-            r2 = runs2_map.get(pid)
-
-            def parse_float(val):
-                try:
-                    return float(val)
-                except (ValueError, TypeError):
-                    return None
-
-            ttl1 = parse_float(r1.get("TTL")) if r1 else None
-            ttm1 = parse_float(r1.get("TTM")) if r1 else None
-            ttl2 = parse_float(r2.get("TTL")) if r2 else None
-            ttm2 = parse_float(r2.get("TTM")) if r2 else None
-
-            agg1 = (ttl1 or 0) + (ttm1 or 0)
-            agg2 = (ttl2 or 0) + (ttm2 or 0)
-
-            if tok1 and tok1 > 0 and agg1 > 0:
-                tokens_time_data1.append((tok1, agg1, pid))
-            if tok2 and tok2 > 0 and agg2 > 0:
-                tokens_time_data2.append((tok2, agg2, pid))
-
-        plot_tokens_vs_time(
-            tokens_time_data1,
-            tokens_time_data2,
-            name1,
-            name2,
-            os.path.join(output_dir, "scatter_tokens_vs_time.png"),
-            colors=["#004d99", "#66b3ff"],
-        )
-    else:
-        tokens1_map = load_stratus_tokens(dir1) or load_gemini_tokens(dir1)
+    tokens1_map = load_stratus_tokens(dir1) or load_gemini_tokens(dir1)
         tokens2_map = load_stratus_tokens(dir2) or load_gemini_tokens(dir2)
 
         if tokens1_map or tokens2_map:
