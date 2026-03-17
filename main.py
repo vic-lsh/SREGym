@@ -63,7 +63,7 @@ AGENT_OUTPUT_FILES = {"gemini_cli": "gemini-cli.txt", "claudecode": "claude-code
 
 # Agents with a built-in long-term summary system (no external summarizer subprocess needed).
 # They accept --summary-dir and --summary-model CLI args.
-AGENT_LT_SUMMARY = set()
+AGENT_LT_SUMMARY = {"crucible"}
 
 
 def agent_supports_summary(agent_name: str) -> bool:
@@ -91,6 +91,7 @@ PRELOAD_IMAGE_PATTERN = re.compile(r"^\s*image:\s*['\"]?([^'\"\s]+)['\"]?\s*$", 
 # Light apps: ~5 units
 #
 
+
 def _resolve_progress_mode(stream, parallel_workers: int) -> str:
     """
     Determine progress rendering mode.
@@ -114,7 +115,6 @@ def _resolve_progress_mode(stream, parallel_workers: int) -> str:
     if not is_tty or term in {"", "dumb"} or in_ci:
         return "plain"
     return "rich"
-
 
 
 def get_current_datetime_formatted():
@@ -892,6 +892,24 @@ def _prefetch_infra_images_once() -> None:
             _docker_pull_with_retries(image)
 
 
+def _apply_worker_cpu_limit(cluster_name: str) -> None:
+    """Apply per-node CPU cap to kind cluster containers if SREGYM_WORKER_CPU_LIMIT is set."""
+    cpu_limit = os.getenv("SREGYM_WORKER_CPU_LIMIT", "").strip()
+    if not cpu_limit:
+        return
+    node_containers = (
+        subprocess.check_output(
+            ["docker", "ps", "-q", "--filter", f"name=^{cluster_name}-"],
+            text=True,
+        )
+        .strip()
+        .split()
+    )
+    for cid in node_containers:
+        subprocess.run(["docker", "update", "--cpus", cpu_limit, cid], check=False)
+    logger.info(f"Applied CPU limit of {cpu_limit} to {len(node_containers)} node containers for {cluster_name}")
+
+
 def _load_preloaded_images_into_cluster(cluster_name: str) -> None:
     if not _should_preload_infra_images():
         return
@@ -1012,6 +1030,8 @@ def _create_worker_cluster(worker_id: int, experiment_log_dir: str) -> tuple[str
     if patched_config_path and os.path.exists(patched_config_path):
         os.unlink(patched_config_path)
     _load_preloaded_images_into_cluster(cluster_name)
+
+    _apply_worker_cpu_limit(cluster_name)
 
     os.environ["KUBECONFIG"] = kubeconfig_path
     os.environ["SREGYM_BASE_KUBECONFIG"] = kubeconfig_path
@@ -1203,6 +1223,11 @@ def run_parallel(args):
             dest_path = os.path.join(agent_base_dir, "long_term_summary.txt")
             shutil.copy2(args.seed_summary, dest_path)
             logger.info(f"Copied seed summary to {dest_path}")
+            lessons_src = os.path.join(os.path.dirname(args.seed_summary), "operational_lessons.txt")
+            if os.path.isfile(lessons_src):
+                dest_lessons = os.path.join(agent_base_dir, "operational_lessons.txt")
+                shutil.copy2(lessons_src, dest_lessons)
+                logger.info(f"Copied operational lessons to {dest_lessons}")
 
         # Set log file for parallel runner
         log_file_path = os.path.join(experiment_log_dir, f"sregym_supervisor_{session_timestamp}.log")
@@ -1912,10 +1937,6 @@ if __name__ == "__main__":
     if args.seed_summary:
         if args.resume_last or args.resume_from:
             parser.error("--seed-summary cannot be combined with --resume-last or --resume-from")
-        if not agent_supports_summary(args.agent):
-            parser.error(
-                f"--seed-summary can only be used with agents that support summaries: {sorted(set(AGENT_OUTPUT_FILES) | AGENT_LT_SUMMARY)}"
-            )
         seed_path = Path(args.seed_summary)
         if not seed_path.is_file():
             parser.error(f"--seed-summary: path does not exist or is not a file: {args.seed_summary}")
