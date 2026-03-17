@@ -61,14 +61,11 @@ logger = logging.getLogger("all.main")
 # Agents listed here use an external summarizer subprocess run by main.py after each problem.
 AGENT_OUTPUT_FILES = {"gemini_cli": "gemini-cli.txt", "claudecode": "claude-code.txt"}
 
-# Agents with a built-in long-term summary system (no external summarizer subprocess needed).
-# They accept --summary-dir and --summary-model CLI args.
-AGENT_LT_SUMMARY = {"crucible"}
 
 
 def agent_supports_summary(agent_name: str) -> bool:
     """Return True if the given agent supports the shared summary system."""
-    return agent_name in AGENT_OUTPUT_FILES or agent_name in AGENT_LT_SUMMARY
+    return agent_name in AGENT_OUTPUT_FILES
 
 
 KIND_CLUSTER_PREFIX = "sregym-w"
@@ -464,15 +461,6 @@ def driver_loop(
                             if agent_to_run in AGENT_OUTPUT_FILES:
                                 extra_args += f" --logs-dir {agent_log_dir} --kb-dir {agent_base_dir}"
 
-                            # Crucible handles summarization internally via --summary-dir
-                            if agent_to_run in AGENT_LT_SUMMARY:
-                                extra_args += f" --logs-dir {agent_log_dir}"
-                            if agent_to_run in AGENT_LT_SUMMARY and enable_summary:
-                                effective_summary_model = summary_model or os.environ.get("MODEL_ID", "gpt-4o")
-                                extra_args += (
-                                    f" --kb-dir {agent_base_dir} --kb-model {effective_summary_model}"
-                                )
-
                             if enable_summary and agent_to_run in AGENT_OUTPUT_FILES:
                                 extra_args += " --enable-summary"
                             if not inject_summary:
@@ -582,7 +570,6 @@ def driver_loop(
                         console.log(f"🧹 Cleaned up agent process for {agent_to_run}")
 
                         # Run summarization if enabled.
-                        # Agents in AGENT_LT_SUMMARY handle this themselves inside the driver.
                         if enable_summary and agent_to_run in AGENT_OUTPUT_FILES:
                             output_filename = AGENT_OUTPUT_FILES[agent_to_run]
                             effective_summary_model = summary_model or os.environ.get("MODEL_ID", "gemini-2.5-flash")
@@ -1970,6 +1957,10 @@ if __name__ == "__main__":
     if args.seed_summary:
         if args.resume_last or args.resume_from:
             parser.error("--seed-summary cannot be combined with --resume-last or --resume-from")
+        if not agent_supports_summary(args.agent):
+            parser.error(
+                f"--seed-summary can only be used with agents that support summaries: {sorted(AGENT_OUTPUT_FILES)}"
+            )
         seed_path = Path(args.seed_summary)
         if not seed_path.is_file():
             parser.error(f"--seed-summary: path does not exist or is not a file: {args.seed_summary}")
