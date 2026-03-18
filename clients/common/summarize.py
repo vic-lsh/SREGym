@@ -24,7 +24,7 @@ from logger import init_logger
 init_logger()
 logger = logging.getLogger("all.common.summarize")
 
-SUMMARY_FILENAME = "long_term_summary.txt"
+SUMMARY_FILENAME = "long_term_summary.md"
 
 
 def get_llm_backend(model_id: str) -> LiteLLMBackend:

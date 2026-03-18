@@ -612,6 +612,13 @@ def driver_loop(
 
             except Exception as e:
                 console.log(f"❌ Error running problem {pid}: {e}")
+                # Attempt cleanup so stale cluster-scoped resources don't poison the next problem
+                try:
+                    conductor.undeploy_app()
+                    if conductor._baseline_captured:
+                        conductor.cluster_state.reconcile_to_baseline()
+                except Exception as cleanup_err:
+                    console.log(f"⚠️  Post-error cleanup also failed: {cleanup_err}")
                 if not use_external_harness:
                     write_error_result(pid, str(e), sequence_index=seq_idx)
                 if status_dict is not None:
@@ -1248,12 +1255,12 @@ def run_parallel(args):
         if args.seed_summary:
             agent_base_dir = os.path.join(experiment_log_dir, args.agent)
             os.makedirs(agent_base_dir, exist_ok=True)
-            dest_path = os.path.join(agent_base_dir, "long_term_summary.txt")
+            dest_path = os.path.join(agent_base_dir, "long_term_summary.md")
             shutil.copy2(args.seed_summary, dest_path)
             logger.info(f"Copied seed summary to {dest_path}")
-            lessons_src = os.path.join(os.path.dirname(args.seed_summary), "operational_lessons.txt")
+            lessons_src = os.path.join(os.path.dirname(args.seed_summary), "operational_lessons.md")
             if os.path.isfile(lessons_src):
-                dest_lessons = os.path.join(agent_base_dir, "operational_lessons.txt")
+                dest_lessons = os.path.join(agent_base_dir, "operational_lessons.md")
                 shutil.copy2(lessons_src, dest_lessons)
                 logger.info(f"Copied operational lessons to {dest_lessons}")
 

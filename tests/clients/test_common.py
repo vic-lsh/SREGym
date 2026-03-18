@@ -263,36 +263,36 @@ class TestSummaryInterceptorBeforeRun:
         SummaryInterceptor(summary_dir=summary_dir, model_id="m", inject=True).before_run(ctx)
 
         assert ctx.instruction == original
-        assert not (ctx.exp_env_dir / "long_term_summary.txt").exists()
+        assert not (ctx.exp_env_dir / "long_term_summary.md").exists()
 
     def test_no_action_when_inject_false(self, tmp_path):
         summary_dir = tmp_path / "summary"
         summary_dir.mkdir()
-        (summary_dir / "long_term_summary.txt").write_text("past findings")
+        (summary_dir / "long_term_summary.md").write_text("past findings")
         ctx = self._make_ctx(tmp_path)
         original = ctx.instruction
 
         SummaryInterceptor(summary_dir=summary_dir, model_id="m", inject=False).before_run(ctx)
 
         assert ctx.instruction == original
-        assert not (ctx.exp_env_dir / "long_term_summary.txt").exists()
+        assert not (ctx.exp_env_dir / "long_term_summary.md").exists()
 
     def test_copies_summary_and_appends_note_when_inject_true(self, tmp_path):
         summary_dir = tmp_path / "summary"
         summary_dir.mkdir()
-        (summary_dir / "long_term_summary.txt").write_text("past findings")
+        (summary_dir / "long_term_summary.md").write_text("past findings")
         ctx = self._make_ctx(tmp_path, instruction="do the thing")
 
         SummaryInterceptor(summary_dir=summary_dir, model_id="m", inject=True).before_run(ctx)
 
-        assert (ctx.exp_env_dir / "long_term_summary.txt").read_text() == "past findings"
-        assert "long_term_summary.txt" in ctx.instruction
+        assert (ctx.exp_env_dir / "long_term_summary.md").read_text() == "past findings"
+        assert "long_term_summary.md" in ctx.instruction
         assert ctx.instruction.startswith("do the thing")
 
     def test_summary_path_property(self, tmp_path):
         summary_dir = tmp_path / "summary"
         interceptor = SummaryInterceptor(summary_dir=summary_dir, model_id="m")
-        assert interceptor.summary_path == summary_dir / "long_term_summary.txt"
+        assert interceptor.summary_path == summary_dir / "long_term_summary.md"
 
 
 # ---------------------------------------------------------------------------
