@@ -355,16 +355,23 @@ def summarize_results(target_path=None):
 
 
 
-def diff_results(dir1, dir2):
-    print(f"\n--- Loading results from {dir1} ---")
-    runs1_map, _ = load_results(dir1)
-    print(f"\n--- Loading results from {dir2} ---")
-    runs2_map, _ = load_results(dir2)
+def diff_results(dirs):
+    if len(dirs) < 2:
+        print("Error: --diff requires at least 2 directories.")
+        sys.exit(1)
 
-    # Determine output directory
-    name1 = os.path.basename(os.path.normpath(dir1))
-    name2 = os.path.basename(os.path.normpath(dir2))
-    output_dir = os.path.join("logs", "diff", f"{name1}--{name2}")
+    n_dirs = len(dirs)
+
+    # Load results from each directory
+    runs_maps = []
+    for d in dirs:
+        print(f"\n--- Loading results from {d} ---")
+        run_map, _ = load_results(d)
+        runs_maps.append(run_map)
+
+    # Derive names and output directory
+    names = [os.path.basename(os.path.normpath(d)) for d in dirs]
+    output_dir = os.path.join("logs", "diff", "--".join(names))
     os.makedirs(output_dir, exist_ok=True)
     print(f"\nDiff results will be stored in: {output_dir}")
 
@@ -397,229 +404,224 @@ def diff_results(dir1, dir2):
         avg_tres = sum(tres) / len(tres) if tres else 0.0
         return total, n_comp, d_succ, m_succ, n_mitig, avg_ttl, avg_ttm, avg_tres
 
-    t1, c1, d1, m1, n_mitig1, attl1, attm1, atres1 = get_stats(runs1_map)
-    t2, c2, d2, m2, n_mitig2, attl2, attm2, atres2 = get_stats(runs2_map)
+    all_stats = [get_stats(rm) for rm in runs_maps]
 
-    w_col = max(len(name1), len(name2), 18)
+    w_col = max(max(len(n) for n in names), 18)
 
-    print("\n" + "=" * (30 + 2 * w_col + 15))
-    print(f"{'Statistic':<25} | {name1:<{w_col}} | {name2:<{w_col}} | {'Diff':<10}")
-    print("-" * (30 + 2 * w_col + 15))
+    def fmt_row(label, values, diff_str=None):
+        """Format a stats table row with N value columns and optional diff."""
+        parts = [f"{label:<25}"] + [f"{v:<{w_col}}" for v in values]
+        if n_dirs == 2 and diff_str is not None:
+            parts.append(f"{diff_str:<10}")
+        return " | ".join(parts)
 
-    print(f"{'Total Runs':<25} | {t1:<{w_col}} | {t2:<{w_col}} | {t1 - t2:+d}")
-    print(f"{'Completed Runs':<25} | {c1:<{w_col}} | {c2:<{w_col}} | {c1 - c2:+d}")
+    header = fmt_row("Statistic", names, "Diff" if n_dirs == 2 else None)
+    sep_width = len(header)
 
-    d1_pct = (d1 / c1 * 100) if c1 else 0.0
-    d2_pct = (d2 / c2 * 100) if c2 else 0.0
-    d1_s = f"{d1}/{c1} ({d1_pct:.1f}%)"
-    d2_s = f"{d2}/{c2} ({d2_pct:.1f}%)"
-    print(f"{'Diagnosis Success':<25} | {d1_s:<{w_col}} | {d2_s:<{w_col}} | {d1_pct - d2_pct:+.1f}%")
+    print("\n" + "=" * sep_width)
+    print(header)
+    print("-" * sep_width)
 
-    m1_pct = (m1 / n_mitig1 * 100) if n_mitig1 else 0.0
-    m2_pct = (m2 / n_mitig2 * 100) if n_mitig2 else 0.0
-    m1_s = f"{m1}/{n_mitig1} ({m1_pct:.1f}%)" if n_mitig1 else "N/A"
-    m2_s = f"{m2}/{n_mitig2} ({m2_pct:.1f}%)" if n_mitig2 else "N/A"
-    m_diff = f"{m1_pct - m2_pct:+.1f}%" if (n_mitig1 and n_mitig2) else "-"
-    print(f"{'Mitigation Success (of mitig)':<25} | {m1_s:<{w_col}} | {m2_s:<{w_col}} | {m_diff}")
+    totals = [s[0] for s in all_stats]
+    completeds = [s[1] for s in all_stats]
+    print(fmt_row("Total Runs", totals, f"{totals[0] - totals[1]:+d}" if n_dirs == 2 else None))
+    print(fmt_row("Completed Runs", completeds, f"{completeds[0] - completeds[1]:+d}" if n_dirs == 2 else None))
 
-    attl1_s = f"{attl1:.1f}s"
-    attl2_s = f"{attl2:.1f}s"
-    print(f"{'Avg TTL':<25} | {attl1_s:<{w_col}} | {attl2_s:<{w_col}} | {attl1 - attl2:+.1f}s")
+    d_pcts = [(s[2] / s[1] * 100) if s[1] else 0.0 for s in all_stats]
+    d_strs = [f"{s[2]}/{s[1]} ({p:.1f}%)" for s, p in zip(all_stats, d_pcts)]
+    print(fmt_row("Diagnosis Success", d_strs, f"{d_pcts[0] - d_pcts[1]:+.1f}%" if n_dirs == 2 else None))
 
-    attm1_s = f"{attm1:.1f}s"
-    attm2_s = f"{attm2:.1f}s"
-    print(f"{'Avg TTM':<25} | {attm1_s:<{w_col}} | {attm2_s:<{w_col}} | {attm1 - attm2:+.1f}s")
+    m_pcts = [(s[3] / s[4] * 100) if s[4] else 0.0 for s in all_stats]
+    m_strs = [f"{s[3]}/{s[4]} ({p:.1f}%)" if s[4] else "N/A" for s, p in zip(all_stats, m_pcts)]
+    if n_dirs == 2:
+        m_diff = f"{m_pcts[0] - m_pcts[1]:+.1f}%" if (all_stats[0][4] and all_stats[1][4]) else "-"
+    else:
+        m_diff = None
+    print(fmt_row("Mitigation Success (of mitig)", m_strs, m_diff))
 
-    atres1_s = f"{atres1:.1f}s"
-    atres2_s = f"{atres2:.1f}s"
-    print(f"{'Avg Resolution (Diag+Mitig)':<25} | {atres1_s:<{w_col}} | {atres2_s:<{w_col}} | {atres1 - atres2:+.1f}s")
+    attls = [s[5] for s in all_stats]
+    print(fmt_row("Avg TTL", [f"{v:.1f}s" for v in attls], f"{attls[0] - attls[1]:+.1f}s" if n_dirs == 2 else None))
 
+    attms = [s[6] for s in all_stats]
+    print(fmt_row("Avg TTM", [f"{v:.1f}s" for v in attms], f"{attms[0] - attms[1]:+.1f}s" if n_dirs == 2 else None))
 
-    print("=" * (30 + 2 * w_col + 15) + "\n")
+    atres = [s[7] for s in all_stats]
+    print(
+        fmt_row(
+            "Avg Resolution (Diag+Mitig)", [f"{v:.1f}s" for v in atres],
+            f"{atres[0] - atres[1]:+.1f}s" if n_dirs == 2 else None,
+        )
+    )
 
-    # Comparison Logic
-    all_pids = sorted(list(set(runs1_map.keys()) | set(runs2_map.keys())))
+    print("=" * sep_width + "\n")
+
+    # --- Per-Problem Comparison Table ---
+    all_pids = sorted(set().union(*(rm.keys() for rm in runs_maps)))
 
     # Dynamic PID width based on data
     max_pid_len = max([len(p) for p in all_pids] + [len("Problem ID")])
     pid_width = max_pid_len
 
     # Dynamic column widths based on name length, minimum 10
-    n1 = name1 if len(name1) <= 20 else name1[:17] + "..."
-    n2 = name2 if len(name2) <= 20 else name2[:17] + "..."
-
-    w_d1 = max(10, len(n1) + 2)  # "D:name"
-    w_d2 = max(10, len(n2) + 2)
-    w_m1 = max(10, len(n1) + 2)
-    w_m2 = max(10, len(n2) + 2)
+    truncated_names = [n if len(n) <= 20 else n[:17] + "..." for n in names]
+    w_d = [max(10, len(tn) + 2) for tn in truncated_names]
+    w_m = [max(10, len(tn) + 2) for tn in truncated_names]
     diff_width = 12
 
-    header = (
-        f"{'Problem ID':<{pid_width}} | "
-        f"{'D:' + n1:<{w_d1}} | {'D:' + n2:<{w_d2}} | {'Diff(TTL)':<{diff_width}} | "
-        f"{'M:' + n1:<{w_m1}} | {'M:' + n2:<{w_m2}} | {'Diff(TTM)':<{diff_width}}"
-    )
+    # Build header
+    header_parts = [f"{'Problem ID':<{pid_width}}"]
+    for i, tn in enumerate(truncated_names):
+        header_parts.append(f"{'D:' + tn:<{w_d[i]}}")
+    if n_dirs == 2:
+        header_parts.append(f"{'Diff(TTL)':<{diff_width}}")
+    for i, tn in enumerate(truncated_names):
+        header_parts.append(f"{'M:' + tn:<{w_m[i]}}")
+    if n_dirs == 2:
+        header_parts.append(f"{'Diff(TTM)':<{diff_width}}")
+    header = " | ".join(header_parts)
     sep = "-" * len(header)
     summary_lines = []
     summary_lines.append(header)
     summary_lines.append(sep)
 
-    ttd1, ttd2 = [], []
-    ttm1, ttm2 = [], []
-    ttd1_success, ttd2_success = [], []
-    ttm1_success, ttm2_success = [], []
-    comp_diag_data, comp_mitig_data = [], []
-    comp_diag_success_data, comp_mitig_success_data = [], []
-    comp_diag_fail_data, comp_mitig_fail_data = [], []
-    res1, res2 = [], []
-    res1_success, res2_success = [], []
-    comp_res_data, comp_res_success_data, comp_res_fail_data = [], [], []
+    # Per-dir CDF data
+    ttd_per_dir = [[] for _ in range(n_dirs)]
+    ttm_per_dir = [[] for _ in range(n_dirs)]
+    ttd_success_per_dir = [[] for _ in range(n_dirs)]
+    ttm_success_per_dir = [[] for _ in range(n_dirs)]
+    res_per_dir = [[] for _ in range(n_dirs)]
+    res_success_per_dir = [[] for _ in range(n_dirs)]
+
+    # 2-dir only: per-problem comparison data for scatter plots
+    if n_dirs == 2:
+        comp_diag_data, comp_mitig_data = [], []
+        comp_diag_success_data, comp_mitig_success_data = [], []
+        comp_diag_fail_data, comp_mitig_fail_data = [], []
+        comp_res_data, comp_res_success_data, comp_res_fail_data = [], [], []
 
     def pad_emoji(s, width):
-        # Calculate visual length: emojis (checked by presence of check/cross) + rest
         # In many terminals, emoji is 2 chars wide. Python len() counts it as 1.
-        # So visual length = len(s) + 1 if emoji present.
         has_emoji = "✅" in s or "❌" in s
         visual_len = len(s) + (1 if has_emoji else 0)
         padding = max(0, width - visual_len)
         return s + " " * padding
 
-    for pid in all_pids:
-        r1 = runs1_map.get(pid)
-        r2 = runs2_map.get(pid)
+    def get_data(r):
+        if not r:
+            return "MISSING", "MISSING", None, None
 
-        # Helper to get status and times
-        def get_data(r):
-            if not r:
-                return "MISSING", "MISSING", None, None
+        def parse_float(val):
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                return None
 
-            # Helper to safe parse float
-            def parse_float(val):
-                try:
-                    return float(val)
-                except (ValueError, TypeError):
-                    return None
+        t_d = parse_float(r.get("TTL"))
+        t_m = parse_float(r.get("TTM"))
 
-            t_d = parse_float(r.get("TTL"))
-            t_m = parse_float(r.get("TTM"))
-
-            if r["status"] == "Completed":
-                d_stat = "✅ PASS" if r.get("Diagnosis.success") == "True" else "❌ FAIL"
-                if r.get("has_mitigation"):
-                    m_stat = "✅ PASS" if r.get("Mitigation.success") == "True" else "❌ FAIL"
-                else:
-                    m_stat = "-"
+        if r["status"] == "Completed":
+            d_stat = "✅ PASS" if r.get("Diagnosis.success") == "True" else "❌ FAIL"
+            if r.get("has_mitigation"):
+                m_stat = "✅ PASS" if r.get("Mitigation.success") == "True" else "❌ FAIL"
             else:
-                d_stat = "-"
                 m_stat = "-"
-
-            return d_stat, m_stat, t_d, t_m
-
-        d1_s, m1_s, td1, tm1 = get_data(r1)
-        d2_s, m2_s, td2, tm2 = get_data(r2)
-
-        # Collect for CDFs
-        if r1 and td1 is not None and td1 > 0:
-            ttd1.append(td1)
-            if r1.get("Diagnosis.success") == "True":
-                ttd1_success.append(td1)
-
-        if r2 and td2 is not None and td2 > 0:
-            ttd2.append(td2)
-            if r2.get("Diagnosis.success") == "True":
-                ttd2_success.append(td2)
-
-        if r1 and tm1 is not None and tm1 > 0:
-            ttm1.append(tm1)
-            if r1.get("Mitigation.success") == "True":
-                ttm1_success.append(tm1)
-
-        if r2 and tm2 is not None and tm2 > 0:
-            ttm2.append(tm2)
-            if r2.get("Mitigation.success") == "True":
-                ttm2_success.append(tm2)
-
-        # Helper vars for readability
-        diag_s1 = r1 and r1.get("Diagnosis.success") == "True"
-        diag_s2 = r2 and r2.get("Diagnosis.success") == "True"
-        mitig_s1 = r1 and r1.get("Mitigation.success") == "True"
-        mitig_s2 = r2 and r2.get("Mitigation.success") == "True"
-
-        if (td1 is not None and td1 > 0) or (td2 is not None and td2 > 0):
-            comp_diag_data.append((pid, td1, td2, diag_s1, diag_s2))
-
-        td1_succ = td1 if diag_s1 else None
-        td2_succ = td2 if diag_s2 else None
-        if (td1_succ is not None and td1_succ > 0) and (td2_succ is not None and td2_succ > 0):
-            comp_diag_success_data.append((pid, td1_succ, td2_succ, True, True))
-
-        td1_fail = td1 if (r1 and not diag_s1) else None
-        td2_fail = td2 if (r2 and not diag_s2) else None
-        if (td1_fail is not None and td1_fail > 0) and (td2_fail is not None and td2_fail > 0):
-            comp_diag_fail_data.append((pid, td1_fail, td2_fail, False, False))
-
-        if (tm1 is not None and tm1 > 0) or (tm2 is not None and tm2 > 0):
-            comp_mitig_data.append((pid, tm1, tm2, mitig_s1, mitig_s2))
-
-        tm1_succ = tm1 if mitig_s1 else None
-        tm2_succ = tm2 if mitig_s2 else None
-        if (tm1_succ is not None and tm1_succ > 0) and (tm2_succ is not None and tm2_succ > 0):
-            comp_mitig_success_data.append((pid, tm1_succ, tm2_succ, True, True))
-
-        tm1_fail = tm1 if (r1 and not mitig_s1) else None
-        tm2_fail = tm2 if (r2 and not mitig_s2) else None
-        if (tm1_fail is not None and tm1_fail > 0) and (tm2_fail is not None and tm2_fail > 0):
-            comp_mitig_fail_data.append((pid, tm1_fail, tm2_fail, False, False))
-
-        # Resolution = TTL + TTM
-        tres1 = (td1 + tm1) if (td1 is not None and td1 > 0 and tm1 is not None and tm1 > 0) else None
-        tres2 = (td2 + tm2) if (td2 is not None and td2 > 0 and tm2 is not None and tm2 > 0) else None
-
-        if tres1 is not None:
-            res1.append(tres1)
-            if mitig_s1:
-                res1_success.append(tres1)
-        if tres2 is not None:
-            res2.append(tres2)
-            if mitig_s2:
-                res2_success.append(tres2)
-
-        if tres1 is not None or tres2 is not None:
-            comp_res_data.append((pid, tres1, tres2, mitig_s1, mitig_s2))
-
-        tres1_succ = tres1 if mitig_s1 else None
-        tres2_succ = tres2 if mitig_s2 else None
-        if (tres1_succ is not None and tres1_succ > 0) and (tres2_succ is not None and tres2_succ > 0):
-            comp_res_success_data.append((pid, tres1_succ, tres2_succ, True, True))
-
-        tres1_fail = tres1 if (r1 and not mitig_s1) else None
-        tres2_fail = tres2 if (r2 and not mitig_s2) else None
-        if (tres1_fail is not None and tres1_fail > 0) and (tres2_fail is not None and tres2_fail > 0):
-            comp_res_fail_data.append((pid, tres1_fail, tres2_fail, False, False))
-
-        # Diff strings
-        if td1 is not None and td2 is not None:
-            diff_td = f"{td1 - td2:+.1f}s"
         else:
-            diff_td = "-"
+            d_stat = "-"
+            m_stat = "-"
 
-        if tm1 is not None and tm2 is not None:
-            diff_tm = f"{tm1 - tm2:+.1f}s"
-        else:
-            diff_tm = "-"
+        return d_stat, m_stat, t_d, t_m
 
-        # Use pad_emoji for status columns
-        d1_str = pad_emoji(d1_s, w_d1)
-        d2_str = pad_emoji(d2_s, w_d2)
-        m1_str = pad_emoji(m1_s, w_m1)
-        m2_str = pad_emoji(m2_s, w_m2)
+    for pid in all_pids:
+        runs = [rm.get(pid) for rm in runs_maps]
+        data = [get_data(r) for r in runs]
+        # data[i] = (d_stat, m_stat, td, tm)
 
-        line = (
-            f"{pid:<{pid_width}} | "
-            f"{d1_str} | {d2_str} | {diff_td:<{diff_width}} | "
-            f"{m1_str} | {m2_str} | {diff_tm:<{diff_width}}"
-        )
-        summary_lines.append(line)
+        # Collect CDF data per dir
+        for i, (r, (_, _, td, tm)) in enumerate(zip(runs, data)):
+            if r and td is not None and td > 0:
+                ttd_per_dir[i].append(td)
+                if r.get("Diagnosis.success") == "True":
+                    ttd_success_per_dir[i].append(td)
+
+            if r and tm is not None and tm > 0:
+                ttm_per_dir[i].append(tm)
+                if r.get("Mitigation.success") == "True":
+                    ttm_success_per_dir[i].append(tm)
+
+            tres = (td + tm) if (td is not None and td > 0 and tm is not None and tm > 0) else None
+            if tres is not None:
+                res_per_dir[i].append(tres)
+                if r and r.get("Mitigation.success") == "True":
+                    res_success_per_dir[i].append(tres)
+
+        # 2-dir specific comparison data collection
+        if n_dirs == 2:
+            r1, r2 = runs[0], runs[1]
+            td1, tm1 = data[0][2], data[0][3]
+            td2, tm2 = data[1][2], data[1][3]
+            diag_s1 = r1 and r1.get("Diagnosis.success") == "True"
+            diag_s2 = r2 and r2.get("Diagnosis.success") == "True"
+            mitig_s1 = r1 and r1.get("Mitigation.success") == "True"
+            mitig_s2 = r2 and r2.get("Mitigation.success") == "True"
+
+            if (td1 is not None and td1 > 0) or (td2 is not None and td2 > 0):
+                comp_diag_data.append((pid, td1, td2, diag_s1, diag_s2))
+
+            td1_succ = td1 if diag_s1 else None
+            td2_succ = td2 if diag_s2 else None
+            if (td1_succ is not None and td1_succ > 0) and (td2_succ is not None and td2_succ > 0):
+                comp_diag_success_data.append((pid, td1_succ, td2_succ, True, True))
+
+            td1_fail = td1 if (r1 and not diag_s1) else None
+            td2_fail = td2 if (r2 and not diag_s2) else None
+            if (td1_fail is not None and td1_fail > 0) and (td2_fail is not None and td2_fail > 0):
+                comp_diag_fail_data.append((pid, td1_fail, td2_fail, False, False))
+
+            if (tm1 is not None and tm1 > 0) or (tm2 is not None and tm2 > 0):
+                comp_mitig_data.append((pid, tm1, tm2, mitig_s1, mitig_s2))
+
+            tm1_succ = tm1 if mitig_s1 else None
+            tm2_succ = tm2 if mitig_s2 else None
+            if (tm1_succ is not None and tm1_succ > 0) and (tm2_succ is not None and tm2_succ > 0):
+                comp_mitig_success_data.append((pid, tm1_succ, tm2_succ, True, True))
+
+            tm1_fail = tm1 if (r1 and not mitig_s1) else None
+            tm2_fail = tm2 if (r2 and not mitig_s2) else None
+            if (tm1_fail is not None and tm1_fail > 0) and (tm2_fail is not None and tm2_fail > 0):
+                comp_mitig_fail_data.append((pid, tm1_fail, tm2_fail, False, False))
+
+            # Resolution = TTL + TTM
+            tres1 = (td1 + tm1) if (td1 is not None and td1 > 0 and tm1 is not None and tm1 > 0) else None
+            tres2 = (td2 + tm2) if (td2 is not None and td2 > 0 and tm2 is not None and tm2 > 0) else None
+
+            if tres1 is not None or tres2 is not None:
+                comp_res_data.append((pid, tres1, tres2, mitig_s1, mitig_s2))
+
+            tres1_succ = tres1 if mitig_s1 else None
+            tres2_succ = tres2 if mitig_s2 else None
+            if (tres1_succ is not None and tres1_succ > 0) and (tres2_succ is not None and tres2_succ > 0):
+                comp_res_success_data.append((pid, tres1_succ, tres2_succ, True, True))
+
+            tres1_fail = tres1 if (r1 and not mitig_s1) else None
+            tres2_fail = tres2 if (r2 and not mitig_s2) else None
+            if (tres1_fail is not None and tres1_fail > 0) and (tres2_fail is not None and tres2_fail > 0):
+                comp_res_fail_data.append((pid, tres1_fail, tres2_fail, False, False))
+
+        # Build table line
+        line_parts = [f"{pid:<{pid_width}}"]
+        for i in range(n_dirs):
+            line_parts.append(pad_emoji(data[i][0], w_d[i]))
+        if n_dirs == 2:
+            td1_v, td2_v = data[0][2], data[1][2]
+            diff_td = f"{td1_v - td2_v:+.1f}s" if (td1_v is not None and td2_v is not None) else "-"
+            line_parts.append(f"{diff_td:<{diff_width}}")
+        for i in range(n_dirs):
+            line_parts.append(pad_emoji(data[i][1], w_m[i]))
+        if n_dirs == 2:
+            tm1_v, tm2_v = data[0][3], data[1][3]
+            diff_tm = f"{tm1_v - tm2_v:+.1f}s" if (tm1_v is not None and tm2_v is not None) else "-"
+            line_parts.append(f"{diff_tm:<{diff_width}}")
+        summary_lines.append(" | ".join(line_parts))
 
     # Write summary
     summary_path = os.path.join(output_dir, "summary.txt")
@@ -629,348 +631,278 @@ def diff_results(dir1, dir2):
     print("\n".join(summary_lines))
     print(f"\nSummary saved to {summary_path}")
 
-    # Plotting
+    # --- CDF Plots (generalized to N dirs) ---
+    if n_dirs == 2:
+        diag_colors = ["#004d99", "#66b3ff"]
+        mitig_colors = ["#cc5200", "#ff9933"]
+        res_colors = ["#7b2d8b", "#c792ea"]
+    else:
+        diag_colors = mitig_colors = res_colors = [f"C{i}" for i in range(n_dirs)]
+
     plot_cdfs(
-        ttd1,
-        ttd2,
-        name1,
-        name2,
+        ttd_per_dir, names,
         "Time to Diagnosis (TTL)",
         os.path.join(output_dir, "cdf_diagnosis.png"),
-        colors=["#004d99", "#66b3ff"],  # Dark Blue, Lighter Blue
+        colors=diag_colors,
     )
     plot_cdfs(
-        ttm1,
-        ttm2,
-        name1,
-        name2,
+        ttm_per_dir, names,
         "Time to Mitigation (TTM)",
         os.path.join(output_dir, "cdf_mitigation.png"),
-        colors=["#cc5200", "#ff9933"],  # Dark Orange, Lighter Orange
+        colors=mitig_colors,
     )
-
-    # Plotting Success Only
     plot_cdfs(
-        ttd1_success,
-        ttd2_success,
-        name1,
-        name2,
+        ttd_success_per_dir, names,
         "Time to Diagnosis (Success Only)",
         os.path.join(output_dir, "cdf_diagnosis_success.png"),
-        colors=["#004d99", "#66b3ff"],  # Dark Blue, Lighter Blue
+        colors=diag_colors,
     )
     plot_cdfs(
-        ttm1_success,
-        ttm2_success,
-        name1,
-        name2,
+        ttm_success_per_dir, names,
         "Time to Mitigation (Success Only)",
         os.path.join(output_dir, "cdf_mitigation_success.png"),
-        colors=["#cc5200", "#ff9933"],  # Dark Orange, Lighter Orange
+        colors=mitig_colors,
     )
-
-    plot_comparison_by_problem(
-        comp_diag_data,
-        name1,
-        name2,
-        "Diagnosis Time",
-        os.path.join(output_dir, "comparison_diagnosis.png"),
-        colors=["#004d99", "#66b3ff"],
-        use_status_colors=True,
-    )
-    plot_comparison_by_problem(
-        comp_diag_data,
-        name1,
-        name2,
-        "Diagnosis Time",
-        os.path.join(output_dir, "comparison_diagnosis_compact.png"),
-        colors=["#004d99", "#66b3ff"],
-        compact=True,
-        use_status_colors=True,
-    )
-    plot_comparison_by_problem(
-        comp_mitig_data,
-        name1,
-        name2,
-        "Mitigation Time",
-        os.path.join(output_dir, "comparison_mitigation.png"),
-        colors=["#cc5200", "#ff9933"],
-        use_status_colors=True,
-    )
-    plot_comparison_by_problem(
-        comp_mitig_data,
-        name1,
-        name2,
-        "Mitigation Time",
-        os.path.join(output_dir, "comparison_mitigation_compact.png"),
-        colors=["#cc5200", "#ff9933"],
-        compact=True,
-        use_status_colors=True,
-    )
-    plot_comparison_by_problem(
-        comp_diag_success_data,
-        name1,
-        name2,
-        "Diagnosis Time (Success Only)",
-        os.path.join(output_dir, "comparison_diagnosis_success.png"),
-        colors=["#004d99", "#66b3ff"],
-    )
-    plot_comparison_by_problem(
-        comp_diag_success_data,
-        name1,
-        name2,
-        "Diagnosis Time (Success Only)",
-        os.path.join(output_dir, "comparison_diagnosis_success_compact.png"),
-        colors=["#004d99", "#66b3ff"],
-        compact=True,
-    )
-    plot_comparison_by_problem(
-        comp_mitig_success_data,
-        name1,
-        name2,
-        "Mitigation Time (Success Only)",
-        os.path.join(output_dir, "comparison_mitigation_success.png"),
-        colors=["#cc5200", "#ff9933"],
-    )
-    plot_comparison_by_problem(
-        comp_mitig_success_data,
-        name1,
-        name2,
-        "Mitigation Time (Success Only)",
-        os.path.join(output_dir, "comparison_mitigation_success_compact.png"),
-        colors=["#cc5200", "#ff9933"],
-        compact=True,
-    )
-    plot_comparison_by_problem(
-        comp_diag_fail_data,
-        name1,
-        name2,
-        "Diagnosis Time (Failure Only)",
-        os.path.join(output_dir, "comparison_diagnosis_failure.png"),
-        colors=["#004d99", "#66b3ff"],
-    )
-    plot_comparison_by_problem(
-        comp_diag_fail_data,
-        name1,
-        name2,
-        "Diagnosis Time (Failure Only)",
-        os.path.join(output_dir, "comparison_diagnosis_failure_compact.png"),
-        colors=["#004d99", "#66b3ff"],
-        compact=True,
-    )
-    plot_comparison_by_problem(
-        comp_mitig_fail_data,
-        name1,
-        name2,
-        "Mitigation Time (Failure Only)",
-        os.path.join(output_dir, "comparison_mitigation_failure.png"),
-        colors=["#cc5200", "#ff9933"],
-    )
-    plot_comparison_by_problem(
-        comp_mitig_fail_data,
-        name1,
-        name2,
-        "Mitigation Time (Failure Only)",
-        os.path.join(output_dir, "comparison_mitigation_failure_compact.png"),
-        colors=["#cc5200", "#ff9933"],
-        compact=True,
-    )
-
-    # --- By Name Variations ---
-    plot_comparison_by_problem(
-        comp_diag_data,
-        name1,
-        name2,
-        "Diagnosis Time (By Name)",
-        os.path.join(output_dir, "comparison_diagnosis_by_name.png"),
-        colors=["#004d99", "#66b3ff"],
-        use_status_colors=True,
-        sort_by_name=True,
-    )
-    plot_comparison_by_problem(
-        comp_mitig_data,
-        name1,
-        name2,
-        "Mitigation Time (By Name)",
-        os.path.join(output_dir, "comparison_mitigation_by_name.png"),
-        colors=["#cc5200", "#ff9933"],
-        use_status_colors=True,
-        sort_by_name=True,
-    )
-    plot_comparison_by_problem(
-        comp_diag_success_data,
-        name1,
-        name2,
-        "Diagnosis Time (Success Only, By Name)",
-        os.path.join(output_dir, "comparison_diagnosis_success_by_name.png"),
-        colors=["#004d99", "#66b3ff"],
-        sort_by_name=True,
-    )
-    plot_comparison_by_problem(
-        comp_mitig_success_data,
-        name1,
-        name2,
-        "Mitigation Time (Success Only, By Name)",
-        os.path.join(output_dir, "comparison_mitigation_success_by_name.png"),
-        colors=["#cc5200", "#ff9933"],
-        sort_by_name=True,
-    )
-    plot_comparison_by_problem(
-        comp_diag_fail_data,
-        name1,
-        name2,
-        "Diagnosis Time (Failure Only, By Name)",
-        os.path.join(output_dir, "comparison_diagnosis_failure_by_name.png"),
-        colors=["#004d99", "#66b3ff"],
-        sort_by_name=True,
-    )
-    plot_comparison_by_problem(
-        comp_mitig_fail_data,
-        name1,
-        name2,
-        "Mitigation Time (Failure Only, By Name)",
-        os.path.join(output_dir, "comparison_mitigation_failure_by_name.png"),
-        colors=["#cc5200", "#ff9933"],
-        sort_by_name=True,
-    )
-
-    # --- Resolution (TTL + TTM) plots ---
     plot_cdfs(
-        res1,
-        res2,
-        name1,
-        name2,
+        res_per_dir, names,
         "Time to Resolution (Diagnosis + Mitigation)",
         os.path.join(output_dir, "cdf_resolution.png"),
-        colors=["#7b2d8b", "#c792ea"],
+        colors=res_colors,
     )
     plot_cdfs(
-        res1_success,
-        res2_success,
-        name1,
-        name2,
+        res_success_per_dir, names,
         "Time to Resolution (Success Only)",
         os.path.join(output_dir, "cdf_resolution_success.png"),
-        colors=["#7b2d8b", "#c792ea"],
-    )
-    plot_comparison_by_problem(
-        comp_res_data,
-        name1,
-        name2,
-        "Resolution Time",
-        os.path.join(output_dir, "comparison_resolution.png"),
-        colors=["#7b2d8b", "#c792ea"],
-        use_status_colors=True,
-    )
-    plot_comparison_by_problem(
-        comp_res_data,
-        name1,
-        name2,
-        "Resolution Time",
-        os.path.join(output_dir, "comparison_resolution_compact.png"),
-        colors=["#7b2d8b", "#c792ea"],
-        compact=True,
-        use_status_colors=True,
-    )
-    plot_comparison_by_problem(
-        comp_res_data,
-        name1,
-        name2,
-        "Resolution Time (By Name)",
-        os.path.join(output_dir, "comparison_resolution_by_name.png"),
-        colors=["#7b2d8b", "#c792ea"],
-        use_status_colors=True,
-        sort_by_name=True,
-    )
-    plot_comparison_by_problem(
-        comp_res_success_data,
-        name1,
-        name2,
-        "Resolution Time (Success Only)",
-        os.path.join(output_dir, "comparison_resolution_success.png"),
-        colors=["#7b2d8b", "#c792ea"],
-    )
-    plot_comparison_by_problem(
-        comp_res_success_data,
-        name1,
-        name2,
-        "Resolution Time (Success Only, By Name)",
-        os.path.join(output_dir, "comparison_resolution_success_by_name.png"),
-        colors=["#7b2d8b", "#c792ea"],
-        sort_by_name=True,
-    )
-    plot_comparison_by_problem(
-        comp_res_fail_data,
-        name1,
-        name2,
-        "Resolution Time (Failure Only)",
-        os.path.join(output_dir, "comparison_resolution_failure.png"),
-        colors=["#7b2d8b", "#c792ea"],
-    )
-    plot_comparison_by_problem(
-        comp_res_fail_data,
-        name1,
-        name2,
-        "Resolution Time (Failure Only, By Name)",
-        os.path.join(output_dir, "comparison_resolution_failure_by_name.png"),
-        colors=["#7b2d8b", "#c792ea"],
-        sort_by_name=True,
+        colors=res_colors,
     )
 
-    # --- Token-based comparison plots ---
-    plot_success_rates(
-        d1,
-        m1,
-        c1,
-        name1,
-        d2,
-        m2,
-        c2,
-        name2,
-        os.path.join(output_dir, "success_rates_comparison.png"),
-        colors=["#1f77b4", "#ff7f0e"],
-    )
+    # --- 2-dir-only plots (scatter, comparison, success rates) ---
+    if n_dirs == 2:
+        name1, name2 = names[0], names[1]
 
-    tokens1_map = load_stratus_tokens(dir1) or load_gemini_tokens(dir1)
-    tokens2_map = load_stratus_tokens(dir2) or load_gemini_tokens(dir2)
-
-    if tokens1_map or tokens2_map:
-        tokens1_list = [t for t in tokens1_map.values() if t and t > 0]
-        tokens2_list = [t for t in tokens2_map.values() if t and t > 0]
-
-        plot_cdf_tokens(
-            tokens1_list,
-            tokens2_list,
-            name1,
-            name2,
-            os.path.join(output_dir, "cdf_tokens.png"),
+        plot_comparison_by_problem(
+            comp_diag_data, name1, name2,
+            "Diagnosis Time",
+            os.path.join(output_dir, "comparison_diagnosis.png"),
+            colors=["#004d99", "#66b3ff"],
+            use_status_colors=True,
+        )
+        plot_comparison_by_problem(
+            comp_diag_data, name1, name2,
+            "Diagnosis Time",
+            os.path.join(output_dir, "comparison_diagnosis_compact.png"),
+            colors=["#004d99", "#66b3ff"],
+            compact=True,
+            use_status_colors=True,
+        )
+        plot_comparison_by_problem(
+            comp_mitig_data, name1, name2,
+            "Mitigation Time",
+            os.path.join(output_dir, "comparison_mitigation.png"),
+            colors=["#cc5200", "#ff9933"],
+            use_status_colors=True,
+        )
+        plot_comparison_by_problem(
+            comp_mitig_data, name1, name2,
+            "Mitigation Time",
+            os.path.join(output_dir, "comparison_mitigation_compact.png"),
+            colors=["#cc5200", "#ff9933"],
+            compact=True,
+            use_status_colors=True,
+        )
+        plot_comparison_by_problem(
+            comp_diag_success_data, name1, name2,
+            "Diagnosis Time (Success Only)",
+            os.path.join(output_dir, "comparison_diagnosis_success.png"),
             colors=["#004d99", "#66b3ff"],
         )
+        plot_comparison_by_problem(
+            comp_diag_success_data, name1, name2,
+            "Diagnosis Time (Success Only)",
+            os.path.join(output_dir, "comparison_diagnosis_success_compact.png"),
+            colors=["#004d99", "#66b3ff"],
+            compact=True,
+        )
+        plot_comparison_by_problem(
+            comp_mitig_success_data, name1, name2,
+            "Mitigation Time (Success Only)",
+            os.path.join(output_dir, "comparison_mitigation_success.png"),
+            colors=["#cc5200", "#ff9933"],
+        )
+        plot_comparison_by_problem(
+            comp_mitig_success_data, name1, name2,
+            "Mitigation Time (Success Only)",
+            os.path.join(output_dir, "comparison_mitigation_success_compact.png"),
+            colors=["#cc5200", "#ff9933"],
+            compact=True,
+        )
+        plot_comparison_by_problem(
+            comp_diag_fail_data, name1, name2,
+            "Diagnosis Time (Failure Only)",
+            os.path.join(output_dir, "comparison_diagnosis_failure.png"),
+            colors=["#004d99", "#66b3ff"],
+        )
+        plot_comparison_by_problem(
+            comp_diag_fail_data, name1, name2,
+            "Diagnosis Time (Failure Only)",
+            os.path.join(output_dir, "comparison_diagnosis_failure_compact.png"),
+            colors=["#004d99", "#66b3ff"],
+            compact=True,
+        )
+        plot_comparison_by_problem(
+            comp_mitig_fail_data, name1, name2,
+            "Mitigation Time (Failure Only)",
+            os.path.join(output_dir, "comparison_mitigation_failure.png"),
+            colors=["#cc5200", "#ff9933"],
+        )
+        plot_comparison_by_problem(
+            comp_mitig_fail_data, name1, name2,
+            "Mitigation Time (Failure Only)",
+            os.path.join(output_dir, "comparison_mitigation_failure_compact.png"),
+            colors=["#cc5200", "#ff9933"],
+            compact=True,
+        )
+
+        # --- By Name Variations ---
+        plot_comparison_by_problem(
+            comp_diag_data, name1, name2,
+            "Diagnosis Time (By Name)",
+            os.path.join(output_dir, "comparison_diagnosis_by_name.png"),
+            colors=["#004d99", "#66b3ff"],
+            use_status_colors=True,
+            sort_by_name=True,
+        )
+        plot_comparison_by_problem(
+            comp_mitig_data, name1, name2,
+            "Mitigation Time (By Name)",
+            os.path.join(output_dir, "comparison_mitigation_by_name.png"),
+            colors=["#cc5200", "#ff9933"],
+            use_status_colors=True,
+            sort_by_name=True,
+        )
+        plot_comparison_by_problem(
+            comp_diag_success_data, name1, name2,
+            "Diagnosis Time (Success Only, By Name)",
+            os.path.join(output_dir, "comparison_diagnosis_success_by_name.png"),
+            colors=["#004d99", "#66b3ff"],
+            sort_by_name=True,
+        )
+        plot_comparison_by_problem(
+            comp_mitig_success_data, name1, name2,
+            "Mitigation Time (Success Only, By Name)",
+            os.path.join(output_dir, "comparison_mitigation_success_by_name.png"),
+            colors=["#cc5200", "#ff9933"],
+            sort_by_name=True,
+        )
+        plot_comparison_by_problem(
+            comp_diag_fail_data, name1, name2,
+            "Diagnosis Time (Failure Only, By Name)",
+            os.path.join(output_dir, "comparison_diagnosis_failure_by_name.png"),
+            colors=["#004d99", "#66b3ff"],
+            sort_by_name=True,
+        )
+        plot_comparison_by_problem(
+            comp_mitig_fail_data, name1, name2,
+            "Mitigation Time (Failure Only, By Name)",
+            os.path.join(output_dir, "comparison_mitigation_failure_by_name.png"),
+            colors=["#cc5200", "#ff9933"],
+            sort_by_name=True,
+        )
+
+        # --- Resolution (TTL + TTM) plots ---
+        plot_comparison_by_problem(
+            comp_res_data, name1, name2,
+            "Resolution Time",
+            os.path.join(output_dir, "comparison_resolution.png"),
+            colors=["#7b2d8b", "#c792ea"],
+            use_status_colors=True,
+        )
+        plot_comparison_by_problem(
+            comp_res_data, name1, name2,
+            "Resolution Time",
+            os.path.join(output_dir, "comparison_resolution_compact.png"),
+            colors=["#7b2d8b", "#c792ea"],
+            compact=True,
+            use_status_colors=True,
+        )
+        plot_comparison_by_problem(
+            comp_res_data, name1, name2,
+            "Resolution Time (By Name)",
+            os.path.join(output_dir, "comparison_resolution_by_name.png"),
+            colors=["#7b2d8b", "#c792ea"],
+            use_status_colors=True,
+            sort_by_name=True,
+        )
+        plot_comparison_by_problem(
+            comp_res_success_data, name1, name2,
+            "Resolution Time (Success Only)",
+            os.path.join(output_dir, "comparison_resolution_success.png"),
+            colors=["#7b2d8b", "#c792ea"],
+        )
+        plot_comparison_by_problem(
+            comp_res_success_data, name1, name2,
+            "Resolution Time (Success Only, By Name)",
+            os.path.join(output_dir, "comparison_resolution_success_by_name.png"),
+            colors=["#7b2d8b", "#c792ea"],
+            sort_by_name=True,
+        )
+        plot_comparison_by_problem(
+            comp_res_fail_data, name1, name2,
+            "Resolution Time (Failure Only)",
+            os.path.join(output_dir, "comparison_resolution_failure.png"),
+            colors=["#7b2d8b", "#c792ea"],
+        )
+        plot_comparison_by_problem(
+            comp_res_fail_data, name1, name2,
+            "Resolution Time (Failure Only, By Name)",
+            os.path.join(output_dir, "comparison_resolution_failure_by_name.png"),
+            colors=["#7b2d8b", "#c792ea"],
+            sort_by_name=True,
+        )
+
+        # --- Success rate bar chart ---
+        plot_success_rates(
+            all_stats[0][2], all_stats[0][3], all_stats[0][1], name1,
+            all_stats[1][2], all_stats[1][3], all_stats[1][1], name2,
+            os.path.join(output_dir, "success_rates_comparison.png"),
+            colors=["#1f77b4", "#ff7f0e"],
+        )
+
+    # --- Token-based plots ---
+    tokens_maps = [load_stratus_tokens(d) or load_gemini_tokens(d) for d in dirs]
+    tokens_lists = [[t for t in tm.values() if t and t > 0] for tm in tokens_maps]
+
+    if any(tokens_lists):
+        plot_cdf_tokens(
+            tokens_lists, names,
+            os.path.join(output_dir, "cdf_tokens.png"),
+            colors=diag_colors,
+        )
+
+    if n_dirs == 2 and (tokens_maps[0] or tokens_maps[1]):
+        name1, name2 = names[0], names[1]
+        tokens1_map, tokens2_map = tokens_maps[0], tokens_maps[1]
 
         comp_token_data = []
         for pid in all_pids:
             t1 = tokens1_map.get(pid)
             t2 = tokens2_map.get(pid)
             if (t1 is not None and t1 > 0) or (t2 is not None and t2 > 0):
-                r1 = runs1_map.get(pid)
-                r2 = runs2_map.get(pid)
-                d1 = r1 and r1.get("Diagnosis.success") == "True"
-                m1 = r1 and r1.get("Mitigation.success") == "True"
-                d2 = r2 and r2.get("Diagnosis.success") == "True"
-                m2 = r2 and r2.get("Mitigation.success") == "True"
-                comp_token_data.append((pid, t1 or 0, t2 or 0, d1 and m1, d2 and m2))
+                r1 = runs_maps[0].get(pid)
+                r2 = runs_maps[1].get(pid)
+                ds1 = r1 and r1.get("Diagnosis.success") == "True"
+                ms1 = r1 and r1.get("Mitigation.success") == "True"
+                ds2 = r2 and r2.get("Diagnosis.success") == "True"
+                ms2 = r2 and r2.get("Mitigation.success") == "True"
+                comp_token_data.append((pid, t1 or 0, t2 or 0, ds1 and ms1, ds2 and ms2))
         plot_token_comparison_by_problem(
-            comp_token_data,
-            name1,
-            name2,
+            comp_token_data, name1, name2,
             os.path.join(output_dir, "comparison_tokens.png"),
             colors=["#004d99", "#66b3ff"],
             use_status_colors=True,
         )
         plot_token_comparison_by_problem(
-            comp_token_data,
-            name1,
-            name2,
+            comp_token_data, name1, name2,
             os.path.join(output_dir, "comparison_tokens_by_name.png"),
             colors=["#004d99", "#66b3ff"],
             use_status_colors=True,
@@ -982,8 +914,8 @@ def diff_results(dir1, dir2):
         for pid in all_pids:
             tok1 = tokens1_map.get(pid)
             tok2 = tokens2_map.get(pid)
-            r1 = runs1_map.get(pid)
-            r2 = runs2_map.get(pid)
+            r1 = runs_maps[0].get(pid)
+            r2 = runs_maps[1].get(pid)
 
             def parse_float(val):
                 try:
@@ -1052,49 +984,40 @@ def plot_tokens_vs_time(data1, data2, label1, label2, output_path, colors=None):
         print(f"Tokens vs time scatter plot saved to {output_path}")
 
 
-def plot_cdf_tokens(data1, data2, label1, label2, output_path, colors=None, phase_label=None):
-    """Plot CDF of token usage for two agents."""
+def plot_cdf_tokens(data_list, labels, output_path, colors=None, phase_label=None):
+    """Plot CDF of token usage for N agents."""
     if not HAS_PLOTTING:
         print(f"Matplotlib/Numpy not found. Skipping plot: {output_path}")
         return
 
-    if not data1 and not data2:
+    if not any(data_list):
         print("No token data for CDF plot.")
         return
 
+    _markers = [".", "x", "^", "s", "D", "v", "<", ">"]
+    _linestyles = ["-", "--", "-.", ":"]
+
     if colors is None:
-        colors = ["tab:blue", "tab:orange"]
+        colors = [f"C{i}" for i in range(len(data_list))]
 
     phase_str = phase_label or "Diagnosis + Mitigation"
 
     plt.figure(figsize=(10, 6))
     has_data = False
 
-    if data1:
-        data1 = sorted(data1)
-        y1 = np.arange(1, len(data1) + 1) / len(data1)
-        plt.plot(
-            [t / 1e6 for t in data1],
-            y1,
-            marker=".",
-            linestyle="-",
-            color=colors[0],
-            label=f"{label1} (n={len(data1)})",
-        )
-        has_data = True
-
-    if data2:
-        data2 = sorted(data2)
-        y2 = np.arange(1, len(data2) + 1) / len(data2)
-        plt.plot(
-            [t / 1e6 for t in data2],
-            y2,
-            marker="x",
-            linestyle="--",
-            color=colors[1],
-            label=f"{label2} (n={len(data2)})",
-        )
-        has_data = True
+    for i, (data, label) in enumerate(zip(data_list, labels)):
+        data = sorted(data)
+        if data:
+            y = np.arange(1, len(data) + 1) / len(data)
+            plt.plot(
+                [t / 1e6 for t in data],
+                y,
+                marker=_markers[i % len(_markers)],
+                linestyle=_linestyles[i % len(_linestyles)],
+                color=colors[i % len(colors)],
+                label=f"{label} (n={len(data)})",
+            )
+            has_data = True
 
     if has_data:
         plt.xlabel("Tokens (M)")
@@ -1105,6 +1028,8 @@ def plot_cdf_tokens(data1, data2, label1, label2, output_path, colors=None, phas
         plt.savefig(output_path)
         plt.close()
         print(f"Token CDF plot saved to {output_path}")
+    else:
+        plt.close()
 
 
 def plot_token_comparison_by_problem(
@@ -1192,44 +1117,34 @@ def plot_token_comparison_by_problem(
     print(f"Token comparison plot saved to {output_path}")
 
 
-def plot_cdfs(data1, data2, label1, label2, title_metric, output_path, colors=None):
+def plot_cdfs(data_list, labels, title_metric, output_path, colors=None):
+    """Plot CDF for N data series."""
     if not HAS_PLOTTING:
         print(f"Matplotlib/Numpy not found. Skipping plot: {output_path}")
         return
 
+    _markers = [".", "x", "^", "s", "D", "v", "<", ">"]
+    _linestyles = ["-", "--", "-.", ":"]
+
     if colors is None:
-        colors = ["tab:blue", "tab:orange"]
+        colors = [f"C{i}" for i in range(len(data_list))]
 
     plt.figure(figsize=(10, 6))
-
-    data1.sort()
-    data2.sort()
-
     has_data = False
 
-    if data1:
-        y1 = np.arange(1, len(data1) + 1) / len(data1)
-        plt.plot(
-            data1,
-            y1,
-            marker=".",
-            linestyle="-",
-            color=colors[0],
-            label=f"{label1} (n={len(data1)})",
-        )
-        has_data = True
-
-    if data2:
-        y2 = np.arange(1, len(data2) + 1) / len(data2)
-        plt.plot(
-            data2,
-            y2,
-            marker="x",
-            linestyle="--",
-            color=colors[1],
-            label=f"{label2} (n={len(data2)})",
-        )
-        has_data = True
+    for i, (data, label) in enumerate(zip(data_list, labels)):
+        data = sorted(data)
+        if data:
+            y = np.arange(1, len(data) + 1) / len(data)
+            plt.plot(
+                data,
+                y,
+                marker=_markers[i % len(_markers)],
+                linestyle=_linestyles[i % len(_linestyles)],
+                color=colors[i % len(colors)],
+                label=f"{label} (n={len(data)})",
+            )
+            has_data = True
 
     if not has_data:
         print(f"No valid data to plot for {title_metric}")
@@ -1624,7 +1539,7 @@ def plot_sequence_time(log_dir, output_path=None, window=5):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Summarize SREGym benchmark results.")
     parser.add_argument(
-        "--diff", nargs=2, metavar=("DIR1", "DIR2"), help="Compare results between two log directories."
+        "--diff", nargs="+", metavar="DIR", help="Compare results between 2 or more log directories."
     )
     parser.add_argument(
         "--sequence",
@@ -1646,7 +1561,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.diff:
-        diff_results(args.diff[0], args.diff[1])
+        diff_results(args.diff)
     else:
         summarize_results(args.sequence or args.path)
         if args.sequence:
