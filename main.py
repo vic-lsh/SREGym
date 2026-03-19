@@ -469,8 +469,9 @@ def driver_loop(
                                 extra_args += f" --logs-dir {agent_log_dir}"
                             if agent_to_run in AGENT_LT_SUMMARY and enable_summary:
                                 effective_summary_model = summary_model or os.environ.get("MODEL_ID", "gpt-4o")
+                                kb_dir = os.path.join(experiment_log_dir, "kb")
                                 extra_args += (
-                                    f" --summary-dir {agent_base_dir} --summary-model {effective_summary_model}"
+                                    f" --summary-dir {kb_dir} --summary-model {effective_summary_model}"
                                 )
 
                             if enable_summary and agent_to_run in AGENT_OUTPUT_FILES:
@@ -1253,14 +1254,14 @@ def run_parallel(args):
 
         # Copy seed summary into agent summary dir
         if args.seed_summary:
-            agent_base_dir = os.path.join(experiment_log_dir, args.agent)
-            os.makedirs(agent_base_dir, exist_ok=True)
-            dest_path = os.path.join(agent_base_dir, "long_term_summary.md")
+            agent_kb_dir = os.path.join(experiment_log_dir, "kb")
+            os.makedirs(agent_kb_dir, exist_ok=True)
+            dest_path = os.path.join(agent_kb_dir, "long_term_summary.md")
             shutil.copy2(args.seed_summary, dest_path)
             logger.info(f"Copied seed summary to {dest_path}")
             lessons_src = os.path.join(os.path.dirname(args.seed_summary), "operational_lessons.md")
             if os.path.isfile(lessons_src):
-                dest_lessons = os.path.join(agent_base_dir, "operational_lessons.md")
+                dest_lessons = os.path.join(agent_kb_dir, "operational_lessons.md")
                 shutil.copy2(lessons_src, dest_lessons)
                 logger.info(f"Copied operational lessons to {dest_lessons}")
 
