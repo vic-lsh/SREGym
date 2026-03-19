@@ -355,7 +355,7 @@ def summarize_results(target_path=None):
 
 
 
-def diff_results(dirs):
+def diff_results(dirs, names=None):
     if len(dirs) < 2:
         print("Error: --diff requires at least 2 directories.")
         sys.exit(1)
@@ -370,8 +370,10 @@ def diff_results(dirs):
         runs_maps.append(run_map)
 
     # Derive names and output directory
-    names = [os.path.basename(os.path.normpath(d)) for d in dirs]
-    output_dir = os.path.join("logs", "diff", "--".join(names))
+    dir_basenames = [os.path.basename(os.path.normpath(d)) for d in dirs]
+    if names is None:
+        names = dir_basenames
+    output_dir = os.path.join("logs", "diff", "--".join(dir_basenames))
     os.makedirs(output_dir, exist_ok=True)
     print(f"\nDiff results will be stored in: {output_dir}")
 
@@ -1542,6 +1544,10 @@ if __name__ == "__main__":
         "--diff", nargs="+", metavar="DIR", help="Compare results between 2 or more log directories."
     )
     parser.add_argument(
+        "--names", nargs="+", metavar="NAME",
+        help="Custom legend names for --diff directories (one per directory).",
+    )
+    parser.add_argument(
         "--sequence",
         metavar="DIR",
         help="Plot solving time vs sequence index for a sequence-mode run directory.",
@@ -1561,7 +1567,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.diff:
-        diff_results(args.diff)
+        if args.names and len(args.names) != len(args.diff):
+            parser.error(f"--names requires exactly {len(args.diff)} values (one per --diff directory), got {len(args.names)}")
+        diff_results(args.diff, names=args.names)
     else:
         summarize_results(args.sequence or args.path)
         if args.sequence:
