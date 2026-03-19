@@ -66,7 +66,7 @@ class AgentLauncher:
         proc = subprocess.Popen(
             command,
             shell=True,
-            cwd=exp_env_dir,
+            cwd=reg.kickoff_workdir or os.getcwd(),
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
