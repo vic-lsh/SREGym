@@ -354,6 +354,17 @@ class Conductor:
         self.logger.info("Undeploying app leftovers...")
         self.undeploy_app()  # Cleanup any leftovers
         self.logger.info("App leftovers undeployed.")
+
+        # Reconcile cluster-scoped resources (ClusterRoles, CRDs, etc.) that may
+        # have leaked from a previous failed helm install on this worker.
+        if self._baseline_captured:
+            try:
+                changes = self.cluster_state.reconcile_to_baseline()
+                if any(v for v in changes.values() if v):
+                    self.logger.info(f"Pre-deploy reconciliation changes: {changes}")
+            except Exception as e:
+                self.logger.warning(f"Pre-deploy cluster reconciliation failed: {e}")
+
         self.logger.info("Deploying app...")
         if self.status_callback:
             self.status_callback("Deploying App")
