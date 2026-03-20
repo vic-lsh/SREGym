@@ -234,11 +234,12 @@ def driver_loop(
 
         all_results_for_agent = []
 
-        def write_error_result(problem_id: str, error_message: str, sequence_index: int = None):
+        def write_error_result(problem_id: str, error_message: str, sequence_index: int = None,
+                              start_date_time: str = None):
             """Write a structured result row even when execution fails before grading."""
             if not agent_to_run:
                 return
-            current_date_time = get_current_datetime_formatted()
+            current_date_time = start_date_time or get_current_datetime_formatted()
             if sequence_index is not None:
                 csv_path = os.path.join(
                     experiment_log_dir,
@@ -400,6 +401,7 @@ def driver_loop(
 
             try:
                 for iteration in range(completed_iterations, repeat):
+                    iteration_start_time = get_current_datetime_formatted()
                     console.log(f"\n🔍 Starting problem: {pid} (Run {iteration + 1}/{repeat})")
 
                     conductor.problem_id = pid
@@ -551,7 +553,7 @@ def driver_loop(
                     all_results_for_agent.append(snapshot)
 
                     fieldnames = sorted(snapshot.keys())
-                    current_date_time = get_current_datetime_formatted()
+                    current_date_time = iteration_start_time
 
                     # Write results to experiment_log_dir
                     if seq_idx is not None:
@@ -621,7 +623,8 @@ def driver_loop(
                 except Exception as cleanup_err:
                     console.log(f"⚠️  Post-error cleanup also failed: {cleanup_err}")
                 if not use_external_harness:
-                    write_error_result(pid, str(e), sequence_index=seq_idx)
+                    write_error_result(pid, str(e), sequence_index=seq_idx,
+                                       start_date_time=iteration_start_time)
                 if status_dict is not None:
                     status_dict[seq_key] = {
                         "status": "Error",
