@@ -1121,6 +1121,80 @@ def _kill_process_tree(pid: int, sig: int = signal.SIGTERM) -> None:
         pass
 
 
+def _kill_orphan_agent(worker_id: int, timeout: int = 5) -> None:
+    """Kill orphaned agent process group for a given worker, if any.
+
+    When a worker crashes, its agent subprocess (started with start_new_session=True)
+    survives as an orphan.  The agent's PGID is persisted to a file by AgentLauncher
+    so that the supervisor can find and kill it before spawning a replacement worker.
+    """
+    sregym_dir = os.path.dirname(os.path.abspath(__file__))
+    pgid_file = os.path.join(sregym_dir, "exp_env", f"exp_env_{worker_id}", "agent.pgid")
+
+    if not os.path.exists(pgid_file):
+        return
+
+    try:
+        with open(pgid_file, "r") as f:
+            pgid = int(f.read().strip())
+    except (OSError, ValueError):
+        return
+
+    # Check if the process group leader still exists
+    try:
+        os.kill(pgid, 0)
+    except (ProcessLookupError, OSError):
+        try:
+            os.remove(pgid_file)
+        except OSError:
+            pass
+        return
+
+    logger.warning(f"Worker {worker_id}: killing orphaned agent process group (PGID {pgid})")
+
+    # Collect descendants (may be in different process groups)
+    try:
+        parent = psutil.Process(pgid)
+        children = parent.children(recursive=True)
+    except psutil.NoSuchProcess:
+        children = []
+
+    # SIGTERM the process group and any stray descendants
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except (ProcessLookupError, OSError):
+        pass
+    for child in children:
+        try:
+            child.send_signal(signal.SIGTERM)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    # Wait for termination, escalate to SIGKILL
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            os.kill(pgid, 0)
+        except (ProcessLookupError, OSError):
+            break
+        time.sleep(0.5)
+    else:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            pass
+        for child in children:
+            try:
+                child.send_signal(signal.SIGKILL)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+    try:
+        os.remove(pgid_file)
+    except OSError:
+        pass
+
+
 def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict, sequence=None, sequence_start_idx=0):
     """Worker function for parallel execution."""
 
@@ -1543,6 +1617,9 @@ def run_parallel(args):
                                     "elapsed": 0.0,
                                     "worker_id": wid,
                                 }
+
+                                # Kill any orphaned agent from the dead worker
+                                _kill_orphan_agent(wid)
 
                                 # Remove old process from map
                                 if p in worker_map:

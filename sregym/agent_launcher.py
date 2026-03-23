@@ -75,6 +75,14 @@ class AgentLauncher:
             universal_newlines=True,
             start_new_session=start_new_session,
         )
+        # Persist PGID so supervisor can kill orphaned agents after worker crashes.
+        # With start_new_session=True the child is the session leader, so PGID == PID.
+        pgid_file = os.path.join(exp_env_dir, "agent.pgid")
+        try:
+            with open(pgid_file, "w") as f:
+                f.write(str(proc.pid))
+        except OSError:
+            pass
         ap = AgentProcess(reg.name, proc)
         self._procs[reg.name] = ap
         t = threading.Thread(target=self._pipe_logs, args=(reg.name, proc), daemon=True)
@@ -151,6 +159,12 @@ class AgentLauncher:
             # Remove from cache and ensure process is gone
             if agent_name in self._procs:
                 del self._procs[agent_name]
+            # Remove PGID file before cleaning exp_env
+            pgid_file = os.path.join(os.getenv("SREGYM_EXP_ENV", "exp_env"), "agent.pgid")
+            try:
+                os.remove(pgid_file)
+            except OSError:
+                pass
             self._clean_exp_env()
 
     def _clean_exp_env(self):
