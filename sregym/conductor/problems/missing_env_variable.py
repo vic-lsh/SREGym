@@ -3,23 +3,31 @@ from sregym.conductor.oracles.missing_env_variable_mitigation import MissingEnvV
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
+from sregym.service.apps.hotel_reservation import HotelReservation
+from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
 
 class MissingEnvVariable(Problem):
-    def __init__(self, app_name: str = "astronomy_shop", faulty_service: str = "frontend"):
+    def __init__(self, app_name: str = "astronomy_shop", faulty_service: str = "frontend",
+                 env_var: str = "CART_ADDR", env_var_value: str = "cart:8080"):
         self.faulty_service = faulty_service
         self.app_name = app_name
+        self.env_var = env_var
+        self.env_var_value = env_var_value
 
-        if self.app_name != "astronomy_shop":
-            raise ValueError
+        if app_name == "social_network":
+            self.app = SocialNetwork()
+        elif app_name == "hotel_reservation":
+            self.app = HotelReservation()
+        elif app_name == "astronomy_shop":
+            self.app = AstronomyShop()
+        else:
+            raise ValueError(f"Unsupported app name: {app_name}")
 
-        self.app = AstronomyShop()
         self.namespace = self.app.namespace
         super().__init__(app=self.app, namespace=self.namespace)
-        self.env_var = "CART_ADDR"
-        self.env_var_value = "cart:8080"
         self.root_cause = (
             f"The deployment `{self.faulty_service}` is missing the environment variable `{self.env_var}`."
         )

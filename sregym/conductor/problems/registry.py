@@ -70,6 +70,8 @@ from sregym.conductor.problems.workload_imbalance import WorkloadImbalance
 from sregym.conductor.problems.wrong_bin_usage import WrongBinUsage
 from sregym.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from sregym.conductor.problems.wrong_service_selector import WrongServiceSelector
+from sregym.conductor.problems.variant_generator import generate_all_variants
+from sregym.conductor.problems.variant_specs import get_all_variant_specs
 from sregym.service.kubectl import KubeCtl
 
 
@@ -230,6 +232,14 @@ class ProblemRegistry:
             "operator_wrong_update_strategy_fault": K8SOperatorWrongUpdateStrategyFault,
         }
 # fmt: on
+
+        # Auto-generate variants from variant specs.
+        # Generated IDs use __v_ separator so they never collide with manual entries.
+        generated = generate_all_variants(get_all_variant_specs())
+        for vid, factory in generated.items():
+            if vid not in self.PROBLEM_REGISTRY:
+                self.PROBLEM_REGISTRY[vid] = factory
+
         # KubeCtl requires a valid kubeconfig. In parallel mode, worker-specific
         # kubeconfigs are created later, so avoid eager initialization here.
         self.kubectl = None

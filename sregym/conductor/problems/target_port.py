@@ -11,13 +11,15 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class K8STargetPortMisconfig(Problem):
-    def __init__(self, faulty_service="user-service"):
+    def __init__(self, faulty_service="user-service", bad_port: int = 9999, correct_port: int = 9090):
         self.app = SocialNetwork()
         self.namespace = self.app.namespace
         super().__init__(app=self.app, namespace=self.namespace)
         self.faulty_service = faulty_service
+        self.bad_port = bad_port
+        self.correct_port = correct_port
         self.kubectl = KubeCtl()
-        self.root_cause = f"The service `{self.faulty_service}` has a misconfigured target port (9999 instead of 9090), causing connection failures."
+        self.root_cause = f"The service `{self.faulty_service}` has a misconfigured target port ({self.bad_port} instead of {self.correct_port}), causing connection failures."
 
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)

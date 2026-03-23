@@ -155,7 +155,7 @@ class DiagnosisOracle(Oracle):
         correctness = self.compare_truth(new_expectation, solution)
 
         logger.info(
-            f"Eval Diagnosis: new_expectation: {new_expectation}, solution: {solution} | {"✅" if correctness else "❌"}"
+            f"Eval Diagnosis: new_expectation: {new_expectation}, solution: {solution} | {'PASS' if correctness else 'FAIL'}"
         )
 
         return {
