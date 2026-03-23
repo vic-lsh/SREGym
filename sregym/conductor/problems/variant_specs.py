@@ -80,6 +80,14 @@ _ASTRONOMY_SHOP_ENV_VARS = {
     "RECOMMENDATION_ADDR": "recommendation:8080",
 }
 
+# Which address env vars each astronomy-shop service actually has
+# (derived from the Helm values.yaml)
+_SERVICE_ENV_VARS: dict[str, set[str]] = {
+    "checkout": {"CART_ADDR", "CURRENCY_ADDR", "SHIPPING_ADDR", "PRODUCT_CATALOG_ADDR"},
+    "frontend": set(_ASTRONOMY_SHOP_ENV_VARS.keys()),
+    "recommendation": {"PRODUCT_CATALOG_ADDR"},
+}
+
 
 VARIANT_SPECS: list[VariantSpec] = [
     # --- Probe Misconfigurations ---
@@ -195,10 +203,11 @@ VARIANT_SPECS: list[VariantSpec] = [
         base_name="incorrect_port_assignment",
         dimensions=[
             VariantDimension("app_name", ["astronomy_shop"]),
-            VariantDimension("faulty_service", ["checkout", "frontend", "cart", "ad", "payment"]),
+            VariantDimension("faulty_service", list(_SERVICE_ENV_VARS.keys())),
+            VariantDimension("env_var", list(_ASTRONOMY_SHOP_ENV_VARS.keys())),
             VariantDimension("incorrect_port", ["8082", "9090", "3000", "5432", "6379"]),
         ],
-        constraints=lambda p: p["faulty_service"] in SERVICES_BY_APP.get(p["app_name"], []),
+        constraints=lambda p: p["env_var"] in _SERVICE_ENV_VARS.get(p["faulty_service"], set()),
     ),
     VariantSpec(
         problem_class=K8STargetPortMisconfig,
