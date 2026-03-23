@@ -1273,10 +1273,51 @@ def run_parallel(args):
         os.environ["SREGYM_LOG_FILE"] = log_file_path
         init_logger()
 
-    # Handle sequence mode
+    # Handle variant stream mode or sequence mode
     sequence = None
     sequence_start_idx = 0
-    if getattr(args, "sequence_len", 0) > 0:
+    if getattr(args, "variants", False):
+        from sregym.conductor.problems.variant_generator import generate_variant_stream
+
+        variant_ids = registry.get_variant_ids()
+        if not variant_ids:
+            logger.error("No variant problems found in registry.")
+            sys.exit(1)
+
+        sequence = generate_variant_stream(
+            variant_ids=variant_ids,
+            count=args.variant_count,
+            offset=args.variant_offset,
+            seed=args.variant_seed,
+        )
+        variant_state_path = os.path.join(experiment_log_dir, "variant_state.json")
+        with open(variant_state_path, "w") as f:
+            json.dump({
+                "seed": args.variant_seed,
+                "offset": args.variant_offset,
+                "count": args.variant_count,
+                "total_variant_pool": len(variant_ids),
+                "sequence": sequence,
+            }, f)
+        logger.info(
+            f"Variant stream: {len(sequence)} problems "
+            f"(offset={args.variant_offset}, seed={args.variant_seed}, "
+            f"pool={len(variant_ids)} variants)."
+        )
+
+        # Determine start index by scanning for completed results
+        agent_to_run = args.agent
+        for idx, pid in enumerate(sequence):
+            search_pattern = os.path.join(experiment_log_dir, f"*_{idx:05d}_{pid}_{agent_to_run}_results.csv")
+            existing_files = glob.glob(search_pattern)
+            completed = any(is_result_complete(f) for f in existing_files)
+            if completed:
+                sequence_start_idx = idx + 1
+            else:
+                break
+        logger.info(f"Variant mode: starting from index {sequence_start_idx}/{len(sequence)}.")
+
+    elif getattr(args, "sequence_len", 0) > 0:
         sequence_state_path = os.path.join(experiment_log_dir, "sequence_state.json")
         is_resuming = args.resume_last or args.resume_from
 
@@ -1961,6 +2002,29 @@ if __name__ == "__main__":
         default=42,
         help="Random seed for deterministic sequence generation (default: 42)",
     )
+    parser.add_argument(
+        "--variants",
+        action="store_true",
+        help="Run auto-generated problem variants (ignores tasklist.yml)",
+    )
+    parser.add_argument(
+        "--variant-count",
+        type=int,
+        default=0,
+        help="Number of variant problems to run (required with --variants)",
+    )
+    parser.add_argument(
+        "--variant-offset",
+        type=int,
+        default=0,
+        help="Starting offset in the variant stream (default: 0)",
+    )
+    parser.add_argument(
+        "--variant-seed",
+        type=int,
+        default=42,
+        help="Seed for deterministic variant stream ordering (default: 42)",
+    )
     args = parser.parse_args()
 
     # Validate that --agent is provided when not using external harness
@@ -1972,6 +2036,17 @@ if __name__ == "__main__":
         parser.error("--sequence-len requires --parallel 1 (sequential execution)")
     if args.sequence_len > 0 and args.problem:
         parser.error("--sequence-len and --problem are mutually exclusive")
+
+    # Validate variant mode constraints
+    if args.variants:
+        if args.variant_count <= 0:
+            parser.error("--variant-count is required and must be > 0 when --variants is set")
+        if args.problem:
+            parser.error("--variants and --problem are mutually exclusive")
+        if args.sequence_len > 0:
+            parser.error("--variants and --sequence-len are mutually exclusive")
+        if args.parallel > 1:
+            parser.error("--variants requires --parallel 1 (sequential execution)")
 
     # Validate --seed-summary
     if args.seed_summary:

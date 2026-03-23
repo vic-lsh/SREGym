@@ -91,6 +91,7 @@ VariantDimension = _vg_mod.VariantDimension
 VariantSpec = _vg_mod.VariantSpec
 generate_variants = _vg_mod.generate_variants
 generate_all_variants = _vg_mod.generate_all_variants
+generate_variant_stream = _vg_mod.generate_variant_stream
 
 _ensure_app_stubs()
 _vu_mod = _load_module("variant_utils", _PROBLEMS_DIR / "variant_utils.py")
@@ -368,3 +369,69 @@ class TestVariantSpecs:
         for vid, factory in sample:
             instance = factory()
             assert instance is not None, f"Factory for '{vid}' returned None"
+
+
+# ---------------------------------------------------------------------------
+# Tests: generate_variant_stream (epoch-based cycling)
+# ---------------------------------------------------------------------------
+
+class TestGenerateVariantStream:
+    def test_deterministic(self):
+        ids = ["a", "b", "c", "d", "e"]
+        s1 = generate_variant_stream(ids, count=10, seed=42)
+        s2 = generate_variant_stream(ids, count=10, seed=42)
+        assert s1 == s2
+
+    def test_different_seed_different_order(self):
+        ids = ["a", "b", "c", "d", "e"]
+        s1 = generate_variant_stream(ids, count=10, seed=42)
+        s2 = generate_variant_stream(ids, count=10, seed=99)
+        assert s1 != s2
+
+    def test_offset_is_prefix_skip(self):
+        ids = ["a", "b", "c", "d", "e"]
+        full = generate_variant_stream(ids, count=10, offset=0, seed=42)
+        tail = generate_variant_stream(ids, count=5, offset=5, seed=42)
+        assert full[5:] == tail
+
+    def test_epoch_covers_all(self):
+        ids = ["a", "b", "c"]
+        stream = generate_variant_stream(ids, count=6, seed=42)
+        # First epoch has all 3, second epoch has all 3
+        assert set(stream[:3]) == {"a", "b", "c"}
+        assert set(stream[3:6]) == {"a", "b", "c"}
+
+    def test_count_larger_than_pool(self):
+        ids = ["x", "y"]
+        stream = generate_variant_stream(ids, count=7, seed=42)
+        assert len(stream) == 7
+
+    def test_empty_ids_raises(self):
+        with pytest.raises(ValueError, match="must not be empty"):
+            generate_variant_stream([], count=5)
+
+    def test_zero_count_raises(self):
+        with pytest.raises(ValueError, match="count must be > 0"):
+            generate_variant_stream(["a"], count=0)
+
+    def test_offset_mid_epoch(self):
+        """Offset that lands in the middle of an epoch."""
+        ids = ["a", "b", "c", "d"]
+        full_epoch0 = generate_variant_stream(ids, count=4, offset=0, seed=7)
+        partial = generate_variant_stream(ids, count=2, offset=2, seed=7)
+        assert partial == full_epoch0[2:]
+
+    def test_offset_across_epochs(self):
+        """Offset that spans multiple epochs."""
+        ids = ["a", "b", "c"]
+        # Get 9 items (3 epochs) starting from 0
+        full = generate_variant_stream(ids, count=9, offset=0, seed=42)
+        # Get 3 items starting from offset 6 (epoch 2)
+        tail = generate_variant_stream(ids, count=3, offset=6, seed=42)
+        assert full[6:] == tail
+
+    def test_input_order_irrelevant(self):
+        """Canonical sort means input order doesn't matter."""
+        s1 = generate_variant_stream(["c", "a", "b"], count=5, seed=42)
+        s2 = generate_variant_stream(["b", "c", "a"], count=5, seed=42)
+        assert s1 == s2

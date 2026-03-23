@@ -1,5 +1,6 @@
 """Generate problem variants by computing the Cartesian product of parameter dimensions."""
 
+import random
 from dataclasses import dataclass
 from itertools import product
 from typing import Any, Callable
@@ -97,3 +98,56 @@ def generate_all_variants(specs: list[VariantSpec]) -> dict[str, Callable]:
                 )
             all_variants[vid] = factory
     return all_variants
+
+
+def generate_variant_stream(
+    variant_ids: list[str],
+    count: int,
+    offset: int = 0,
+    seed: int = 42,
+) -> list[str]:
+    """Generate a deterministic stream of variant IDs using epoch-based cycling.
+
+    The stream is logically infinite: epoch k shuffles the sorted variant pool
+    with seed (seed + k). The returned list is the slice [offset : offset + count].
+
+    This ensures every variant appears exactly once per epoch before any repeats,
+    and the stream is fully deterministic given the same (variant_ids, seed).
+
+    Args:
+        variant_ids: Pool of variant IDs to cycle through.
+        count: Number of problems to return.
+        offset: Starting position in the stream (default 0).
+        seed: Base seed for deterministic shuffling (default 42).
+
+    Returns:
+        List of ``count`` variant IDs from the stream starting at ``offset``.
+
+    Raises:
+        ValueError: If variant_ids is empty or count <= 0.
+    """
+    if not variant_ids:
+        raise ValueError("variant_ids must not be empty")
+    if count <= 0:
+        raise ValueError("count must be > 0")
+
+    canonical = sorted(variant_ids)
+    n = len(canonical)
+    result: list[str] = []
+
+    start_epoch, start_pos = divmod(offset, n)
+    remaining = count
+    epoch = start_epoch
+
+    while remaining > 0:
+        rng = random.Random(seed + epoch)
+        epoch_order = canonical.copy()
+        rng.shuffle(epoch_order)
+
+        start = start_pos if epoch == start_epoch else 0
+        take = min(remaining, n - start)
+        result.extend(epoch_order[start:start + take])
+        remaining -= take
+        epoch += 1
+
+    return result

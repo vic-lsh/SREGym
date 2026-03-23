@@ -282,6 +282,10 @@ class ProblemRegistry:
         return list(tasklist["all"]["problems"].keys())
 
 
+    def get_variant_ids(self) -> list[str]:
+        """Return all auto-generated variant problem IDs (those containing '__v_')."""
+        return [pid for pid in self.PROBLEM_REGISTRY if "__v_" in pid]
+
     def get_problem_count(self, task_type: str = None):
         if task_type:
             return len([k for k in self.PROBLEM_REGISTRY.keys() if task_type in k])
