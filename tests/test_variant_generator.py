@@ -1,26 +1,121 @@
-"""Tests for the problem variant generation system."""
+"""Tests for the problem variant generation system.
+
+Uses importlib to load modules directly, bypassing sregym.conductor.__init__.py
+which eagerly imports the full Conductor and all its heavy dependencies.
+"""
+
+import importlib.util
+import sys
+from pathlib import Path
 
 import pytest
 
-from sregym.conductor.problems.variant_generator import (
-    VariantDimension,
-    VariantSpec,
-    generate_all_variants,
-    generate_variants,
-)
-from sregym.conductor.problems.variant_utils import SERVICES_BY_APP
+# ---------------------------------------------------------------------------
+# Direct-import helpers: load our modules without triggering the conductor
+# import chain (which requires kubernetes, langchain, dotenv, etc.)
+# ---------------------------------------------------------------------------
+
+_PROBLEMS_DIR = Path(__file__).resolve().parent.parent / "sregym" / "conductor" / "problems"
 
 
-# --- Fixtures / Helpers ---
+def _load_module(name: str, filepath: Path):
+    """Load a single Python module by file path, caching in sys.modules."""
+    fqn = f"sregym.conductor.problems.{name}"
+    if fqn in sys.modules:
+        return sys.modules[fqn]
+    spec = importlib.util.spec_from_file_location(fqn, filepath)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[fqn] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _ensure_app_stubs():
+    """Create lightweight stubs for app classes so variant_utils can import."""
+    for mod_name in (
+        "sregym.service.apps.astronomy_shop",
+        "sregym.service.apps.hotel_reservation",
+        "sregym.service.apps.social_network",
+        "sregym.service.apps.train_ticket",
+    ):
+        if mod_name not in sys.modules:
+            stub = type(sys)(mod_name)
+
+            class _FakeApp:
+                pass
+
+            # Each stub module exposes the expected class name
+            cls_name = mod_name.rsplit(".", 1)[-1]
+            # CamelCase: astronomy_shop -> AstronomyShop
+            camel = "".join(w.capitalize() for w in cls_name.split("_"))
+            setattr(stub, camel, _FakeApp)
+            sys.modules[mod_name] = stub
+
+
+def _ensure_problem_class_stubs():
+    """Create stubs for every problem class imported by variant_specs.py."""
+    class _FakeProblemClass:
+        def __init__(self, **kwargs):
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+    mapping = {
+        "duplicate_pvc_mounts": "DuplicatePVCMounts",
+        "incorrect_port_assignment": "IncorrectPortAssignment",
+        "liveness_probe_misconfiguration": "LivenessProbeMisconfiguration",
+        "liveness_probe_too_aggressive": "LivenessProbeTooAggressive",
+        "missing_configmap": "MissingConfigMap",
+        "missing_env_variable": "MissingEnvVariable",
+        "missing_service": "MissingService",
+        "readiness_probe_misconfiguration": "ReadinessProbeMisconfiguration",
+        "rolling_update_misconfigured": "RollingUpdateMisconfigured",
+        "service_dns_resolution_failure": "ServiceDNSResolutionFailure",
+        "service_port_conflict": "ServicePortConflict",
+        "sidecar_port_conflict": "SidecarPortConflict",
+        "stale_coredns_config": "StaleCoreDNSConfig",
+        "target_port": "K8STargetPortMisconfig",
+        "wrong_dns_policy": "WrongDNSPolicy",
+        "wrong_service_selector": "WrongServiceSelector",
+    }
+    for mod_name, cls_name in mapping.items():
+        fqn = f"sregym.conductor.problems.{mod_name}"
+        if fqn not in sys.modules:
+            stub = type(sys)(fqn)
+            setattr(stub, cls_name, type(cls_name, (_FakeProblemClass,), {}))
+            sys.modules[fqn] = stub
+
+
+# Load our modules
+_vg_mod = _load_module("variant_generator", _PROBLEMS_DIR / "variant_generator.py")
+VariantDimension = _vg_mod.VariantDimension
+VariantSpec = _vg_mod.VariantSpec
+generate_variants = _vg_mod.generate_variants
+generate_all_variants = _vg_mod.generate_all_variants
+
+_ensure_app_stubs()
+_vu_mod = _load_module("variant_utils", _PROBLEMS_DIR / "variant_utils.py")
+SERVICES_BY_APP = _vu_mod.SERVICES_BY_APP
+
+_ensure_problem_class_stubs()
+_vs_mod = _load_module("variant_specs", _PROBLEMS_DIR / "variant_specs.py")
+get_all_variant_specs = _vs_mod.get_all_variant_specs
+
+
+# ---------------------------------------------------------------------------
+# Test helpers
+# ---------------------------------------------------------------------------
 
 class FakeProblem:
     """Minimal problem-like class for testing."""
+
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
             setattr(self, k, v)
 
 
-# --- generate_variants tests ---
+# ---------------------------------------------------------------------------
+# Tests: generate_variants core logic
+# ---------------------------------------------------------------------------
 
 class TestGenerateVariants:
     def test_single_dimension(self):
@@ -46,7 +141,7 @@ class TestGenerateVariants:
             ],
         )
         variants = generate_variants(spec)
-        assert len(variants) == 6  # 2 × 3
+        assert len(variants) == 6  # 2 x 3
         assert "probe__v_a1_s1" in variants
         assert "probe__v_a2_s3" in variants
 
@@ -74,20 +169,16 @@ class TestGenerateVariants:
             base_name="empty",
             dimensions=[],
         )
-        variants = generate_variants(spec)
-        assert variants == {}
+        assert generate_variants(spec) == {}
 
     def test_all_filtered_out(self):
         spec = VariantSpec(
             problem_class=FakeProblem,
             base_name="none",
-            dimensions=[
-                VariantDimension("x", [1, 2, 3]),
-            ],
+            dimensions=[VariantDimension("x", [1, 2, 3])],
             constraints=lambda p: False,
         )
-        variants = generate_variants(spec)
-        assert variants == {}
+        assert generate_variants(spec) == {}
 
     def test_factory_produces_correct_params(self):
         spec = VariantSpec(
@@ -117,7 +208,7 @@ class TestGenerateVariants:
             ],
         )
         variants = generate_variants(spec)
-        assert len(variants) == 4  # 2 × 2 × 1
+        assert len(variants) == 4  # 2 x 2 x 1
         assert "multi__v_1_x_True" in variants
         assert "multi__v_2_y_True" in variants
 
@@ -136,7 +227,6 @@ class TestGenerateVariants:
         assert keys[0] == "my_problem__v_social_network_user-service"
 
     def test_no_collision_within_spec(self):
-        """All generated IDs within a single spec must be unique."""
         spec = VariantSpec(
             problem_class=FakeProblem,
             base_name="unique",
@@ -147,10 +237,26 @@ class TestGenerateVariants:
         )
         variants = generate_variants(spec)
         assert len(variants) == 15
-        # All keys unique by construction (dict), but let's verify values are distinct callables
         ids = list(variants.keys())
         assert len(ids) == len(set(ids))
 
+    def test_closure_captures_correctly(self):
+        """Verify each lambda captures its own params (not shared reference)."""
+        spec = VariantSpec(
+            problem_class=FakeProblem,
+            base_name="closure",
+            dimensions=[VariantDimension("val", [10, 20, 30])],
+        )
+        variants = generate_variants(spec)
+        results = {vid: factory().val for vid, factory in variants.items()}
+        assert results["closure__v_10"] == 10
+        assert results["closure__v_20"] == 20
+        assert results["closure__v_30"] == 30
+
+
+# ---------------------------------------------------------------------------
+# Tests: generate_all_variants (multi-spec)
+# ---------------------------------------------------------------------------
 
 class TestGenerateAllVariants:
     def test_multiple_specs_combined(self):
@@ -197,39 +303,68 @@ class TestGenerateAllVariants:
         assert "alpha__v_1" in all_variants
         assert "beta__v_1" in all_variants
 
+    def test_empty_specs_list(self):
+        assert generate_all_variants([]) == {}
+
+
+# ---------------------------------------------------------------------------
+# Tests: actual variant specs integration
+# ---------------------------------------------------------------------------
 
 class TestVariantSpecs:
-    """Test the actual variant specs from variant_specs.py."""
-
     def test_specs_load_without_error(self):
-        from sregym.conductor.problems.variant_specs import get_all_variant_specs
         specs = get_all_variant_specs()
         assert len(specs) > 0
 
     def test_all_specs_generate_without_collision(self):
-        from sregym.conductor.problems.variant_specs import get_all_variant_specs
         specs = get_all_variant_specs()
         all_variants = generate_all_variants(specs)
-        assert len(all_variants) > 100  # We expect 400+ variants
+        assert len(all_variants) > 100  # We expect 300+ variants
 
     def test_generated_ids_use_v_separator(self):
-        from sregym.conductor.problems.variant_specs import get_all_variant_specs
         specs = get_all_variant_specs()
         all_variants = generate_all_variants(specs)
         for vid in all_variants:
             assert "__v_" in vid, f"Variant ID '{vid}' missing __v_ separator"
 
     def test_no_empty_specs(self):
-        from sregym.conductor.problems.variant_specs import get_all_variant_specs
         specs = get_all_variant_specs()
         for spec in specs:
             variants = generate_variants(spec)
             assert len(variants) > 0, f"Spec '{spec.base_name}' produced zero variants"
 
     def test_services_by_app_coverage(self):
-        """Verify SERVICES_BY_APP has entries for the standard apps."""
         assert "social_network" in SERVICES_BY_APP
         assert "hotel_reservation" in SERVICES_BY_APP
         assert "astronomy_shop" in SERVICES_BY_APP
         for app, services in SERVICES_BY_APP.items():
             assert len(services) > 0, f"No services for {app}"
+
+    def test_variant_count_breakdown(self):
+        """Verify each spec produces a reasonable number of variants."""
+        specs = get_all_variant_specs()
+        total = 0
+        for spec in specs:
+            variants = generate_variants(spec)
+            count = len(variants)
+            total += count
+            # Every spec should produce at least 1 variant
+            assert count >= 1, f"{spec.base_name} produced {count} variants"
+        # Total should be substantial
+        assert total >= 300, f"Only {total} total variants (expected 300+)"
+
+    def test_no_duplicate_base_names(self):
+        """Each spec should have a unique base_name."""
+        specs = get_all_variant_specs()
+        names = [s.base_name for s in specs]
+        assert len(names) == len(set(names)), f"Duplicate base names: {names}"
+
+    def test_factories_are_callable(self):
+        """Every generated factory should be callable and produce an object."""
+        specs = get_all_variant_specs()
+        all_variants = generate_all_variants(specs)
+        # Spot-check a sample of variants
+        sample = list(all_variants.items())[:20]
+        for vid, factory in sample:
+            instance = factory()
+            assert instance is not None, f"Factory for '{vid}' returned None"
