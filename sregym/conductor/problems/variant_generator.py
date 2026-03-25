@@ -100,6 +100,97 @@ def generate_all_variants(specs: list[VariantSpec]) -> dict[str, Callable]:
     return all_variants
 
 
+def _group_by_class(variant_ids: list[str]) -> dict[str, list[str]]:
+    """Group variant IDs by their base_name (problem class).
+
+    Splits each ID on '__v_' and uses the prefix as the group key.
+    Within each group, IDs are sorted for determinism.
+    """
+    groups: dict[str, list[str]] = {}
+    for vid in variant_ids:
+        base_name = vid.split("__v_")[0]
+        groups.setdefault(base_name, []).append(vid)
+    for key in groups:
+        groups[key].sort()
+    return groups
+
+
+def generate_variant_stream_by_class(
+    variant_ids: list[str],
+    count: int,
+    offset: int = 0,
+    seed: int = 42,
+) -> list[str]:
+    """Generate a deterministic stream interleaved by problem class (round-robin).
+
+    Each "round" picks one variant from every problem class before any class
+    gets a second pick. Within each round the class order is shuffled with
+    seed (seed + round_number). Within each class the variant order is shuffled
+    with a separate per-class seed. When a class exhausts its variants it wraps
+    to the next per-class epoch (re-shuffled).
+
+    Args:
+        variant_ids: Pool of variant IDs to cycle through.
+        count: Number of problems to return.
+        offset: Starting position in the stream (default 0).
+        seed: Base seed for deterministic shuffling (default 42).
+
+    Returns:
+        List of ``count`` variant IDs from the stream starting at ``offset``.
+
+    Raises:
+        ValueError: If variant_ids is empty or count <= 0.
+    """
+    if not variant_ids:
+        raise ValueError("variant_ids must not be empty")
+    if count <= 0:
+        raise ValueError("count must be > 0")
+
+    groups = _group_by_class(variant_ids)
+    class_names = sorted(groups.keys())
+    num_classes = len(class_names)
+
+    # Pre-build per-class iterators: each tracks its own epoch.
+    class_queues: dict[str, list[str]] = {}
+    class_epochs: dict[str, int] = {name: 0 for name in class_names}
+
+    def _refill(name: str) -> None:
+        """Shuffle and refill the queue for a class using its current epoch."""
+        epoch = class_epochs[name]
+        # Use a seed that depends on both the class name and epoch
+        rng = random.Random(seed + hash(name) + epoch)
+        order = groups[name].copy()
+        rng.shuffle(order)
+        class_queues[name] = order
+        class_epochs[name] = epoch + 1
+
+    for name in class_names:
+        _refill(name)
+
+    # Generate the full stream from position 0 up to offset + count,
+    # then slice to [offset : offset + count].
+    total_needed = offset + count
+    result: list[str] = []
+    round_num = 0
+
+    while len(result) < total_needed:
+        # Shuffle class order for this round
+        rng = random.Random(seed + round_num)
+        round_order = class_names.copy()
+        rng.shuffle(round_order)
+
+        for name in round_order:
+            if not class_queues[name]:
+                _refill(name)
+            result.append(class_queues[name].pop(0))
+            if len(result) >= total_needed:
+                break
+
+        round_num += 1
+
+    return result[offset:offset + count]
+
+
 def generate_variant_stream(
     variant_ids: list[str],
     count: int,

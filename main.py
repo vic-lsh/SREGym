@@ -185,8 +185,6 @@ def driver_loop(
     status_dict=None,
     problem_queue=None,
     worker_id=None,
-    sequence: list = None,
-    sequence_start_idx: int = 0,
 ):
     """
     Deploy each problem and wait for HTTP grading via POST /submit.
@@ -264,17 +262,7 @@ def driver_loop(
 
         # session_timestamp = get_current_datetime_formatted()
 
-        if sequence is not None:
-            # Sequence mode: iterate over pre-generated sequence with indices
-            def sequence_gen():
-                for seq_idx, pid in enumerate(sequence):
-                    if seq_idx < sequence_start_idx:
-                        continue
-                    yield seq_idx, pid
-
-            problem_iterator = sequence_gen()
-            use_sequence_mode = True
-        elif problem_queue:
+        if problem_queue:
 
             def problem_gen():
                 # Yield pre-assigned problems first (e.g. popped by worker to check for work)
@@ -294,7 +282,6 @@ def driver_loop(
                         return
 
             problem_iterator = problem_gen()
-            use_sequence_mode = False
         else:
             # Get all problem IDs and filter if needed
             problem_ids = conductor.problems.get_problem_ids()
@@ -323,10 +310,9 @@ def driver_loop(
                 problem_ids.remove(unknown_problem_id)
 
             problem_iterator = problem_ids
-            use_sequence_mode = False
 
         for item in problem_iterator:
-            if use_sequence_mode:
+            if isinstance(item, tuple):
                 seq_idx, pid = item
             else:
                 seq_idx, pid = None, item
@@ -711,8 +697,6 @@ def _run_driver_and_shutdown(
     status_dict=None,
     problem_queue=None,
     worker_id=None,
-    sequence: list = None,
-    sequence_start_idx: int = 0,
 ):
     """Run the benchmark driver, stash results, then tell the API to exit."""
     try:
@@ -730,8 +714,6 @@ def _run_driver_and_shutdown(
             status_dict=status_dict,
             problem_queue=problem_queue,
             worker_id=worker_id,
-            sequence=sequence,
-            sequence_start_idx=sequence_start_idx,
         )
         main.results = results
     except Exception as e:
@@ -1121,7 +1103,7 @@ def _kill_process_tree(pid: int, sig: int = signal.SIGTERM) -> None:
         pass
 
 
-def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict, sequence=None, sequence_start_idx=0):
+def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict):
     """Worker function for parallel execution."""
 
     def _shutdown_handler(signum, frame):
@@ -1188,13 +1170,11 @@ def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict,
             # Run main with the private queue. It will block until tasks arrive.
             main(
                 args,
-                problem_queue=problem_queue if sequence is None else None,
+                problem_queue=problem_queue,
                 problem_list=None,  # No pre-assigned list, everything via queue
                 experiment_log_dir=experiment_log_dir,
                 status_dict=status_dict,
                 worker_id=worker_id,
-                sequence=sequence,
-                sequence_start_idx=sequence_start_idx,
             )
         except Exception as e:
             status_dict[_worker_meta_key(worker_id)] = {
@@ -1277,14 +1257,20 @@ def run_parallel(args):
     sequence = None
     sequence_start_idx = 0
     if getattr(args, "variants", False):
-        from sregym.conductor.problems.variant_generator import generate_variant_stream
+        from sregym.conductor.problems.variant_generator import (
+            generate_variant_stream,
+            generate_variant_stream_by_class,
+        )
 
         variant_ids = registry.get_variant_ids()
         if not variant_ids:
             logger.error("No variant problems found in registry.")
             sys.exit(1)
 
-        sequence = generate_variant_stream(
+        stream_fn = (generate_variant_stream_by_class
+                     if args.variant_round_robin
+                     else generate_variant_stream)
+        sequence = stream_fn(
             variant_ids=variant_ids,
             count=args.variant_count,
             offset=args.variant_offset,
@@ -1370,8 +1356,8 @@ def run_parallel(args):
     # Filter problems if resuming (non-sequence mode)
     problems_to_run = []
     if sequence is not None:
-        # In sequence mode, problems_to_run is just a placeholder (not used for queue scheduling)
-        problems_to_run = []
+        # Build pending list with (seq_idx, pid) tuples for queue-based dispatch
+        problems_to_run = [(idx, pid) for idx, pid in enumerate(sequence) if idx >= sequence_start_idx]
     elif args.resume_last or args.resume_from:
         agent_to_run = args.agent
         for pid in all_problems:
@@ -1418,7 +1404,6 @@ def run_parallel(args):
         p = multiprocessing.Process(
             target=worker_main,
             args=(args, i, worker_queues[i], experiment_log_dir, status_dict),
-            kwargs={"sequence": sequence, "sequence_start_idx": sequence_start_idx},
         )
         p.start()
         processes.append(p)
@@ -1515,16 +1500,15 @@ def run_parallel(args):
                                 break
 
                             problem_to_assign = pending_problems.pop(0)
-                            assigned_tasks[wid] = problem_to_assign
+                            if isinstance(problem_to_assign, tuple):
+                                s_idx, s_pid = problem_to_assign
+                                assigned_tasks[wid] = f"{s_idx:05d}:{s_pid}"
+                            else:
+                                assigned_tasks[wid] = problem_to_assign
                             worker_queues[wid].put(problem_to_assign)
 
                         # 4. Check Termination
-                        if sequence is not None:
-                            # In sequence mode, the single worker handles its own termination.
-                            # Send shutdown only when all workers have exited.
-                            if not any(p.is_alive() for p in processes) and not shutdown_sent:
-                                shutdown_sent = True
-                        elif not pending_problems and not assigned_tasks:
+                        if not pending_problems and not assigned_tasks:
                             # Done!
                             logger.info("All tasks completed or assigned. Sending shutdown signals.")
                             for q in worker_queues:
@@ -1593,7 +1577,6 @@ def run_parallel(args):
                                 new_p = multiprocessing.Process(
                                     target=worker_main,
                                     args=(args, wid, worker_queues[wid], experiment_log_dir, status_dict),
-                                    kwargs={"sequence": sequence, "sequence_start_idx": sequence_start_idx},
                                 )
                                 new_p.start()
 
@@ -1766,8 +1749,6 @@ def main(
     status_dict=None,
     problem_queue=None,
     worker_id=None,
-    sequence=None,
-    sequence_start_idx=0,
 ):
     # Generate session ID and log directory
     session_timestamp = get_current_datetime_formatted()
@@ -1853,8 +1834,6 @@ def main(
             status_dict=status_dict,
             problem_queue=problem_queue,
             worker_id=worker_id,
-            sequence=sequence,
-            sequence_start_idx=sequence_start_idx,
         ),
         name="driver",
         daemon=True,
@@ -2025,6 +2004,13 @@ if __name__ == "__main__":
         default=42,
         help="Seed for deterministic variant stream ordering (default: 42)",
     )
+    parser.add_argument(
+        "--variant-round-robin",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Interleave variants round-robin by problem class (default: True). "
+             "Use --no-variant-round-robin for flat epoch-based cycling.",
+    )
     args = parser.parse_args()
 
     # Validate that --agent is provided when not using external harness
@@ -2032,8 +2018,6 @@ if __name__ == "__main__":
         parser.error("--agent is required when --use-external-harness is not set")
 
     # Validate sequence mode constraints
-    if args.sequence_len > 0 and args.parallel > 1:
-        parser.error("--sequence-len requires --parallel 1 (sequential execution)")
     if args.sequence_len > 0 and args.problem:
         parser.error("--sequence-len and --problem are mutually exclusive")
 
@@ -2045,8 +2029,6 @@ if __name__ == "__main__":
             parser.error("--variants and --problem are mutually exclusive")
         if args.sequence_len > 0:
             parser.error("--variants and --sequence-len are mutually exclusive")
-        if args.parallel > 1:
-            parser.error("--variants requires --parallel 1 (sequential execution)")
 
     # Validate --seed-summary
     if args.seed_summary:

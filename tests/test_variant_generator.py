@@ -92,6 +92,7 @@ VariantSpec = _vg_mod.VariantSpec
 generate_variants = _vg_mod.generate_variants
 generate_all_variants = _vg_mod.generate_all_variants
 generate_variant_stream = _vg_mod.generate_variant_stream
+generate_variant_stream_by_class = _vg_mod.generate_variant_stream_by_class
 
 _ensure_app_stubs()
 _vu_mod = _load_module("variant_utils", _PROBLEMS_DIR / "variant_utils.py")
@@ -435,3 +436,108 @@ class TestGenerateVariantStream:
         s1 = generate_variant_stream(["c", "a", "b"], count=5, seed=42)
         s2 = generate_variant_stream(["b", "c", "a"], count=5, seed=42)
         assert s1 == s2
+
+
+# ---------------------------------------------------------------------------
+# Tests: generate_variant_stream_by_class (round-robin per problem class)
+# ---------------------------------------------------------------------------
+
+class TestGenerateVariantStreamByClass:
+    """Tests for the round-robin-by-class variant stream."""
+
+    # Helper: build variant IDs for multiple classes
+    @staticmethod
+    def _make_ids(class_counts: dict[str, int]) -> list[str]:
+        """Create variant IDs like 'classA__v_0', 'classA__v_1', etc."""
+        ids = []
+        for cls, n in class_counts.items():
+            for i in range(n):
+                ids.append(f"{cls}__v_{i}")
+        return ids
+
+    def test_round_robin_interleaving(self):
+        """Each round should contain exactly one variant per class."""
+        ids = self._make_ids({"alpha": 5, "beta": 5, "gamma": 5})
+        num_classes = 3
+        # Request exactly 2 full rounds
+        stream = generate_variant_stream_by_class(ids, count=6, seed=42)
+        assert len(stream) == 6
+
+        for round_start in range(0, 6, num_classes):
+            round_items = stream[round_start:round_start + num_classes]
+            classes = [v.split("__v_")[0] for v in round_items]
+            assert set(classes) == {"alpha", "beta", "gamma"}, (
+                f"Round starting at {round_start} missing classes: {classes}"
+            )
+
+    def test_all_classes_in_every_full_round(self):
+        """With uneven class sizes, every full round still has all classes."""
+        ids = self._make_ids({"big": 20, "small": 2, "medium": 5})
+        num_classes = 3
+        num_rounds = 4
+        stream = generate_variant_stream_by_class(
+            ids, count=num_classes * num_rounds, seed=7
+        )
+        for r in range(num_rounds):
+            start = r * num_classes
+            round_items = stream[start:start + num_classes]
+            classes = {v.split("__v_")[0] for v in round_items}
+            assert classes == {"big", "small", "medium"}, (
+                f"Round {r} classes: {classes}"
+            )
+
+    def test_small_class_wraps(self):
+        """A class with fewer variants than rounds should repeat variants."""
+        ids = self._make_ids({"only_one": 1, "many": 10})
+        num_classes = 2
+        stream = generate_variant_stream_by_class(ids, count=6, seed=42)
+        only_one_picks = [v for v in stream if v.startswith("only_one__v_")]
+        # Should appear 3 times (3 rounds), always the same variant
+        assert len(only_one_picks) == 3
+        assert all(v == "only_one__v_0" for v in only_one_picks)
+
+    def test_deterministic(self):
+        ids = self._make_ids({"a": 3, "b": 4, "c": 2})
+        s1 = generate_variant_stream_by_class(ids, count=15, seed=42)
+        s2 = generate_variant_stream_by_class(ids, count=15, seed=42)
+        assert s1 == s2
+
+    def test_different_seed_different_order(self):
+        ids = self._make_ids({"a": 3, "b": 4, "c": 2})
+        s1 = generate_variant_stream_by_class(ids, count=15, seed=42)
+        s2 = generate_variant_stream_by_class(ids, count=15, seed=99)
+        assert s1 != s2
+
+    def test_offset_is_prefix_skip(self):
+        ids = self._make_ids({"a": 5, "b": 5, "c": 5})
+        full = generate_variant_stream_by_class(ids, count=12, offset=0, seed=42)
+        tail = generate_variant_stream_by_class(ids, count=6, offset=6, seed=42)
+        assert full[6:] == tail
+
+    def test_offset_across_rounds(self):
+        ids = self._make_ids({"x": 3, "y": 3})
+        full = generate_variant_stream_by_class(ids, count=8, offset=0, seed=42)
+        tail = generate_variant_stream_by_class(ids, count=4, offset=4, seed=42)
+        assert full[4:] == tail
+
+    def test_empty_ids_raises(self):
+        with pytest.raises(ValueError, match="must not be empty"):
+            generate_variant_stream_by_class([], count=5)
+
+    def test_zero_count_raises(self):
+        with pytest.raises(ValueError, match="count must be > 0"):
+            generate_variant_stream_by_class(["a__v_0"], count=0)
+
+    def test_input_order_irrelevant(self):
+        ids1 = ["b__v_1", "a__v_0", "b__v_0", "a__v_1"]
+        ids2 = ["a__v_0", "a__v_1", "b__v_0", "b__v_1"]
+        s1 = generate_variant_stream_by_class(ids1, count=8, seed=42)
+        s2 = generate_variant_stream_by_class(ids2, count=8, seed=42)
+        assert s1 == s2
+
+    def test_single_class_degenerates_to_flat(self):
+        """With one class, round-robin is just one variant per round."""
+        ids = self._make_ids({"solo": 5})
+        stream = generate_variant_stream_by_class(ids, count=5, seed=42)
+        assert len(stream) == 5
+        assert set(stream) == {f"solo__v_{i}" for i in range(5)}
