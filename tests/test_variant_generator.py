@@ -255,6 +255,41 @@ class TestGenerateVariants:
         assert results["closure__v_20"] == 20
         assert results["closure__v_30"] == 30
 
+    def test_derived_params_passed_to_factory(self):
+        """derived_params should inject extra kwargs without affecting variant ID."""
+        lookup = {"KEY_A": "value_a", "KEY_B": "value_b"}
+        spec = VariantSpec(
+            problem_class=FakeProblem,
+            base_name="env",
+            dimensions=[
+                VariantDimension("env_var", ["KEY_A", "KEY_B"]),
+            ],
+            derived_params=lambda p: {"env_var_value": lookup[p["env_var"]]},
+        )
+        variants = generate_variants(spec)
+        # Variant IDs should NOT include the derived value
+        assert "env__v_KEY_A" in variants
+        assert "env__v_KEY_B" in variants
+        # But the factory should pass derived params to the constructor
+        a = variants["env__v_KEY_A"]()
+        assert a.env_var == "KEY_A"
+        assert a.env_var_value == "value_a"
+        b = variants["env__v_KEY_B"]()
+        assert b.env_var == "KEY_B"
+        assert b.env_var_value == "value_b"
+
+    def test_derived_params_none_by_default(self):
+        """Without derived_params, factories get only dimension params."""
+        spec = VariantSpec(
+            problem_class=FakeProblem,
+            base_name="plain",
+            dimensions=[VariantDimension("x", [1])],
+        )
+        variants = generate_variants(spec)
+        instance = variants["plain__v_1"]()
+        assert instance.x == 1
+        assert not hasattr(instance, "extra")
+
 
 # ---------------------------------------------------------------------------
 # Tests: generate_all_variants (multi-spec)

@@ -244,6 +244,7 @@ VARIANT_SPECS: list[VariantSpec] = [
             VariantDimension("env_var", list(_ASTRONOMY_SHOP_ENV_VARS.keys())),
         ],
         constraints=lambda p: True,  # all combos valid for astronomy_shop frontend
+        derived_params=lambda p: {"env_var_value": _ASTRONOMY_SHOP_ENV_VARS[p["env_var"]]},
     ),
 ]
 

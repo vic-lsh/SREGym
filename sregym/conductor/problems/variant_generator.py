@@ -28,11 +28,15 @@ class VariantSpec:
         dimensions: List of VariantDimensions defining the parameter axes.
         constraints: Optional filter function. Receives a dict of param_name->value
                      and returns True if the combination is valid.
+        derived_params: Optional function that receives the dimension params dict and
+                        returns additional kwargs to pass to the problem constructor.
+                        These do not affect the variant ID.
     """
     problem_class: type
     base_name: str
     dimensions: list[VariantDimension]
     constraints: Callable[[dict[str, Any]], bool] | None = None
+    derived_params: Callable[[dict[str, Any]], dict[str, Any]] | None = None
 
 
 def generate_variants(spec: VariantSpec) -> dict[str, Callable]:
@@ -69,8 +73,10 @@ def generate_variants(spec: VariantSpec) -> dict[str, Callable]:
         suffix = "_".join(str(v) for v in combo)
         variant_id = f"{spec.base_name}__v_{suffix}"
 
-        # Capture params in closure via default argument
+        # Merge any derived params (don't affect variant ID)
         captured = dict(params)
+        if spec.derived_params:
+            captured.update(spec.derived_params(params))
         variants[variant_id] = lambda p=captured: spec.problem_class(**p)
 
     return variants
