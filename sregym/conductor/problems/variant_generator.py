@@ -1,9 +1,19 @@
 """Generate problem variants by computing the Cartesian product of parameter dimensions."""
 
+import hashlib
 import random
 from dataclasses import dataclass
 from itertools import product
 from typing import Any, Callable
+
+
+def _stable_hash(name: str) -> int:
+    """Deterministic hash that is stable across Python invocations.
+
+    Python's built-in hash() is randomized per process (PYTHONHASHSEED).
+    This uses MD5 (truncated to 64 bits) for a stable alternative.
+    """
+    return int(hashlib.md5(name.encode()).hexdigest(), 16) & 0xFFFFFFFFFFFFFFFF
 
 
 @dataclass
@@ -164,7 +174,7 @@ def generate_variant_stream_by_class(
         """Shuffle and refill the queue for a class using its current epoch."""
         epoch = class_epochs[name]
         # Use a seed that depends on both the class name and epoch
-        rng = random.Random(seed + hash(name) + epoch)
+        rng = random.Random(seed + _stable_hash(name) + epoch)
         order = groups[name].copy()
         rng.shuffle(order)
         class_queues[name] = order
