@@ -60,10 +60,10 @@ class AgentLauncher:
         exp_env_dir = os.getenv("SREGYM_EXP_ENV", "exp_env")
         os.makedirs(exp_env_dir, exist_ok=True)
 
-        # Put agent in its own process group (so we can killpg() it and its
-        # children) but keep it in the same session as the terminal.  This way
-        # agents receive SIGHUP when the terminal is closed instead of
-        # becoming orphans — which happened with start_new_session=True.
+        # Put agent in its own process group so that killpg() in cleanup_agent()
+        # only kills the agent and its children — NOT the supervisor or other workers.
+        # We use process_group=0 (setpgrp) instead of start_new_session=True so the
+        # agent stays in the same terminal session and receives SIGHUP on terminal close.
         popen_kwargs: dict = dict(
             shell=True,
             cwd=reg.kickoff_workdir or os.getcwd(),

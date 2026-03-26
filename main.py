@@ -72,6 +72,33 @@ def agent_supports_summary(agent_name: str) -> bool:
 
 KIND_CLUSTER_PREFIX = "sregym-w"
 WORKER_META_KEY_PREFIX = "__worker_meta__"
+
+# Exceptions raised when the multiprocessing Manager's IPC pipe is broken.
+# When this happens, status_dict proxy operations fail — but that should not
+# crash the driver loop or the supervisor, since status reporting is non-critical.
+_MANAGER_PIPE_ERRORS = (BrokenPipeError, OSError, EOFError, ConnectionResetError)
+
+
+def _safe_status_update(status_dict, key, value):
+    """Update status_dict, ignoring errors from a dead Manager."""
+    if status_dict is None:
+        return
+    try:
+        status_dict[key] = value
+    except _MANAGER_PIPE_ERRORS:
+        pass
+
+
+def _safe_status_read(status_dict, key, default=None):
+    """Read from status_dict, returning default if Manager is dead."""
+    if status_dict is None:
+        return default
+    try:
+        return status_dict[key]
+    except (*_MANAGER_PIPE_ERRORS, KeyError):
+        return default
+
+
 # Resource limits for parallel execution
 # Calibrated based on container count (1 core per container).
 # Social Network: ~27 containers -> 27 units
@@ -334,14 +361,13 @@ def driver_loop(
                         f"⏭️  Skipping problem '{label}': Found {completed_iterations}/{repeat} completed results."
                     )
 
-                    if status_dict is not None:
-                        status_dict[seq_key] = {
-                            "status": "Completed (Resumed)",
-                            "pid": pid,
-                            "start_time": time.time(),
-                            "elapsed": 0.0,
-                            "worker_id": worker_id,
-                        }
+                    _safe_status_update(status_dict, seq_key, {
+                        "status": "Completed (Resumed)",
+                        "pid": pid,
+                        "start_time": time.time(),
+                        "elapsed": 0.0,
+                        "worker_id": worker_id,
+                    })
                     continue
                 elif completed_iterations > 0:
                     label = f"[{seq_idx:05d}] {pid}" if seq_idx is not None else pid
@@ -367,13 +393,13 @@ def driver_loop(
                         handler.setStream(redirect_ctx)
 
                 # Update status to starting
-                status_dict[seq_key] = {
+                _safe_status_update(status_dict, seq_key, {
                     "status": "Deploying App",
                     "pid": pid,
                     "start_time": time.time(),
                     "elapsed": 0.0,
                     "worker_id": worker_id,
-                }
+                })
 
             try:
                 for iteration in range(completed_iterations, repeat):
@@ -385,30 +411,30 @@ def driver_loop(
                     # Define callback to update status from conductor
                     def update_conductor_status(status, _seq_key=seq_key, _pid=pid):
                         if status_dict is not None:
-                            # Preserve start_time if it exists, otherwise use current time
-                            current_info = status_dict.get(_seq_key, {})
-                            start_time = current_info.get("start_time", time.time())
-                            status_dict[_seq_key] = {
+                            current_info = _safe_status_read(status_dict, _seq_key, {})
+                            start_time = current_info.get("start_time", time.time()) if isinstance(current_info, dict) else time.time()
+                            _safe_status_update(status_dict, _seq_key, {
                                 "status": status,
                                 "pid": _pid,
                                 "start_time": start_time,
                                 "elapsed": time.time() - start_time,
                                 "worker_id": worker_id,
-                            }
+                            })
 
                     conductor.set_status_callback(update_conductor_status)
 
                     result = await conductor.start_problem()
                     if result == StartProblemResult.SKIPPED_KHAOS_REQUIRED:
                         console.log(f"⏭️  Skipping problem '{pid}': requires Khaos but running on emulated cluster")
-                        if status_dict is not None:
-                            status_dict[seq_key] = {
-                                "status": "Skipped (Khaos Req)",
-                                "pid": pid,
-                                "start_time": status_dict[seq_key]["start_time"],
-                                "elapsed": time.time() - status_dict[seq_key]["start_time"],
-                                "worker_id": worker_id,
-                            }
+                        _info = _safe_status_read(status_dict, seq_key, {})
+                        _st = _info.get("start_time", time.time()) if isinstance(_info, dict) else time.time()
+                        _safe_status_update(status_dict, seq_key, {
+                            "status": "Skipped (Khaos Req)",
+                            "pid": pid,
+                            "start_time": _st,
+                            "elapsed": time.time() - _st,
+                            "worker_id": worker_id,
+                        })
                         continue
 
                     # If using external harness, fault is injected - exit now
@@ -422,14 +448,15 @@ def driver_loop(
                     agent_log_dir = os.path.join(agent_base_dir, conductor.problem_id)
 
                     if not use_external_harness:
-                        if status_dict is not None:
-                            status_dict[seq_key] = {
-                                "status": "Agent Running",
-                                "pid": pid,
-                                "start_time": status_dict[seq_key]["start_time"],
-                                "elapsed": time.time() - status_dict[seq_key]["start_time"],
-                                "worker_id": worker_id,
-                            }
+                        _info = _safe_status_read(status_dict, seq_key, {})
+                        _st = _info.get("start_time", time.time()) if isinstance(_info, dict) else time.time()
+                        _safe_status_update(status_dict, seq_key, {
+                            "status": "Agent Running",
+                            "pid": pid,
+                            "start_time": _st,
+                            "elapsed": time.time() - _st,
+                            "worker_id": worker_id,
+                        })
 
                         # Defensive: ensure no stale agent from previous problem before starting
                         LAUNCHER.cleanup_agent(agent_to_run)
@@ -463,15 +490,16 @@ def driver_loop(
                     agent_exit_code: int | None = None
                     while conductor.submission_stage != "done":
                         if status_dict is not None:
-                            # Update stage
                             current_stage = conductor.submission_stage or "Running"
-                            status_dict[seq_key] = {
+                            _info = _safe_status_read(status_dict, seq_key, {})
+                            _st = _info.get("start_time", time.time()) if isinstance(_info, dict) else time.time()
+                            _safe_status_update(status_dict, seq_key, {
                                 "status": f"Agent: {current_stage}",
                                 "pid": pid,
-                                "start_time": status_dict[seq_key]["start_time"],
-                                "elapsed": time.time() - status_dict[seq_key]["start_time"],
+                                "start_time": _st,
+                                "elapsed": time.time() - _st,
                                 "worker_id": worker_id,
-                            }
+                            })
 
                         # Check if agent process has exited
                         agent_proc = LAUNCHER._procs.get(agent_to_run)
@@ -483,14 +511,15 @@ def driver_loop(
                                 break
                         await asyncio.sleep(1)
 
-                    if status_dict is not None:
-                        status_dict[seq_key] = {
-                            "status": "Cleaning Up",
-                            "pid": pid,
-                            "start_time": status_dict[seq_key]["start_time"],
-                            "elapsed": time.time() - status_dict[seq_key]["start_time"],
-                            "worker_id": worker_id,
-                        }
+                    _info = _safe_status_read(status_dict, seq_key, {})
+                    _st = _info.get("start_time", time.time()) if isinstance(_info, dict) else time.time()
+                    _safe_status_update(status_dict, seq_key, {
+                        "status": "Cleaning Up",
+                        "pid": pid,
+                        "start_time": _st,
+                        "elapsed": time.time() - _st,
+                        "worker_id": worker_id,
+                    })
 
                     console.log(f"✅ Completed {pid}: results={conductor.results}")
 
@@ -591,6 +620,7 @@ def driver_loop(
 
             except Exception as e:
                 console.log(f"❌ Error running problem {pid}: {e}")
+                logger.error(f"Error running problem {pid}:", exc_info=True)
                 # Attempt cleanup so stale cluster-scoped resources don't poison the next problem
                 try:
                     conductor.undeploy_app()
@@ -601,14 +631,15 @@ def driver_loop(
                 if not use_external_harness:
                     write_error_result(pid, str(e), sequence_index=seq_idx,
                                        start_date_time=iteration_start_time)
-                if status_dict is not None:
-                    status_dict[seq_key] = {
-                        "status": "Error",
-                        "pid": pid,
-                        "start_time": status_dict[seq_key]["start_time"],
-                        "elapsed": time.time() - status_dict[seq_key]["start_time"],
-                        "worker_id": worker_id,
-                    }
+                _info = _safe_status_read(status_dict, seq_key, {})
+                _st = _info.get("start_time", time.time()) if isinstance(_info, dict) else time.time()
+                _safe_status_update(status_dict, seq_key, {
+                    "status": "Error",
+                    "pid": pid,
+                    "start_time": _st,
+                    "elapsed": time.time() - _st,
+                    "worker_id": worker_id,
+                })
                 # Do not raise e; continue to next problem
             finally:
                 # Ensure agent is cleaned up even if an error occurred
@@ -616,15 +647,17 @@ def driver_loop(
                     LAUNCHER.cleanup_agent(agent_to_run)
                     await asyncio.sleep(1)  # Allow process group to fully tear down
 
-                if status_dict is not None:
-                    if status_dict[seq_key]["status"] != "Error":
-                        status_dict[seq_key] = {
-                            "status": "Completed",
-                            "pid": pid,
-                            "start_time": status_dict[seq_key]["start_time"],
-                            "elapsed": time.time() - status_dict[seq_key]["start_time"],
-                            "worker_id": worker_id,
-                        }
+                _current = _safe_status_read(status_dict, seq_key, {})
+                _cur_status = _current.get("status", "") if isinstance(_current, dict) else ""
+                if _cur_status != "Error":
+                    _st = _current.get("start_time", time.time()) if isinstance(_current, dict) else time.time()
+                    _safe_status_update(status_dict, seq_key, {
+                        "status": "Completed",
+                        "pid": pid,
+                        "start_time": _st,
+                        "elapsed": time.time() - _st,
+                        "worker_id": worker_id,
+                    })
                     sys.stdout = original_stdout
                     sys.stderr = original_stderr
 
@@ -913,15 +946,21 @@ def _kill_process_tree(pid: int, sig: int = signal.SIGTERM) -> None:
 def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict):
     """Worker function for parallel execution."""
 
-    def _shutdown_handler(signum, frame):
-        """On SIGTERM/SIGINT/SIGHUP, clean up agent subprocesses before exiting."""
+    def _ignore_signal_handler(signum, frame):
+        """Ignore SIGTERM/SIGHUP so workers survive process-group signals.
+        Workers exit cleanly via the None sentinel on their queue."""
+        sig_name = signal.Signals(signum).name if hasattr(signal, "Signals") else str(signum)
+        logger.info(f"Worker {worker_id} received {sig_name} — ignoring")
+
+    def _sigint_handler(signum, frame):
+        """On SIGINT (Ctrl-C), clean up agent subprocesses and exit."""
         LAUNCHER.cleanup_all_agents(timeout=3)
         os._exit(0)
 
-    signal.signal(signal.SIGTERM, _shutdown_handler)
-    signal.signal(signal.SIGINT, _shutdown_handler)
+    signal.signal(signal.SIGTERM, _ignore_signal_handler)
+    signal.signal(signal.SIGINT, _sigint_handler)
     if hasattr(signal, "SIGHUP"):
-        signal.signal(signal.SIGHUP, _shutdown_handler)
+        signal.signal(signal.SIGHUP, _ignore_signal_handler)
 
     os.environ["SREGYM_WORKER_ID"] = str(worker_id)
     os.environ["API_PORT"] = str(8000 + worker_id)
@@ -963,19 +1002,19 @@ def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict)
             # Note: We do NOT check for work here anymore. We want the worker to start up,
             # create the cluster, and then wait for tasks from the scheduler.
 
-            status_dict[_worker_meta_key(worker_id)] = {
+            _safe_status_update(status_dict, _worker_meta_key(worker_id), {
                 "status": "Creating cluster",
                 "start_time": time.time(),
                 "elapsed": 0.0,
                 "worker_id": worker_id,
-            }
+            })
             cluster_name, _ = _create_worker_cluster(worker_id, experiment_log_dir)
-            status_dict[_worker_meta_key(worker_id)] = {
+            _safe_status_update(status_dict, _worker_meta_key(worker_id), {
                 "status": f"Cluster ready ({cluster_name})",
                 "start_time": time.time(),
                 "elapsed": 0.0,
                 "worker_id": worker_id,
-            }
+            })
             # Run main with the private queue. It will block until tasks arrive.
             main(
                 args,
@@ -986,12 +1025,12 @@ def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict)
                 worker_id=worker_id,
             )
         except Exception as e:
-            status_dict[_worker_meta_key(worker_id)] = {
+            _safe_status_update(status_dict, _worker_meta_key(worker_id), {
                 "status": f"Worker setup failed: {e}",
                 "start_time": time.time(),
                 "elapsed": 0.0,
                 "worker_id": worker_id,
-            }
+            })
             raise
         finally:
             _delete_worker_cluster(cluster_name)
@@ -1057,11 +1096,13 @@ def run_parallel(args):
                 shutil.copy2(lessons_src, dest_lessons)
                 logger.info(f"Copied operational lessons to {dest_lessons}")
 
-        # Set log file for parallel runner
-        session_timestamp = get_current_datetime_formatted()
-        log_file_path = os.path.join(experiment_log_dir, f"sregym_supervisor_{session_timestamp}.log")
-        os.environ["SREGYM_LOG_FILE"] = log_file_path
-        init_logger()
+    # Set log file for parallel runner (always, even when resuming — the supervisor
+    # redirects stdout/stderr to /dev/null for the progress display, so file logging
+    # is the only way to diagnose supervisor-level issues).
+    session_timestamp = get_current_datetime_formatted()
+    log_file_path = os.path.join(experiment_log_dir, f"sregym_supervisor_{session_timestamp}.log")
+    os.environ["SREGYM_LOG_FILE"] = log_file_path
+    init_logger()
 
     # Handle variant stream mode or sequence mode
     sequence = None
@@ -1159,8 +1200,10 @@ def run_parallel(args):
 
     manager = multiprocessing.Manager()
     status_dict = manager.dict()
-    # Replace single shared queue with private queues for each worker
-    worker_queues = [manager.Queue() for _ in range(args.parallel)]
+    # Use plain multiprocessing.Queue (not manager.Queue) so that scheduling
+    # survives a Manager crash — the queues use OS-level pipes, independent of
+    # the Manager server process that backs status_dict.
+    worker_queues = [multiprocessing.Queue() for _ in range(args.parallel)]
 
     # Filter problems if resuming (non-sequence mode)
     problems_to_run = []
@@ -1181,12 +1224,12 @@ def run_parallel(args):
             if completed_iterations < args.repeat:
                 problems_to_run.append(pid)
             else:
-                status_dict[pid] = {
+                _safe_status_update(status_dict, pid, {
                     "status": "Completed (Resumed)",
                     "start_time": time.time(),
                     "elapsed": 0.0,
                     "worker_id": None,
-                }
+                })
     else:
         problems_to_run = all_problems
 
@@ -1220,6 +1263,16 @@ def run_parallel(args):
     assigned_tasks = {}  # worker_id -> problem_id
     shutdown_sent = False
 
+    # Make the supervisor resilient to SIGTERM/SIGHUP — log and ignore so workers
+    # can finish.  Only SIGINT (Ctrl-C) should abort the experiment.
+    def _supervisor_signal_handler(signum, frame):
+        sig_name = signal.Signals(signum).name if hasattr(signal, "Signals") else str(signum)
+        logger.warning(f"Supervisor received {sig_name} ({signum}) — ignoring, workers will continue")
+
+    signal.signal(signal.SIGTERM, _supervisor_signal_handler)
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, _supervisor_signal_handler)
+
     # Monitoring loop
     try:
         # Redirect stdout/stderr to suppress unwanted output during Progress display
@@ -1237,7 +1290,7 @@ def run_parallel(args):
         loggers_to_check = [logging.getLogger("all"), logging.getLogger()]
         removed_handlers_by_logger = []
         for logger_obj in loggers_to_check:
-            removed = [h for h in logger_obj.handlers if isinstance(h, logging.StreamHandler)]
+            removed = [h for h in logger_obj.handlers if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)]
             for h in removed:
                 logger_obj.removeHandler(h)
             removed_handlers_by_logger.append((logger_obj, removed))
@@ -1274,19 +1327,28 @@ def run_parallel(args):
                 failed_workers_logged = set()
                 last_plain_print_ts = 0.0
                 last_plain_snapshot = None
-                while any(p.is_alive() for p in processes) or (
-                    status_dict and any(info.get("worker_id") is not None for info in status_dict.values())
-                ):
+                manager_dead = False
+                last_heartbeat_ts = 0.0
+                while True:
+                    # Exit when all worker processes have terminated
+                    if not any(p.is_alive() for p in processes):
+                        logger.info("All worker processes have terminated. Exiting monitoring loop.")
+                        break
+
+                    # When Manager is dead we lose status reporting but workers
+                    # (using independent multiprocessing.Queue) keep running.
+                    if manager_dead:
+                        time.sleep(1)
+                        continue
+
                     # --- SCHEDULING LOGIC ---
                     if not shutdown_sent:
                         # 1. Update Assigned Tasks (Check completion)
-                        # Make a copy of keys to modify dict
                         for wid in list(assigned_tasks.keys()):
                             pid = assigned_tasks[wid]
-                            info = status_dict.get(pid)
+                            info = _safe_status_read(status_dict, pid)
                             if info:
                                 status = info.get("status", "")
-                                # Check for terminal states
                                 if (
                                     status.startswith("Completed")
                                     or status.startswith("Error")
@@ -1297,9 +1359,7 @@ def run_parallel(args):
                         # 2. Assign New Tasks to Idle Workers
                         idle_workers = []
                         for i in range(args.parallel):
-                            # Worker must be running, not assigned a task, and not failed
                             if (i not in assigned_tasks) and (i not in failed_workers_logged):
-                                # Verify process is alive
                                 if processes[i].is_alive():
                                     idle_workers.append(i)
 
@@ -1317,8 +1377,11 @@ def run_parallel(args):
 
                         # 4. Check Termination
                         if not pending_problems and not assigned_tasks:
-                            # Done!
-                            logger.info("All tasks completed or assigned. Sending shutdown signals.")
+                            logger.info(
+                                "All tasks completed or assigned. Sending shutdown signals. "
+                                f"pending={len(pending_problems)} assigned={dict(assigned_tasks)} "
+                                f"alive_workers={[i for i in range(args.parallel) if processes[i].is_alive()]}"
+                            )
                             for q in worker_queues:
                                 q.put(None)
                             shutdown_sent = True
@@ -1329,7 +1392,7 @@ def run_parallel(args):
                     active_workers = set()
                     for idx in range(len(processes)):
                         p = processes[idx]
-                        wid = idx  # processes list is indexed by worker_id
+                        wid = idx
 
                         if p.is_alive():
                             active_workers.add(wid)
@@ -1342,21 +1405,25 @@ def run_parallel(args):
                                 failed_workers_logged.add(wid)
 
                             # Find problems assigned to this worker that are not terminal
-                            for pid, info in status_dict.items():
+                            try:
+                                sd_items = list(status_dict.items())
+                            except _MANAGER_PIPE_ERRORS:
+                                sd_items = []
+                            for pid, info in sd_items:
                                 if str(pid).startswith(WORKER_META_KEY_PREFIX):
                                     continue
                                 if info.get("worker_id") == wid:
-                                    status = info.get("status")
+                                    status = info.get("status", "")
                                     if not (
                                         status.startswith("Completed")
                                         or status in ["Error", "Skipped (Khaos Req)", "Error (Worker Died)"]
                                     ):
-                                        status_dict[pid] = {
+                                        _safe_status_update(status_dict, pid, {
                                             "status": "Error (Worker Died)",
-                                            "start_time": info["start_time"],
-                                            "elapsed": time.time() - info["start_time"],
+                                            "start_time": info.get("start_time", time.time()),
+                                            "elapsed": time.time() - info.get("start_time", time.time()),
                                             "worker_id": wid,
-                                        }
+                                        })
 
                             # Restart Logic: If there is still work to do, restart the worker
                             if pending_problems and not shutdown_sent:
@@ -1368,46 +1435,63 @@ def run_parallel(args):
                                 if wid in failed_workers_logged:
                                     failed_workers_logged.remove(wid)
 
-                                # Update status to indicate restart (helps UI)
                                 meta_key = _worker_meta_key(wid)
-                                status_dict[meta_key] = {
+                                _safe_status_update(status_dict, meta_key, {
                                     "status": "Restarting...",
                                     "start_time": time.time(),
                                     "elapsed": 0.0,
                                     "worker_id": wid,
-                                }
+                                })
 
-                                # Remove old process from map
                                 if p in worker_map:
                                     del worker_map[p]
 
-                                # Start new process
                                 new_p = multiprocessing.Process(
                                     target=worker_main,
                                     args=(args, wid, worker_queues[wid], experiment_log_dir, status_dict),
                                 )
                                 new_p.start()
 
-                                # Update references
                                 processes[idx] = new_p
                                 worker_map[new_p] = wid
                                 active_workers.add(wid)
 
+                    # --- PROGRESS DISPLAY ---
                     completed_count = 0
                     error_count = 0
                     skipped_count = 0
-
-                    # Track what each worker is doing
-                    # Initialize with None
                     current_worker_status = {i: None for i in range(args.parallel)}
 
-                    for pid, info in status_dict.items():
+                    try:
+                        sd_items = list(status_dict.items())
+                    except _MANAGER_PIPE_ERRORS:
+                        sd_items = []
+                        if not manager_dead:
+                            logger.warning("Manager pipe broken; dispatching remaining work and waiting for workers")
+                            manager_dead = True
+                            # Dispatch any remaining pending problems round-robin to workers
+                            # so they can finish without the supervisor's scheduling loop.
+                            if not shutdown_sent and pending_problems:
+                                alive_workers = [i for i in range(args.parallel) if processes[i].is_alive()]
+                                if alive_workers:
+                                    for pi, prob in enumerate(pending_problems):
+                                        wid = alive_workers[pi % len(alive_workers)]
+                                        worker_queues[wid].put(prob)
+                                    logger.info(f"Dispatched {len(pending_problems)} remaining problems to {len(alive_workers)} workers")
+                                pending_problems.clear()
+                            # Send shutdown sentinels AFTER all remaining work so workers
+                            # drain their queues before stopping.
+                            if not shutdown_sent:
+                                for q in worker_queues:
+                                    q.put(None)
+                                shutdown_sent = True
+
+                    for pid, info in sd_items:
                         if str(pid).startswith(WORKER_META_KEY_PREFIX):
                             continue
                         status = info.get("status", "Unknown")
                         wid = info.get("worker_id")
 
-                        # Counts for overall
                         if status.startswith("Completed"):
                             completed_count += 1
                         elif status in ["Error", "Error (Worker Died)"]:
@@ -1415,19 +1499,16 @@ def run_parallel(args):
                         elif status == "Skipped (Khaos Req)":
                             skipped_count += 1
 
-                        # Worker status (if active)
                         if wid is not None:
-                            # Check if this is an active state
                             is_active = not (
                                 status.startswith("Completed")
                                 or status in ["Error", "Skipped (Khaos Req)", "Error (Worker Died)"]
                             )
                             if is_active:
                                 start_t = info.get("start_time", time.time())
-                                display_pid = info.get("pid", str(pid))  # real pid from value, fallback to key
+                                display_pid = info.get("pid", str(pid))
                                 current_worker_status[wid] = (status, display_pid, start_t)
 
-                    # Update main task
                     finished_count = completed_count + error_count + skipped_count
                     status_text = f"[bold green]Overall Progress[/bold green] (Completed: [green]{completed_count}[/green], Errors: [red]{error_count}[/red]"
                     if skipped_count > 0:
@@ -1435,10 +1516,8 @@ def run_parallel(args):
                     status_text += ")"
                     progress.update(main_task, completed=finished_count, description=status_text)
 
-                    # Update worker tasks
                     for i in range(args.parallel):
                         if i not in active_workers:
-                            # Worker is dead or finished
                             progress.update(
                                 worker_tasks[i], description=f"Worker {i}: [dim]Finished[/dim]", completed=100
                             )
@@ -1446,7 +1525,6 @@ def run_parallel(args):
                             status, pid, start_t = current_worker_status[i]
                             elapsed = int(time.time() - start_t)
 
-                            # Map status to approximate progress
                             completed_pct = 0
                             if status == "Deploying App":
                                 completed_pct = 10
@@ -1472,8 +1550,7 @@ def run_parallel(args):
                             desc = f"Worker {i}: [cyan]{escape(str(pid))}[/cyan] - {escape(str(status))} [yellow]({elapsed}s)[/yellow]"
                             progress.update(worker_tasks[i], description=desc, completed=completed_pct)
                         else:
-                            # Worker is alive but idle (or between tasks)
-                            meta = status_dict.get(_worker_meta_key(i))
+                            meta = _safe_status_read(status_dict, _worker_meta_key(i))
                             if meta and meta.get("status"):
                                 start_t = meta.get("start_time", time.time())
                                 elapsed = int(time.time() - start_t)
@@ -1508,8 +1585,16 @@ def run_parallel(args):
                             last_plain_snapshot = snapshot
                             last_plain_print_ts = now_ts
 
-                    if not any(p.is_alive() for p in processes):
-                        break
+                    # Periodic heartbeat log (every 30s) for post-mortem debugging
+                    now_ts = time.time()
+                    if now_ts - last_heartbeat_ts >= 30:
+                        alive = [i for i in range(args.parallel) if processes[i].is_alive()]
+                        logger.debug(
+                            f"[heartbeat] alive_workers={alive} pending={len(pending_problems)} "
+                            f"assigned={dict(assigned_tasks)} shutdown_sent={shutdown_sent} "
+                            f"manager_dead={manager_dead}"
+                        )
+                        last_heartbeat_ts = now_ts
 
                     time.sleep(0.5)
 
@@ -1525,7 +1610,28 @@ def run_parallel(args):
                     logger_obj.addHandler(h)
 
     except KeyboardInterrupt:
-        logger.info("\n🛑 Interrupted by user. Terminating workers...")
+        logger.info("\n🛑 Interrupted by user (Ctrl-C). Sending shutdown to workers...")
+        if not shutdown_sent:
+            for q in worker_queues:
+                q.put(None)
+            shutdown_sent = True
+    except Exception:
+        logger.error("Supervisor monitoring loop crashed:", exc_info=True)
+        # Dispatch remaining work to workers before dying so they can finish
+        if not shutdown_sent:
+            try:
+                alive_workers = [i for i in range(args.parallel) if processes[i].is_alive()]
+                if alive_workers and pending_problems:
+                    for pi, prob in enumerate(pending_problems):
+                        wid = alive_workers[pi % len(alive_workers)]
+                        worker_queues[wid].put(prob)
+                    logger.info(f"Dispatched {len(pending_problems)} remaining problems to {len(alive_workers)} workers")
+                    pending_problems.clear()
+                for q in worker_queues:
+                    q.put(None)
+                shutdown_sent = True
+            except Exception:
+                logger.error("Failed to dispatch remaining work:", exc_info=True)
 
     finally:
         pass  # Nothing to restore here anymore
@@ -1540,12 +1646,10 @@ def run_parallel(args):
 
     for p in processes:
         if p.is_alive():
-            logger.warning(f"Worker {worker_map.get(p)} did not exit, killing process tree...")
-            _kill_process_tree(p.pid, signal.SIGTERM)
+            logger.warning(f"Worker {worker_map.get(p)} did not exit, force-killing process tree...")
+            # Workers ignore SIGTERM, so go straight to SIGKILL
+            _kill_process_tree(p.pid, signal.SIGKILL)
             p.join(timeout=2)
-            if p.is_alive():
-                _kill_process_tree(p.pid, signal.SIGKILL)
-                p.join(timeout=1)
         else:
             p.join()
 
