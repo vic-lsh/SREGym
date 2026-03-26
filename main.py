@@ -1,7 +1,6 @@
 import argparse
 import asyncio
 import csv
-import fcntl
 import glob
 import json
 import logging
@@ -73,15 +72,6 @@ def agent_supports_summary(agent_name: str) -> bool:
 
 KIND_CLUSTER_PREFIX = "sregym-w"
 WORKER_META_KEY_PREFIX = "__worker_meta__"
-OPENEBS_PRELOAD_IMAGES = [
-    "openebs/node-disk-manager:2.1.0",
-    "openebs/node-disk-exporter:2.1.0",
-    "openebs/node-disk-operator:2.1.0",
-    "openebs/provisioner-localpv:3.4.0",
-]
-PRELOAD_IMAGE_ENV_VAR = "SREGYM_PRELOAD_IMAGES"
-PRELOAD_IMAGE_PATTERN = re.compile(r"^\s*image:\s*['\"]?([^'\"\s]+)['\"]?\s*$", re.MULTILINE)
-
 # Resource limits for parallel execution
 # Calibrated based on container count (1 core per container).
 # Social Network: ~27 containers -> 27 units
@@ -730,161 +720,6 @@ def _worker_kind_config_path() -> str:
     return os.path.abspath(os.path.join("kind", config_name))
 
 
-def _should_preload_infra_images() -> bool:
-    return os.getenv("SREGYM_PRELOAD_INFRA_IMAGES", "1").strip().lower() not in {"0", "false", "no"}
-
-
-def _extract_images_from_text(text: str) -> set[str]:
-    images: set[str] = set()
-    for match in PRELOAD_IMAGE_PATTERN.findall(text):
-        image = match.strip()
-        if not image or "{{" in image or "}}" in image:
-            continue
-        images.add(image)
-    return images
-
-
-def _iter_yaml_files(root_path: Path):
-    if not root_path.exists():
-        return
-    for suffix in ("*.yaml", "*.yml"):
-        for file_path in root_path.rglob(suffix):
-            if not file_path.is_file():
-                continue
-            yield file_path
-
-
-def _collect_images_from_yaml_path(path: Path) -> set[str]:
-    images: set[str] = set()
-    if not path.exists():
-        return images
-
-    if path.is_file():
-        candidates = [path]
-    else:
-        candidates = list(_iter_yaml_files(path))
-
-    for file_path in candidates:
-        try:
-            text = file_path.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            continue
-        images.update(_extract_images_from_text(text))
-    return images
-
-
-def _collect_images_from_helm_chart(chart_path: Path) -> set[str]:
-    if not chart_path.exists():
-        return set()
-
-    rendered = subprocess.run(
-        ["helm", "template", "sregym-preload-scan", str(chart_path), "--include-crds"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if rendered.returncode == 0 and rendered.stdout:
-        return _extract_images_from_text(rendered.stdout)
-
-    logger.warning(f"Helm template failed for preload scan ({chart_path}), falling back to static YAML scan.")
-    return _collect_images_from_yaml_path(chart_path)
-
-
-def _discover_benchmark_images() -> list[str]:
-    metadata_root = Path("sregym/service/metadata")
-    benchmark_images: set[str] = set()
-
-    if metadata_root.exists():
-        for metadata_file in metadata_root.glob("*.json"):
-            try:
-                metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-
-            helm_cfg = metadata.get("Helm Config") or {}
-            chart_path = helm_cfg.get("chart_path")
-            if chart_path and not helm_cfg.get("remote_chart", False):
-                local_chart_path = Path("SREGym-applications") / chart_path
-                benchmark_images.update(_collect_images_from_helm_chart(local_chart_path))
-
-            for key in ("K8S Deploy Path", "K8S Workload Job Path"):
-                deploy_path = metadata.get(key)
-                if deploy_path:
-                    local_path = Path("SREGym-applications") / deploy_path
-                    benchmark_images.update(_collect_images_from_yaml_path(local_path))
-
-    # Infra resources used by multiple problems.
-    benchmark_images.update(_collect_images_from_yaml_path(Path("sregym/service/khaos.yaml")))
-    benchmark_images.update(_collect_images_from_yaml_path(Path("sregym/observer/prometheus")))
-
-    return sorted(benchmark_images)
-
-
-def _get_preload_images() -> list[str]:
-    override = os.getenv(PRELOAD_IMAGE_ENV_VAR, "").strip()
-    if not override:
-        discovered = _discover_benchmark_images()
-        # Persist the resolved list so worker processes reuse the exact same image set.
-        images = sorted(set(OPENEBS_PRELOAD_IMAGES).union(discovered))
-        os.environ[PRELOAD_IMAGE_ENV_VAR] = ",".join(images)
-        return images
-    images = [img.strip() for img in override.split(",") if img.strip()]
-    return images if images else OPENEBS_PRELOAD_IMAGES
-
-
-def _docker_image_exists(image: str) -> bool:
-    result = subprocess.run(
-        ["docker", "image", "inspect", image],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        text=True,
-    )
-    return result.returncode == 0
-
-
-def _docker_pull_with_retries(image: str) -> bool:
-    retries = int(os.getenv("SREGYM_IMAGE_PULL_RETRIES", "4"))
-    backoff = int(os.getenv("SREGYM_IMAGE_PULL_BACKOFF_SECONDS", "5"))
-
-    for attempt in range(1, retries + 1):
-        logger.info(f"Pulling image ({attempt}/{retries}): {image}")
-        result = subprocess.run(
-            ["docker", "pull", image],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
-            return True
-        if attempt < retries:
-            time.sleep(backoff * attempt)
-
-    logger.warning(f"Failed to pre-pull image: {image}")
-    return False
-
-
-def _prefetch_infra_images_once() -> None:
-    if not _should_preload_infra_images():
-        logger.info("Infra image preloading disabled via SREGYM_PRELOAD_INFRA_IMAGES.")
-        return
-
-    images = _get_preload_images()
-    if not images:
-        return
-    logger.info(f"Preloading benchmark images on host: {len(images)} image(s).")
-
-    # Cross-process lock to ensure only one process pulls shared images.
-    lock_path = os.path.join(tempfile.gettempdir(), "sregym-image-prefetch.lock")
-    with open(lock_path, "w") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        for image in images:
-            if _docker_image_exists(image):
-                logger.info(f"Image already cached: {image}")
-                continue
-            _docker_pull_with_retries(image)
-
-
 def _apply_worker_cpu_limit(cluster_name: str) -> None:
     """Apply per-node CPU cap to kind cluster containers if SREGYM_WORKER_CPU_LIMIT is set."""
     cpu_limit = os.getenv("SREGYM_WORKER_CPU_LIMIT", "").strip()
@@ -929,32 +764,6 @@ def _log_cpu_oversubscription(num_workers: int) -> None:
     )
     if ratio > 1.0:
         logger.warning(f"CPU is oversubscribed by {ratio:.2f}x — expect contention under load.")
-
-
-def _load_preloaded_images_into_cluster(cluster_name: str) -> None:
-    if not _should_preload_infra_images():
-        return
-
-    images = _get_preload_images()
-    logger.info(f"Loading pre-pulled benchmark images into cluster {cluster_name}: {len(images)} image(s).")
-    for image in images:
-        if not _docker_image_exists(image):
-            logger.warning(f"Skipping kind load for missing local image: {image}")
-            continue
-        try:
-            subprocess.run(
-                ["kind", "load", "docker-image", "--name", cluster_name, image],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            logger.info(f"Loaded cached image into {cluster_name}: {image}")
-        except subprocess.CalledProcessError as e:
-            logger.warning(f"Failed to load image into {cluster_name}: {image} ({e})")
-            logger.warning(f"Stdout: {e.stdout}")
-            logger.warning(f"Stderr: {e.stderr}")
-            # Continue loading other images; do not fail the cluster setup
-            pass
 
 
 def _build_kind_config_with_registry_auth(base_config_path: str, docker_user: str, docker_password: str) -> str:
@@ -1050,8 +859,6 @@ def _create_worker_cluster(worker_id: int, experiment_log_dir: str) -> tuple[str
     )
     if patched_config_path and os.path.exists(patched_config_path):
         os.unlink(patched_config_path)
-    _load_preloaded_images_into_cluster(cluster_name)
-
     _apply_worker_cpu_limit(cluster_name)
 
     os.environ["KUBECONFIG"] = kubeconfig_path
@@ -1387,7 +1194,6 @@ def run_parallel(args):
     # Heaviest first is usually better for packing, but we have a simple limit.
     # Let's keep original order or shuffle. Original order is fine.
 
-    _prefetch_infra_images_once()
     _log_cpu_oversubscription(args.parallel)
 
     processes = []
