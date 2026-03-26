@@ -60,11 +60,11 @@ class AgentLauncher:
         exp_env_dir = os.getenv("SREGYM_EXP_ENV", "exp_env")
         os.makedirs(exp_env_dir, exist_ok=True)
 
-        # Use start_new_session on Unix so we can kill the entire process group
-        # (agent may spawn child processes, e.g. Gemini CLI subprocesses)
-        start_new_session = sys.platform != "win32"
-        proc = subprocess.Popen(
-            command,
+        # Put agent in its own process group (so we can killpg() it and its
+        # children) but keep it in the same session as the terminal.  This way
+        # agents receive SIGHUP when the terminal is closed instead of
+        # becoming orphans — which happened with start_new_session=True.
+        popen_kwargs: dict = dict(
             shell=True,
             cwd=reg.kickoff_workdir or os.getcwd(),
             env=env,
@@ -73,8 +73,10 @@ class AgentLauncher:
             text=True,
             bufsize=1,
             universal_newlines=True,
-            start_new_session=start_new_session,
         )
+        if sys.platform != "win32":
+            popen_kwargs["process_group"] = 0
+        proc = subprocess.Popen(command, **popen_kwargs)
         ap = AgentProcess(reg.name, proc)
         self._procs[reg.name] = ap
         t = threading.Thread(target=self._pipe_logs, args=(reg.name, proc), daemon=True)

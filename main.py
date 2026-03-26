@@ -914,12 +914,14 @@ def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict)
     """Worker function for parallel execution."""
 
     def _shutdown_handler(signum, frame):
-        """On SIGTERM/SIGINT, clean up agent subprocesses before exiting."""
+        """On SIGTERM/SIGINT/SIGHUP, clean up agent subprocesses before exiting."""
         LAUNCHER.cleanup_all_agents(timeout=3)
         os._exit(0)
 
     signal.signal(signal.SIGTERM, _shutdown_handler)
     signal.signal(signal.SIGINT, _shutdown_handler)
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, _shutdown_handler)
 
     os.environ["SREGYM_WORKER_ID"] = str(worker_id)
     os.environ["API_PORT"] = str(8000 + worker_id)
