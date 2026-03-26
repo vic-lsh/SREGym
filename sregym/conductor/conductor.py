@@ -27,8 +27,9 @@ from sregym.service.telemetry.prometheus import Prometheus
 
 
 class Conductor:
-    def __init__(self):
+    def __init__(self, tasklist_path: str | None = None):
         self.base_kubeconfig = require_kubeconfig_path()
+        self._tasklist_path = tasklist_path
 
         # core services
         self.problems = ProblemRegistry()
@@ -118,8 +119,11 @@ class Conductor:
                 raise RuntimeError(f"[❌] Required dependency '{b}' not found.")
 
     def get_problem_stages(self):
-        file_dir = Path(__file__).resolve().parent
-        tasklist_path = file_dir / "tasklist.yml"
+        if self._tasklist_path:
+            tasklist_path = Path(self._tasklist_path)
+        else:
+            file_dir = Path(__file__).resolve().parent
+            tasklist_path = file_dir / "tasklist.yml"
 
         # If tasklist file doesn't exist, default to running diagnosis + mitigation
         if not tasklist_path.exists():

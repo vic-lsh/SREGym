@@ -263,21 +263,24 @@ class ProblemRegistry:
     def get_problem(self, problem_id: str):
         return self.PROBLEM_REGISTRY.get(problem_id)
 
-    def get_problem_ids(self, task_type: str = None, all: bool = False):
+    def get_problem_ids(self, task_type: str = None, all: bool = False, tasklist_path: str = None):
         if task_type:
             return [k for k in self.PROBLEM_REGISTRY.keys() if task_type in k]
         if all:
             return list(self.PROBLEM_REGISTRY.keys())
 
         # by default, only run problems defined in tasklist.yml
-        file_dir = Path(__file__).parent.parent
-        tasklist_path = file_dir / "tasklist.yml"
+        if tasklist_path:
+            tl_path = Path(tasklist_path)
+        else:
+            file_dir = Path(__file__).parent.parent
+            tl_path = file_dir / "tasklist.yml"
 
-        if not tasklist_path.exists():
+        if not tl_path.exists():
             # if tasklist.yml does not exist, run all the problems
             return list(self.PROBLEM_REGISTRY.keys())
 
-        with open(tasklist_path, "r") as f:
+        with open(tl_path, "r") as f:
             tasklist = yaml.safe_load(f)
         return list(tasklist["all"]["problems"].keys())
 

@@ -1196,10 +1196,12 @@ def run_parallel(args):
     registry = ProblemRegistry()
     # Use the same logic as conductor to get problem IDs
     # If args.problem is set, run only that (but parallel doesn't make much sense unless repeat > 1)
+    tasklist_path = getattr(args, "tasklist", None)
+
     if args.problem:
         all_problems = [args.problem]
     else:
-        all_problems = registry.get_problem_ids()
+        all_problems = registry.get_problem_ids(tasklist_path=tasklist_path)
         # tasklist.yml may contain stale problem IDs; filter early to avoid runtime failures in workers
         all_problem_ids = set(registry.get_problem_ids(all=True))
         unknown_problem_ids = sorted(set(all_problems) - all_problem_ids)
@@ -1211,20 +1213,17 @@ def run_parallel(args):
         logger.error("No problems found to run.")
         sys.exit(1)
 
-    # Create shared experiment log directory
-    if args.resume_last:
-        latest = get_latest_log_dir()
-        if not latest:
-            logger.error("No previous log directory found to resume from.")
-            sys.exit(1)
-        experiment_log_dir = latest
-        logger.info(f"Resuming experiment from latest: {experiment_log_dir}")
-    elif args.resume_from:
-        experiment_log_dir = os.path.abspath(args.resume_from)
-        if not os.path.exists(experiment_log_dir):
-            logger.error(f"Resume directory {experiment_log_dir} does not exist.")
-            sys.exit(1)
-        logger.info(f"Resuming experiment from: {experiment_log_dir}")
+    # Create or reuse experiment log directory
+    is_resuming = False
+    if args.experiment_dir:
+        experiment_log_dir = os.path.abspath(args.experiment_dir)
+        if os.path.exists(experiment_log_dir):
+            # Auto-resume: existing dir with results
+            is_resuming = True
+            logger.info(f"Resuming experiment from: {experiment_log_dir}")
+        else:
+            os.makedirs(experiment_log_dir, exist_ok=True)
+            logger.info(f"Experiment logs will be stored in: {experiment_log_dir}")
     else:
         session_timestamp = get_current_datetime_formatted()
         os.makedirs("logs", exist_ok=True)
@@ -1233,8 +1232,9 @@ def run_parallel(args):
             dir_name = f"{session_timestamp}_{args.agent}"
         experiment_log_dir = os.path.abspath(f"logs/{dir_name}")
         os.makedirs(experiment_log_dir, exist_ok=True)
-        logger.info(f"Parallel experiment logs will be stored in: {experiment_log_dir}")
+        logger.info(f"Experiment logs will be stored in: {experiment_log_dir}")
 
+    if not is_resuming:
         # Copy seed summary into agent summary dir
         if args.seed_summary:
             agent_kb_dir = os.path.join(experiment_log_dir, "kb")
@@ -1249,6 +1249,7 @@ def run_parallel(args):
                 logger.info(f"Copied operational lessons to {dest_lessons}")
 
         # Set log file for parallel runner
+        session_timestamp = get_current_datetime_formatted()
         log_file_path = os.path.join(experiment_log_dir, f"sregym_supervisor_{session_timestamp}.log")
         os.environ["SREGYM_LOG_FILE"] = log_file_path
         init_logger()
@@ -1305,7 +1306,6 @@ def run_parallel(args):
 
     elif getattr(args, "sequence_len", 0) > 0:
         sequence_state_path = os.path.join(experiment_log_dir, "sequence_state.json")
-        is_resuming = args.resume_last or args.resume_from
 
         if is_resuming and os.path.exists(sequence_state_path):
             # Load existing sequence state
@@ -1358,7 +1358,7 @@ def run_parallel(args):
     if sequence is not None:
         # Build pending list with (seq_idx, pid) tuples for queue-based dispatch
         problems_to_run = [(idx, pid) for idx, pid in enumerate(sequence) if idx >= sequence_start_idx]
-    elif args.resume_last or args.resume_from:
+    elif is_resuming:
         agent_to_run = args.agent
         for pid in all_problems:
             completed_iterations = 0
@@ -1756,19 +1756,8 @@ def main(
     os.makedirs("logs", exist_ok=True)
 
     if experiment_log_dir is None:
-        if args.resume_last:
-            latest = get_latest_log_dir()
-            if not latest:
-                logger.error("No previous log directory found to resume from.")
-                sys.exit(1)
-            experiment_log_dir = latest
-            logger.info(f"Resuming experiment from latest: {experiment_log_dir}")
-        elif getattr(args, "resume_from", None):
-            experiment_log_dir = os.path.abspath(args.resume_from)
-            if not os.path.exists(experiment_log_dir):
-                logger.error(f"Resume directory {experiment_log_dir} does not exist.")
-                sys.exit(1)
-            logger.info(f"Resuming experiment from: {experiment_log_dir}")
+        if getattr(args, "experiment_dir", None):
+            experiment_log_dir = os.path.abspath(args.experiment_dir)
         else:
             # Create experiment directory
             dir_name = session_timestamp
@@ -1815,7 +1804,7 @@ def main(
     os.environ["KUBECONFIG"] = base_kubeconfig
     os.environ["SREGYM_BASE_KUBECONFIG"] = base_kubeconfig
 
-    conductor = Conductor()
+    conductor = Conductor(tasklist_path=getattr(args, "tasklist", None))
 
     # Start the driver in the background; it will call request_shutdown() when finished
     driver_thread = threading.Thread(
@@ -1952,15 +1941,17 @@ if __name__ == "__main__":
         "Useful to use a different model for evaluation, e.g. 'gpt-4o'.",
     )
     parser.add_argument(
-        "--resume-from",
+        "--experiment-dir",
         type=str,
         default=None,
-        help="Resume experiment from an existing log directory (skips completed problems)",
+        help="Explicit experiment directory. If it exists and has results, "
+             "auto-resume (skip completed problems). If it doesn't exist, create it.",
     )
     parser.add_argument(
-        "--resume-last",
-        action="store_true",
-        help="Resume experiment from the most recent log directory",
+        "--tasklist",
+        type=str,
+        default=None,
+        help="Path to a tasklist YAML file (overrides the default sregym/conductor/tasklist.yml)",
     )
     parser.add_argument(
         "--seed-summary",
@@ -2032,8 +2023,8 @@ if __name__ == "__main__":
 
     # Validate --seed-summary
     if args.seed_summary:
-        if args.resume_last or args.resume_from:
-            parser.error("--seed-summary cannot be combined with --resume-last or --resume-from")
+        if args.experiment_dir and os.path.exists(args.experiment_dir):
+            parser.error("--seed-summary cannot be combined with resuming an existing --experiment-dir")
         seed_path = Path(args.seed_summary)
         if not seed_path.is_file():
             parser.error(f"--seed-summary: path does not exist or is not a file: {args.seed_summary}")
