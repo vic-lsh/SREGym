@@ -62,7 +62,7 @@ AGENT_OUTPUT_FILES = {"gemini_cli": "gemini-cli.txt", "claudecode": "claude-code
 
 # Agents with a built-in long-term summary system (no external summarizer subprocess needed).
 # They accept --summary-dir and --summary-model CLI args.
-AGENT_LT_SUMMARY = {"crucible"}
+AGENT_LT_SUMMARY = {"crucible", "crucible_deepagents", "crucible_simple"}
 
 
 def agent_supports_summary(agent_name: str) -> bool:
