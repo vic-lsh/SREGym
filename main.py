@@ -579,6 +579,15 @@ def driver_loop(
                             f"⚠️  Problem {pid} for agent {agent_to_run} finished with agent crash "
                             f"(exit {agent_exit_code})! Results written to {csv_path}"
                         )
+                        _info = _safe_status_read(status_dict, seq_key, {})
+                        _st = _info.get("start_time", time.time()) if isinstance(_info, dict) else time.time()
+                        _safe_status_update(status_dict, seq_key, {
+                            "status": "Error",
+                            "pid": pid,
+                            "start_time": _st,
+                            "elapsed": time.time() - _st,
+                            "worker_id": worker_id,
+                        })
                     else:
                         logger.info(
                             f"✅ Problem {pid} for agent {agent_to_run} complete! Results written to {csv_path}"
