@@ -1719,6 +1719,8 @@ def main(
     os.environ["MODEL_ID"] = args.model
     if getattr(args, "judge_model", None):
         os.environ["JUDGE_MODEL_ID"] = args.judge_model
+    os.environ["JUDGE_NUM_ROUNDS"] = str(args.judge_rounds)
+    os.environ["JUDGE_VOTING_TEMPERATURE"] = str(args.judge_voting_temperature)
 
     # Enforce explicit kubeconfig selection for every process and worker.
     base_kubeconfig = require_kubeconfig_path()
@@ -1860,6 +1862,19 @@ if __name__ == "__main__":
         default=None,
         help="Model ID for the LLM-as-a-judge (default: same as --model / MODEL_ID). "
         "Useful to use a different model for evaluation, e.g. 'gpt-4o'.",
+    )
+    parser.add_argument(
+        "--judge-rounds",
+        type=int,
+        default=3,
+        help="Number of LLM judge rounds for majority voting (default: 3).",
+    )
+    parser.add_argument(
+        "--judge-voting-temperature",
+        type=float,
+        default=0.7,
+        help="Temperature for judge voting rounds (default: 0.7). "
+        "Higher values increase diversity between rounds.",
     )
     parser.add_argument(
         "--experiment-dir",
