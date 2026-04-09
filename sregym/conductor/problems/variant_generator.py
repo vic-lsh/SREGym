@@ -116,6 +116,35 @@ def generate_all_variants(specs: list[VariantSpec]) -> dict[str, Callable]:
     return all_variants
 
 
+def filter_variant_ids_by_spec(
+    variant_ids: list[str],
+    spec_names: list[str],
+    known_base_names: set[str],
+) -> list[str]:
+    """Filter variant IDs to those whose spec base_name is in ``spec_names``.
+
+    Args:
+        variant_ids: Pool of variant IDs (each containing the ``__v_`` separator).
+        spec_names: Spec base_names to keep.
+        known_base_names: All valid base_names, used to validate ``spec_names``.
+
+    Returns:
+        Subset of ``variant_ids`` whose base_name (text before ``__v_``) is in
+        ``spec_names``.
+
+    Raises:
+        ValueError: If any name in ``spec_names`` is not in ``known_base_names``.
+    """
+    unknown = [n for n in spec_names if n not in known_base_names]
+    if unknown:
+        raise ValueError(
+            f"Unknown variant spec name(s): {unknown}. "
+            f"Valid names: {sorted(known_base_names)}"
+        )
+    selected = set(spec_names)
+    return [vid for vid in variant_ids if vid.split("__v_")[0] in selected]
+
+
 def _group_by_class(variant_ids: list[str]) -> dict[str, list[str]]:
     """Group variant IDs by their base_name (problem class).
 
@@ -205,6 +234,82 @@ def generate_variant_stream_by_class(
         round_num += 1
 
     return result[offset:offset + count]
+
+
+def generate_variant_stream_grouped(
+    variant_ids: list[str],
+    count: int,
+    offset: int = 0,
+    seed: int = 42,
+    max_per_class: int | None = None,
+) -> list[str]:
+    """Generate a deterministic stream that drains one class before the next.
+
+    Within each epoch:
+      - The class order is shuffled with seed (seed + epoch).
+      - Each class's variants are shuffled with a per-class+epoch seed.
+      - Up to ``max_per_class`` variants per class are emitted (None = all
+        variants in the class).
+
+    When all classes have been drained, a new epoch begins (re-shuffled).
+    The epoch size is constant, so ``offset`` is handled by the same
+    ``divmod`` trick as ``generate_variant_stream``.
+
+    Args:
+        variant_ids: Pool of variant IDs to cycle through.
+        count: Number of problems to return.
+        offset: Starting position in the stream (default 0).
+        seed: Base seed for deterministic shuffling (default 42).
+        max_per_class: Optional cap on how many variants to emit per class
+            within a single epoch. ``None`` means emit all of them.
+
+    Returns:
+        List of ``count`` variant IDs from the stream starting at ``offset``.
+
+    Raises:
+        ValueError: If variant_ids is empty, count <= 0, or
+            max_per_class is not None and not > 0.
+    """
+    if not variant_ids:
+        raise ValueError("variant_ids must not be empty")
+    if count <= 0:
+        raise ValueError("count must be > 0")
+    if max_per_class is not None and max_per_class <= 0:
+        raise ValueError("max_per_class must be > 0 or None")
+
+    groups = _group_by_class(variant_ids)
+    class_names = sorted(groups.keys())
+
+    def _per_class_take(name: str) -> int:
+        size = len(groups[name])
+        return min(size, max_per_class) if max_per_class is not None else size
+
+    epoch_size = sum(_per_class_take(name) for name in class_names)
+
+    start_epoch, start_pos = divmod(offset, epoch_size)
+    result: list[str] = []
+    epoch = start_epoch
+    pos_in_epoch = start_pos
+
+    while len(result) < count:
+        # Build this epoch's full sequence deterministically.
+        rng = random.Random(seed + epoch)
+        round_order = class_names.copy()
+        rng.shuffle(round_order)
+
+        epoch_sequence: list[str] = []
+        for name in round_order:
+            cls_rng = random.Random(seed + _stable_hash(name) + epoch)
+            cls_order = groups[name].copy()
+            cls_rng.shuffle(cls_order)
+            epoch_sequence.extend(cls_order[: _per_class_take(name)])
+
+        take = min(count - len(result), len(epoch_sequence) - pos_in_epoch)
+        result.extend(epoch_sequence[pos_in_epoch:pos_in_epoch + take])
+        epoch += 1
+        pos_in_epoch = 0
+
+    return result
 
 
 def generate_variant_stream(

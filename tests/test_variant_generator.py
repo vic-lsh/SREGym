@@ -93,6 +93,8 @@ generate_variants = _vg_mod.generate_variants
 generate_all_variants = _vg_mod.generate_all_variants
 generate_variant_stream = _vg_mod.generate_variant_stream
 generate_variant_stream_by_class = _vg_mod.generate_variant_stream_by_class
+generate_variant_stream_grouped = _vg_mod.generate_variant_stream_grouped
+filter_variant_ids_by_spec = _vg_mod.filter_variant_ids_by_spec
 
 _ensure_app_stubs()
 _vu_mod = _load_module("variant_utils", _PROBLEMS_DIR / "variant_utils.py")
@@ -576,3 +578,232 @@ class TestGenerateVariantStreamByClass:
         stream = generate_variant_stream_by_class(ids, count=5, seed=42)
         assert len(stream) == 5
         assert set(stream) == {f"solo__v_{i}" for i in range(5)}
+
+
+# ---------------------------------------------------------------------------
+# Tests: generate_variant_stream_grouped (drain one class before the next)
+# ---------------------------------------------------------------------------
+
+class TestGenerateVariantStreamGrouped:
+    """Tests for the grouped-by-class variant stream."""
+
+    @staticmethod
+    def _make_ids(class_counts: dict[str, int]) -> list[str]:
+        ids = []
+        for cls, n in class_counts.items():
+            for i in range(n):
+                ids.append(f"{cls}__v_{i}")
+        return ids
+
+    @staticmethod
+    def _classes_of(stream: list[str]) -> list[str]:
+        return [v.split("__v_")[0] for v in stream]
+
+    def test_drains_one_class_before_next(self):
+        """With max_per_class=None, all of one class appears before another starts."""
+        ids = self._make_ids({"alpha": 3, "beta": 4, "gamma": 2})
+        # One full epoch = 3 + 4 + 2 = 9 entries
+        stream = generate_variant_stream_grouped(ids, count=9, seed=42)
+        assert len(stream) == 9
+        classes = self._classes_of(stream)
+        # Each class appears in a single contiguous block (3 distinct blocks total)
+        block_starts = [
+            i for i in range(len(classes)) if i == 0 or classes[i] != classes[i - 1]
+        ]
+        assert len(block_starts) == 3, f"expected 3 contiguous blocks, got: {classes}"
+        # Every variant of each class is present in its block
+        for cls, n in {"alpha": 3, "beta": 4, "gamma": 2}.items():
+            block = [v for v in stream if v.startswith(f"{cls}__v_")]
+            assert set(block) == {f"{cls}__v_{i}" for i in range(n)}
+
+    def test_max_per_class_caps_block_size(self):
+        """With max_per_class=2 and a 5-variant class, only 2 are emitted per epoch."""
+        ids = self._make_ids({"big": 5, "other": 5})
+        # epoch_size = min(5,2) + min(5,2) = 4
+        stream = generate_variant_stream_grouped(
+            ids, count=4, seed=42, max_per_class=2
+        )
+        big_in_epoch = [v for v in stream if v.startswith("big__v_")]
+        other_in_epoch = [v for v in stream if v.startswith("other__v_")]
+        assert len(big_in_epoch) == 2
+        assert len(other_in_epoch) == 2
+        # Within the epoch, the two classes appear in contiguous blocks.
+        classes = self._classes_of(stream)
+        boundary = [
+            i for i in range(len(classes)) if i == 0 or classes[i] != classes[i - 1]
+        ]
+        assert len(boundary) == 2
+
+    def test_max_per_class_larger_than_group(self):
+        """If max_per_class > class size, only the available variants are emitted."""
+        ids = self._make_ids({"tiny": 2, "huge": 10})
+        # epoch_size = min(2,5) + min(10,5) = 2 + 5 = 7
+        stream = generate_variant_stream_grouped(
+            ids, count=7, seed=42, max_per_class=5
+        )
+        tiny_in_epoch = [v for v in stream if v.startswith("tiny__v_")]
+        huge_in_epoch = [v for v in stream if v.startswith("huge__v_")]
+        assert len(tiny_in_epoch) == 2
+        assert set(tiny_in_epoch) == {"tiny__v_0", "tiny__v_1"}
+        assert len(huge_in_epoch) == 5
+
+    def test_class_order_shuffled_per_epoch(self):
+        """Different epochs should generally yield different class orderings."""
+        ids = self._make_ids({"a": 2, "b": 2, "c": 2})
+        # epoch_size = 6, so two epochs = 12
+        stream = generate_variant_stream_grouped(ids, count=12, seed=42)
+        classes = self._classes_of(stream)
+        epoch1_starts = [classes[0], classes[2], classes[4]]
+        epoch2_starts = [classes[6], classes[8], classes[10]]
+        # Class blocks should appear within each epoch (each set is the full set)
+        assert set(epoch1_starts) == {"a", "b", "c"}
+        assert set(epoch2_starts) == {"a", "b", "c"}
+
+    def test_deterministic(self):
+        ids = self._make_ids({"a": 3, "b": 4, "c": 2})
+        s1 = generate_variant_stream_grouped(ids, count=15, seed=42)
+        s2 = generate_variant_stream_grouped(ids, count=15, seed=42)
+        assert s1 == s2
+
+    def test_different_seed_different_order(self):
+        ids = self._make_ids({"a": 3, "b": 4, "c": 2})
+        s1 = generate_variant_stream_grouped(ids, count=15, seed=42)
+        s2 = generate_variant_stream_grouped(ids, count=15, seed=99)
+        assert s1 != s2
+
+    def test_offset_is_prefix_skip(self):
+        ids = self._make_ids({"a": 3, "b": 4, "c": 2})
+        full = generate_variant_stream_grouped(ids, count=12, offset=0, seed=42)
+        tail = generate_variant_stream_grouped(ids, count=6, offset=6, seed=42)
+        assert full[6:] == tail
+
+    def test_offset_across_epochs(self):
+        ids = self._make_ids({"x": 2, "y": 2})
+        # epoch_size = 4
+        full = generate_variant_stream_grouped(ids, count=10, offset=0, seed=42)
+        tail = generate_variant_stream_grouped(ids, count=5, offset=5, seed=42)
+        assert full[5:] == tail
+
+    def test_offset_with_max_per_class(self):
+        ids = self._make_ids({"a": 5, "b": 5})
+        full = generate_variant_stream_grouped(
+            ids, count=12, offset=0, seed=42, max_per_class=3
+        )
+        tail = generate_variant_stream_grouped(
+            ids, count=6, offset=6, seed=42, max_per_class=3
+        )
+        assert full[6:] == tail
+
+    def test_input_order_irrelevant(self):
+        ids1 = ["b__v_1", "a__v_0", "b__v_0", "a__v_1"]
+        ids2 = ["a__v_0", "a__v_1", "b__v_0", "b__v_1"]
+        s1 = generate_variant_stream_grouped(ids1, count=8, seed=42)
+        s2 = generate_variant_stream_grouped(ids2, count=8, seed=42)
+        assert s1 == s2
+
+    def test_empty_ids_raises(self):
+        with pytest.raises(ValueError, match="must not be empty"):
+            generate_variant_stream_grouped([], count=5)
+
+    def test_zero_count_raises(self):
+        with pytest.raises(ValueError, match="count must be > 0"):
+            generate_variant_stream_grouped(["a__v_0"], count=0)
+
+    def test_invalid_max_per_class_raises(self):
+        with pytest.raises(ValueError, match="max_per_class must be > 0"):
+            generate_variant_stream_grouped(
+                ["a__v_0"], count=1, max_per_class=0
+            )
+
+    def test_single_class_grouped(self):
+        """With one class, grouped is just a shuffled drain of that class."""
+        ids = self._make_ids({"solo": 5})
+        stream = generate_variant_stream_grouped(ids, count=5, seed=42)
+        assert len(stream) == 5
+        assert set(stream) == {f"solo__v_{i}" for i in range(5)}
+
+
+# ---------------------------------------------------------------------------
+# Tests: filter_variant_ids_by_spec
+# ---------------------------------------------------------------------------
+
+
+class TestFilterVariantIdsBySpec:
+    POOL = [
+        "readiness_probe_misconfiguration__v_social_network_user-service",
+        "readiness_probe_misconfiguration__v_hotel_reservation_frontend",
+        "missing_env_variable__v_astronomy_shop_frontend_CART_ADDR",
+        "missing_env_variable__v_astronomy_shop_frontend_PRODUCT_CATALOG_ADDR",
+        "wrong_dns_policy__v_social_network_user-service",
+    ]
+    KNOWN = {
+        "readiness_probe_misconfiguration",
+        "missing_env_variable",
+        "wrong_dns_policy",
+        "stale_coredns_config",
+    }
+
+    def test_single_spec_keeps_only_matching(self):
+        result = filter_variant_ids_by_spec(
+            self.POOL,
+            ["readiness_probe_misconfiguration"],
+            self.KNOWN,
+        )
+        assert result == [
+            "readiness_probe_misconfiguration__v_social_network_user-service",
+            "readiness_probe_misconfiguration__v_hotel_reservation_frontend",
+        ]
+
+    def test_multiple_specs_unioned(self):
+        result = filter_variant_ids_by_spec(
+            self.POOL,
+            ["readiness_probe_misconfiguration", "missing_env_variable"],
+            self.KNOWN,
+        )
+        assert set(result) == {
+            "readiness_probe_misconfiguration__v_social_network_user-service",
+            "readiness_probe_misconfiguration__v_hotel_reservation_frontend",
+            "missing_env_variable__v_astronomy_shop_frontend_CART_ADDR",
+            "missing_env_variable__v_astronomy_shop_frontend_PRODUCT_CATALOG_ADDR",
+        }
+        # Order preserved from input pool.
+        assert result == [vid for vid in self.POOL if vid in set(result)]
+
+    def test_unknown_spec_raises(self):
+        with pytest.raises(ValueError, match="Unknown variant spec name"):
+            filter_variant_ids_by_spec(
+                self.POOL, ["totally_made_up_spec"], self.KNOWN,
+            )
+
+    def test_unknown_spec_message_lists_valid_names(self):
+        with pytest.raises(ValueError) as exc_info:
+            filter_variant_ids_by_spec(
+                self.POOL, ["nope"], self.KNOWN,
+            )
+        # Sorted list of known names should appear in the error.
+        for name in self.KNOWN:
+            assert name in str(exc_info.value)
+
+    def test_empty_spec_list_returns_empty(self):
+        assert filter_variant_ids_by_spec(self.POOL, [], self.KNOWN) == []
+
+    def test_spec_with_no_matching_ids_returns_empty(self):
+        # 'stale_coredns_config' is a known name but no IDs in the pool match.
+        assert filter_variant_ids_by_spec(
+            self.POOL, ["stale_coredns_config"], self.KNOWN,
+        ) == []
+
+    def test_works_with_real_specs(self):
+        """End-to-end: real spec names from variant_specs.py validate cleanly."""
+        all_specs = get_all_variant_specs()
+        all_variants = generate_all_variants(all_specs)
+        all_ids = list(all_variants.keys())
+        known = {spec.base_name for spec in all_specs}
+
+        result = filter_variant_ids_by_spec(
+            all_ids, ["readiness_probe_misconfiguration"], known,
+        )
+        assert len(result) > 0
+        assert all(
+            vid.startswith("readiness_probe_misconfiguration__v_") for vid in result
+        )

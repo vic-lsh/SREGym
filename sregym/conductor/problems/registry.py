@@ -70,7 +70,7 @@ from sregym.conductor.problems.workload_imbalance import WorkloadImbalance
 from sregym.conductor.problems.wrong_bin_usage import WrongBinUsage
 from sregym.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from sregym.conductor.problems.wrong_service_selector import WrongServiceSelector
-from sregym.conductor.problems.variant_generator import generate_all_variants
+from sregym.conductor.problems.variant_generator import filter_variant_ids_by_spec, generate_all_variants
 from sregym.conductor.problems.variant_specs import get_all_variant_specs
 from sregym.service.kubectl import KubeCtl
 
@@ -285,9 +285,17 @@ class ProblemRegistry:
         return list(tasklist["all"]["problems"].keys())
 
 
-    def get_variant_ids(self) -> list[str]:
-        """Return all auto-generated variant problem IDs (those containing '__v_')."""
-        return [pid for pid in self.PROBLEM_REGISTRY if "__v_" in pid]
+    def get_variant_ids(self, spec_names: list[str] | None = None) -> list[str]:
+        """Return auto-generated variant problem IDs (those containing '__v_').
+
+        If ``spec_names`` is given, restrict the result to variants whose
+        spec base_name appears in the list. Unknown names raise ValueError.
+        """
+        all_ids = [pid for pid in self.PROBLEM_REGISTRY if "__v_" in pid]
+        if spec_names is None:
+            return all_ids
+        known = {spec.base_name for spec in get_all_variant_specs()}
+        return filter_variant_ids_by_spec(all_ids, spec_names, known)
 
     def get_problem_count(self, task_type: str = None):
         if task_type:

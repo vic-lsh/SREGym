@@ -1120,35 +1120,50 @@ def run_parallel(args):
         from sregym.conductor.problems.variant_generator import (
             generate_variant_stream,
             generate_variant_stream_by_class,
+            generate_variant_stream_grouped,
         )
 
-        variant_ids = registry.get_variant_ids()
+        try:
+            variant_ids = registry.get_variant_ids(spec_names=args.variant_spec)
+        except ValueError as exc:
+            logger.error(str(exc))
+            sys.exit(1)
         if not variant_ids:
             logger.error("No variant problems found in registry.")
             sys.exit(1)
 
-        stream_fn = (generate_variant_stream_by_class
-                     if args.variant_round_robin
-                     else generate_variant_stream)
-        sequence = stream_fn(
+        stream_kwargs = dict(
             variant_ids=variant_ids,
             count=args.variant_count,
             offset=args.variant_offset,
             seed=args.variant_seed,
         )
+        if args.variant_order == "flat":
+            sequence = generate_variant_stream(**stream_kwargs)
+        elif args.variant_order == "round_robin":
+            sequence = generate_variant_stream_by_class(**stream_kwargs)
+        else:  # grouped
+            sequence = generate_variant_stream_grouped(
+                max_per_class=args.variant_max_per_class,
+                **stream_kwargs,
+            )
         variant_state_path = os.path.join(experiment_log_dir, "variant_state.json")
         with open(variant_state_path, "w") as f:
             json.dump({
                 "seed": args.variant_seed,
                 "offset": args.variant_offset,
                 "count": args.variant_count,
+                "order": args.variant_order,
+                "max_per_class": args.variant_max_per_class,
+                "variant_spec": args.variant_spec,
                 "total_variant_pool": len(variant_ids),
                 "sequence": sequence,
             }, f)
+        spec_filter_msg = f", spec_filter={args.variant_spec}" if args.variant_spec else ""
         logger.info(
             f"Variant stream: {len(sequence)} problems "
-            f"(offset={args.variant_offset}, seed={args.variant_seed}, "
-            f"pool={len(variant_ids)} variants)."
+            f"(order={args.variant_order}, offset={args.variant_offset}, "
+            f"seed={args.variant_seed}, pool={len(variant_ids)} variants{spec_filter_msg})."
         )
 
         # Determine start index by scanning for completed results
@@ -1932,11 +1947,28 @@ if __name__ == "__main__":
         help="Seed for deterministic variant stream ordering (default: 42)",
     )
     parser.add_argument(
-        "--variant-round-robin",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Interleave variants round-robin by problem class (default: True). "
-             "Use --no-variant-round-robin for flat epoch-based cycling.",
+        "--variant-order",
+        choices=["flat", "round_robin", "grouped"],
+        default="round_robin",
+        help="Variant stream ordering: flat=epoch shuffle of all variants, "
+             "round_robin=one per class per round (default), "
+             "grouped=drain one class before moving to the next.",
+    )
+    parser.add_argument(
+        "--variant-max-per-class",
+        type=int,
+        default=None,
+        help="When --variant-order=grouped, take at most N variants per class "
+             "before moving on. Default: take all.",
+    )
+    parser.add_argument(
+        "--variant-spec",
+        action="append",
+        default=None,
+        metavar="BASE_NAME",
+        help="Restrict variant generation to specific spec base_names "
+             "(e.g. readiness_probe_misconfiguration). Repeat the flag to "
+             "select multiple specs. Default: all specs.",
     )
     args = parser.parse_args()
 
@@ -1956,6 +1988,22 @@ if __name__ == "__main__":
             parser.error("--variants and --problem are mutually exclusive")
         if args.sequence_len > 0:
             parser.error("--variants and --sequence-len are mutually exclusive")
+        if args.variant_max_per_class is not None:
+            if args.variant_order != "grouped":
+                parser.error("--variant-max-per-class requires --variant-order=grouped")
+            if args.variant_max_per_class <= 0:
+                parser.error("--variant-max-per-class must be > 0")
+    if args.variant_spec and not args.variants:
+        parser.error("--variant-spec requires --variants")
+    if args.variant_spec:
+        from sregym.conductor.problems.variant_specs import get_all_variant_specs
+        known_specs = {spec.base_name for spec in get_all_variant_specs()}
+        unknown = [n for n in args.variant_spec if n not in known_specs]
+        if unknown:
+            parser.error(
+                f"--variant-spec: unknown spec name(s): {unknown}. "
+                f"Valid names: {sorted(known_specs)}"
+            )
 
     # Validate --seed-summary
     if args.seed_summary:
