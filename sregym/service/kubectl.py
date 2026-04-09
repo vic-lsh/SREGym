@@ -38,7 +38,9 @@ class KubeCtl:
             self.api_client = config.new_client_from_config(config_file=self.kubeconfig_path)
         except Exception as e:
             logger.error("Missing kubeconfig. Please set up a cluster.")
-            exit(1)
+            raise RuntimeError(
+                f"Failed to load kubeconfig from {self.kubeconfig_path}: {e}"
+            ) from e
         self.core_v1_api = client.CoreV1Api(self.api_client)
         self.apps_v1_api = client.AppsV1Api(self.api_client)
         self.custom_api = client.CustomObjectsApi(self.api_client)
