@@ -164,6 +164,7 @@ class LLMAsAJudgeOracle(Oracle):
                 "candidates": [],
                 "num_candidates": 0,
                 "matched_candidate": None,
+                "matched_candidate_index": None,
                 "per_candidate": [],
             }
 
@@ -178,6 +179,7 @@ class LLMAsAJudgeOracle(Oracle):
         try:
             per_candidate: list[dict] = []
             matched_candidate: str | None = None
+            matched_candidate_index: int | None = None
             winning_result: dict | None = None
 
             for idx, candidate in enumerate(candidates):
@@ -189,6 +191,7 @@ class LLMAsAJudgeOracle(Oracle):
 
                 if cand_result.get("success"):
                     matched_candidate = candidate
+                    matched_candidate_index = idx
                     winning_result = cand_result
                     # Short-circuit: any matching candidate is sufficient.
                     break
@@ -223,6 +226,7 @@ class LLMAsAJudgeOracle(Oracle):
             top_level["candidates"] = candidates
             top_level["num_candidates"] = len(candidates)
             top_level["matched_candidate"] = matched_candidate
+            top_level["matched_candidate_index"] = matched_candidate_index
             top_level["per_candidate"] = per_candidate
             return top_level
 
