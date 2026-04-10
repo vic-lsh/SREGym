@@ -1140,6 +1140,15 @@ def run_parallel(args):
             logger.warning(f"These problem IDs are not in the registry and will be skipped: {unknown_problem_ids}")
             all_problems = [pid for pid in all_problems if pid in all_problem_ids]
 
+    problem_specs = getattr(args, "problem_spec", None)
+    if problem_specs:
+        specs = set(problem_specs)
+        filtered = [p for p in all_problems if any(p == s or p.startswith(s + "_") for s in specs)]
+        unmatched = sorted(s for s in specs if not any(p == s or p.startswith(s + "_") for p in all_problems))
+        if unmatched:
+            logger.warning(f"--problem-spec: no problems matched spec(s): {unmatched}")
+        all_problems = filtered
+
     if not all_problems:
         logger.error("No problems found to run.")
         sys.exit(1)
@@ -2097,6 +2106,14 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Path to a tasklist YAML file (overrides the default sregym/conductor/tasklist.yml)",
+    )
+    parser.add_argument(
+        "--problem-spec",
+        action="append",
+        default=None,
+        metavar="SPEC_NAME",
+        help="Filter non-variant problems to those whose ID equals SPEC_NAME or starts with "
+             "SPEC_NAME_ (repeat the flag to include multiple specs).",
     )
     parser.add_argument(
         "--seed-summary",
