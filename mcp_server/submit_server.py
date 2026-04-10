@@ -18,11 +18,16 @@ mcp = FastMCP("Submission MCP Server")
 
 
 @mcp.tool(name="submit")
-def submit(ans: str) -> dict[str, str]:
-    """Submit task result to benchmark
+def submit(ans: str | list[str]) -> dict[str, str]:
+    """Submit task result to benchmark.
 
     Args:
-        ans (str): task result that the agent submits
+        ans: task result that the agent submits. May be a single string
+            (a single diagnosis/mitigation answer) or a list of candidate
+            diagnoses. When a list is provided, the benchmark grades the
+            submission as successful if its ground-truth matches *any*
+            candidate in the list — useful when the cluster exhibits
+            multiple plausible faults simultaneously.
 
     Returns:
         dict[str]: http response code and response text of benchmark submission server
@@ -33,8 +38,7 @@ def submit(ans: str) -> dict[str, str]:
     # FIXME: reference url from config file, remove hard coding
     url = langgraph_tool_config.benchmark_submit_url
     headers = {"Content-Type": "application/json"}
-    # Match curl behavior: send "\"yes\"" when ans is "yes"
-    payload = {"solution": f"{ans}"}
+    payload = {"solution": ans}
 
     try:
         response = requests.post(url, json=payload, headers=headers)

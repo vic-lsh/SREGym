@@ -2,6 +2,11 @@
 
 Supports multi-round evaluation with majority voting for improved reliability.
 Configure via JUDGE_NUM_ROUNDS (default 3) and JUDGE_VOTING_TEMPERATURE (default 0.7).
+
+Multi-diagnosis support: ``evaluate`` accepts either a single string or a list
+of candidate diagnoses. Each candidate is judged independently with the
+existing voting prompt; the oracle short-circuits on the first candidate
+that wins majority vote.
 """
 
 import json
@@ -47,6 +52,21 @@ class LLMAsAJudgeOracle(Oracle):
             max_tokens=max_tokens,
         )
 
+    def _to_candidates(self, solution) -> list[str]:
+        """Normalize ``solution`` into a list of candidate diagnosis strings.
+
+        Accepts a bare string (wrapped into a singleton list) or an iterable of
+        strings. Non-string elements are coerced via ``str``. Empty input is
+        returned as an empty list, signalling the caller to fail fast.
+        """
+        if isinstance(solution, str):
+            return [solution]
+        if isinstance(solution, list):
+            return [s if isinstance(s, str) else str(s) for s in solution]
+        # Unexpected type — coerce to a singleton stringified list with a warning.
+        print(f"⚠️  LLMAsAJudgeOracle: coercing {type(solution).__name__} solution to string")
+        return [str(solution)]
+
     def _run_single_round(self, round_idx: int, solution: str) -> dict:
         """Execute a single judge round."""
         try:
@@ -55,26 +75,14 @@ class LLMAsAJudgeOracle(Oracle):
         except Exception as e:
             return {"round": round_idx, "error": str(e)}
 
-    def evaluate(self, solution) -> dict:
-        print(f"== LLM-as-a-Judge Evaluation ({self.num_rounds} round(s)) ==")
-        results = {}
-
-        if not isinstance(solution, str):
-            solution = str(solution)
-
-        # Force lazy backend init and override temperature for voting diversity
-        original_temperature = None
-        if self.num_rounds > 1:
-            backend = self.judge.backend  # triggers lazy init
-            original_temperature = backend.temperature
-            backend.temperature = self.voting_temperature
-            print(f"   Voting temperature: {self.voting_temperature} (was {original_temperature})")
-
+    def _evaluate_single_candidate(self, candidate: str) -> dict:
+        """Run majority-vote judging for a single candidate diagnosis."""
+        result: dict = {}
         try:
             round_details = []
             with ThreadPoolExecutor(max_workers=self.num_rounds) as executor:
                 futures = {
-                    executor.submit(self._run_single_round, i, solution): i
+                    executor.submit(self._run_single_round, i, candidate): i
                     for i in range(self.num_rounds)
                 }
                 for future in as_completed(futures):
@@ -82,7 +90,6 @@ class LLMAsAJudgeOracle(Oracle):
 
             round_details.sort(key=lambda x: x["round"])
 
-            # Tally votes from successful rounds
             true_votes = sum(1 for r in round_details if r.get("judgment") == JudgmentResult.TRUE.value)
             false_votes = sum(1 for r in round_details if r.get("judgment") == JudgmentResult.FALSE.value)
             total_valid = true_votes + false_votes
@@ -92,20 +99,16 @@ class LLMAsAJudgeOracle(Oracle):
                 print(f"   Round {r['round']}: {status}")
 
             if total_valid == 0:
-                # All rounds errored
                 errors = "; ".join(r.get("error", "unknown") for r in round_details)
                 print(f"❌ All {self.num_rounds} judge rounds failed")
-                results["judgment"] = "Error"
-                results["reasoning"] = f"All rounds failed: {errors}"
-                results["success"] = False
-                results["accuracy"] = 0.0
-                results["error"] = errors
+                result["judgment"] = "Error"
+                result["reasoning"] = f"All rounds failed: {errors}"
+                result["success"] = False
+                result["accuracy"] = 0.0
+                result["error"] = errors
             else:
-                # Majority vote (ties go to FALSE / conservative)
                 is_correct = true_votes > false_votes
                 final_judgment = JudgmentResult.TRUE if is_correct else JudgmentResult.FALSE
-
-                # Pick reasoning from a majority-side round
                 winning_value = final_judgment.value
                 reasoning = next(
                     (r["reasoning"] for r in round_details if r.get("judgment") == winning_value),
@@ -122,27 +125,107 @@ class LLMAsAJudgeOracle(Oracle):
                         if len(self.expected) > 100
                         else f"   Expected: {self.expected}"
                     )
-                    print(f"   Got: {solution[:100]}..." if len(solution) > 100 else f"   Got: {solution}")
+                    print(f"   Got: {candidate[:100]}..." if len(candidate) > 100 else f"   Got: {candidate}")
 
-                results["judgment"] = final_judgment.value
-                results["reasoning"] = reasoning
-                results["success"] = is_correct
-                results["accuracy"] = acc
-                results["vote_count"] = f"{true_votes}/{total_valid}"
+                result["judgment"] = final_judgment.value
+                result["reasoning"] = reasoning
+                result["success"] = is_correct
+                result["accuracy"] = acc
+                result["vote_count"] = f"{true_votes}/{total_valid}"
 
-            results["num_rounds"] = self.num_rounds
-            results["round_details"] = json.dumps(round_details)
+            result["num_rounds"] = self.num_rounds
+            result["round_details"] = json.dumps(round_details)
 
         except Exception as e:
             print(f"❌ Error during LLM judgment: {e}")
-            results["judgment"] = "Error"
-            results["reasoning"] = f"Error: {str(e)}"
-            results["success"] = False
-            results["accuracy"] = 0.0
-            results["error"] = str(e)
+            result["judgment"] = "Error"
+            result["reasoning"] = f"Error: {str(e)}"
+            result["success"] = False
+            result["accuracy"] = 0.0
+            result["error"] = str(e)
+
+        return result
+
+    def evaluate(self, solution) -> dict:
+        candidates = self._to_candidates(solution)
+        print(
+            f"== LLM-as-a-Judge Evaluation ({self.num_rounds} round(s), "
+            f"{len(candidates)} candidate(s)) =="
+        )
+
+        # Empty candidate list → fail fast without touching the judge backend.
+        if not candidates:
+            return {
+                "judgment": JudgmentResult.FALSE.value,
+                "reasoning": "Submission contained no candidate diagnoses.",
+                "success": False,
+                "accuracy": 0.0,
+                "num_rounds": self.num_rounds,
+                "candidates": [],
+                "num_candidates": 0,
+                "matched_candidate": None,
+                "per_candidate": [],
+            }
+
+        # Force lazy backend init and override temperature for voting diversity.
+        original_temperature = None
+        if self.num_rounds > 1:
+            backend = self.judge.backend  # triggers lazy init
+            original_temperature = backend.temperature
+            backend.temperature = self.voting_temperature
+            print(f"   Voting temperature: {self.voting_temperature} (was {original_temperature})")
+
+        try:
+            per_candidate: list[dict] = []
+            matched_candidate: str | None = None
+            winning_result: dict | None = None
+
+            for idx, candidate in enumerate(candidates):
+                if len(candidates) > 1:
+                    print(f"-- Candidate {idx + 1}/{len(candidates)} --")
+                cand_result = self._evaluate_single_candidate(candidate)
+                cand_result["candidate"] = candidate
+                per_candidate.append(cand_result)
+
+                if cand_result.get("success"):
+                    matched_candidate = candidate
+                    winning_result = cand_result
+                    # Short-circuit: any matching candidate is sufficient.
+                    break
+
+            if winning_result is None:
+                # No candidate passed — surface the last attempt's vote details.
+                final = per_candidate[-1]
+                top_level = {
+                    "judgment": final.get("judgment", JudgmentResult.FALSE.value),
+                    "reasoning": final.get("reasoning", ""),
+                    "success": False,
+                    "accuracy": 0.0,
+                    "num_rounds": self.num_rounds,
+                    "round_details": final.get("round_details", "[]"),
+                }
+                if "vote_count" in final:
+                    top_level["vote_count"] = final["vote_count"]
+                if "error" in final:
+                    top_level["error"] = final["error"]
+            else:
+                top_level = {
+                    "judgment": winning_result["judgment"],
+                    "reasoning": winning_result["reasoning"],
+                    "success": True,
+                    "accuracy": winning_result.get("accuracy", 100.0),
+                    "num_rounds": self.num_rounds,
+                    "round_details": winning_result.get("round_details", "[]"),
+                }
+                if "vote_count" in winning_result:
+                    top_level["vote_count"] = winning_result["vote_count"]
+
+            top_level["candidates"] = candidates
+            top_level["num_candidates"] = len(candidates)
+            top_level["matched_candidate"] = matched_candidate
+            top_level["per_candidate"] = per_candidate
+            return top_level
 
         finally:
             if original_temperature is not None:
                 self.judge.backend.temperature = original_temperature
-
-        return results

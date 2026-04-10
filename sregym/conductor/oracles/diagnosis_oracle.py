@@ -1,3 +1,4 @@
+import ast
 import logging
 from logging import getLogger
 from typing import Any
@@ -29,17 +30,28 @@ class DiagnosisOracle(Oracle):
         self.checkpoint = self.expect()
 
     def compare_truth(self, expectation, reality):
-        if type(expectation) == str and type(reality) == str:
-            return expectation == reality  # both string, just compare the string
-        elif type(expectation) == list and type(reality) == list:
-            if len(expectation) != len(set(reality)):
-                return False  # TODO: support fp and fn
-            return all(e in set(reality) for e in expectation)
-        else:
-            logger.warning(
-                f"Expectation and reality are not both string or list, can not compare. Expectation: {expectation}, Reality: {reality}"
-            )
-            return False
+        """Multi-diagnosis-aware comparison.
+
+        Returns ``True`` when every item in ``expectation`` (the ground truth)
+        is present in ``reality`` (the agent's submission). The agent may
+        submit *more* candidates than the ground truth specifies — extras do
+        not count against them, since the cluster may exhibit latent faults
+        that the benchmark doesn't track.
+        """
+        if isinstance(expectation, str) and isinstance(reality, str):
+            return expectation == reality
+        if isinstance(expectation, str) and isinstance(reality, list):
+            return expectation in reality
+        if isinstance(expectation, list) and isinstance(reality, str):
+            return len(expectation) == 1 and expectation[0] == reality
+        if isinstance(expectation, list) and isinstance(reality, list):
+            return set(expectation).issubset(set(reality))
+
+        logger.warning(
+            f"Expectation and reality are not str/list, can not compare. "
+            f"Expectation: {expectation!r}, Reality: {reality!r}"
+        )
+        return False
 
     def expect(self):
         raise NotImplementedError("This function should be implemented by the subclass.")
@@ -114,27 +126,26 @@ class DiagnosisOracle(Oracle):
             return self.checkpoint == new_expectation
 
     def safe_parse_solution(self, solution):
-        # Normalize solution to list of strings
+        """Normalize ``solution`` into a ``list[str]``.
+
+        Accepts an actual list (coerced element-wise to ``str``) or a string.
+        For strings, attempts an ``ast.literal_eval`` first so that quoted
+        list literals like ``"['a', 'b']"`` decode cleanly; on any failure
+        the input is treated as a single candidate.
+        """
+        if isinstance(solution, list):
+            return [str(item) for item in solution]
         if isinstance(solution, str):
-            # Check if it's a comma-separated list
-            # strip char before [
-            if "[" in solution and "]" in solution:
-                solution = solution.split("[")[1]
-                # strip char after ]
-                solution = solution.split("]")[0]
-                if "," in solution:
-                    # split by comma, strip space and quote
-                    solution = [s.strip().strip("\"'") for s in solution.split(",")]
-                else:
-                    solution = [solution.strip().strip("\"'")]
-            else:
-                solution = [solution.strip().strip("\"'")]
-        elif isinstance(solution, list):
-            # Ensure all items are strings
-            solution = [str(item) for item in solution]
-        else:
-            return None
-        return solution
+            stripped = solution.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                try:
+                    parsed = ast.literal_eval(stripped)
+                    if isinstance(parsed, list):
+                        return [str(item) for item in parsed]
+                except (ValueError, SyntaxError):
+                    pass
+            return [solution.strip().strip("\"'")]
+        return None
 
     def evaluate(self, solution) -> dict[str, Any]:
         # verify the stability of the environment

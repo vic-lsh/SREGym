@@ -12,6 +12,8 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from uvicorn import Config, Server
 
+from sregym.conductor.constants import MAX_DIAGNOSIS_CANDIDATES
+
 app = FastAPI()
 _conductor = None
 
@@ -39,7 +41,10 @@ def set_conductor(c):
 
 
 class SubmitRequest(BaseModel):
-    solution: str
+    # A diagnosis submission may be a single string answer or a list of
+    # candidate diagnoses (up to MAX_DIAGNOSIS_CANDIDATES). The latter is
+    # graded by checking whether the ground truth matches *any* candidate.
+    solution: str | list[str]
 
 
 @app.post("/submit")
@@ -49,7 +54,21 @@ async def submit_solution(req: SubmitRequest):
         logger.error(f"Cannot submit at stage: {_conductor.submission_stage!r}")
         raise HTTPException(status_code=400, detail=f"Cannot submit at stage: {_conductor.submission_stage!r}")
 
-    # Use repr() to properly escape special characters in the solution string
+    if isinstance(req.solution, list):
+        if len(req.solution) == 0:
+            raise HTTPException(status_code=400, detail="Submission list must not be empty.")
+        if len(req.solution) > MAX_DIAGNOSIS_CANDIDATES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Submission list has {len(req.solution)} candidates; "
+                    f"maximum allowed is {MAX_DIAGNOSIS_CANDIDATES}."
+                ),
+            )
+
+    # Use repr() to properly escape special characters in the solution; this
+    # produces a valid Python literal for either str or list[str], which the
+    # parser then decodes via ast.parse.
     wrapped = f"```\nsubmit({repr(req.solution)})\n```"
     logger.debug(f"Wrapped submit content: {wrapped}")
 
