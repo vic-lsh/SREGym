@@ -182,6 +182,71 @@ def is_result_complete(csv_path):
         return False
 
 
+def _read_solved_from_result_csv(csv_path: str) -> bool:
+    """Return True iff Diagnosis.success AND Mitigation.success are both true.
+
+    Bools are written via csv.QUOTE_NONNUMERIC so they appear as the strings
+    ``"True"`` / ``"False"``. Treat anything else (missing/empty/error rows)
+    as not-solved.
+    """
+    try:
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            try:
+                row = next(reader)
+            except StopIteration:
+                return False
+
+            def _truthy(value: str | None) -> bool:
+                if value is None:
+                    return False
+                return str(value).strip().lower() == "true"
+
+            return _truthy(row.get("Diagnosis.success")) and _truthy(row.get("Mitigation.success"))
+    except Exception:
+        return False
+
+
+_ADAPTIVE_RESULT_RE = re.compile(
+    r"^(?P<ts>[^_]+_[^_]+)_(?P<seq_idx>\d{5})_(?P<pid>.+)_(?P<agent>[^_]+)_results\.csv$"
+)
+
+
+def _parse_adaptive_csv_filename(csv_path: str, agent_name: str) -> tuple[int, str] | None:
+    """Parse a result CSV filename and extract ``(seq_idx, pid)``.
+
+    Filenames look like ``{MMDD_HHMM}_{seq_idx:05d}_{pid}_{agent}_results.csv``.
+    Because both the timestamp and the pid can contain underscores, we anchor
+    the parse on the trailing ``_{agent}_results.csv`` suffix and the
+    five-digit zero-padded ``seq_idx``.
+
+    Returns None if the filename doesn't match the expected shape (e.g. a
+    pre-adaptive result without a seq_idx).
+    """
+    name = os.path.basename(csv_path)
+    suffix = f"_{agent_name}_results.csv"
+    if not name.endswith(suffix):
+        return None
+    head = name[: -len(suffix)]
+    # head = "{MMDD_HHMM}_{seq_idx:05d}_{pid}"; locate the 5-digit chunk
+    # immediately preceded by an underscore. We iterate from the start
+    # because the timestamp itself contains digits but is split as
+    # "MMDD_HHMM" — its second token is 4 digits, not 5.
+    for m in re.finditer(r"_(\d{5})_", head):
+        seq_idx_str = m.group(1)
+        pid = head[m.end():]
+        # Sanity check: the prefix before the seq_idx must look like a
+        # timestamp ("XXXX_XXXX") so we don't accidentally match digits
+        # inside a pid.
+        prefix = head[: m.start()]
+        if "_" in prefix and not prefix.endswith("_"):
+            try:
+                return int(seq_idx_str), pid
+            except ValueError:
+                return None
+    return None
+
+
 def generate_sequence(problem_ids: list, n: int, seed: int) -> list:
     """Generate a deterministic sequence of n problem IDs sampled with replacement."""
     rng = random.Random(seed)
@@ -401,6 +466,11 @@ def driver_loop(
                     "worker_id": worker_id,
                 })
 
+            # Whether the *latest* iteration of this problem was a full success
+            # (diagnosis AND mitigation). Surfaced into status_dict on Completed
+            # so the supervisor's adaptive scheduler can react to outcomes.
+            iteration_solved: bool = False
+
             try:
                 for iteration in range(completed_iterations, repeat):
                     iteration_start_time = get_current_datetime_formatted()
@@ -555,6 +625,9 @@ def driver_loop(
                     if agent_exit_code is not None and agent_exit_code != 0:
                         snapshot["agent_error"] = True
                         snapshot["agent_exit_code"] = agent_exit_code
+                    iteration_solved = bool(snapshot.get("Diagnosis.success")) and bool(
+                        snapshot.get("Mitigation.success")
+                    )
                     all_results_for_agent.append(snapshot)
 
                     fieldnames = sorted(snapshot.keys())
@@ -666,6 +739,7 @@ def driver_loop(
                         "start_time": _st,
                         "elapsed": time.time() - _st,
                         "worker_id": worker_id,
+                        "solved": iteration_solved,
                     })
                     sys.stdout = original_stdout
                     sys.stderr = original_stderr
@@ -1116,8 +1190,10 @@ def run_parallel(args):
     # Handle variant stream mode or sequence mode
     sequence = None
     sequence_start_idx = 0
+    adaptive_scheduler = None
     if getattr(args, "variants", False):
         from sregym.conductor.problems.variant_generator import (
+            AdaptiveScheduler,
             generate_variant_stream,
             generate_variant_stream_by_class,
             generate_variant_stream_grouped,
@@ -1132,51 +1208,111 @@ def run_parallel(args):
             logger.error("No variant problems found in registry.")
             sys.exit(1)
 
-        stream_kwargs = dict(
-            variant_ids=variant_ids,
-            count=args.variant_count,
-            offset=args.variant_offset,
-            seed=args.variant_seed,
-        )
-        if args.variant_order == "flat":
-            sequence = generate_variant_stream(**stream_kwargs)
-        elif args.variant_order == "round_robin":
-            sequence = generate_variant_stream_by_class(**stream_kwargs)
-        else:  # grouped
-            sequence = generate_variant_stream_grouped(
+        if args.variant_order == "adaptive":
+            # Adaptive mode: no pre-generated sequence. The scheduler dispatches
+            # problems on demand based on outcomes recorded by the supervisor.
+            adaptive_scheduler = AdaptiveScheduler(
+                variant_ids=variant_ids,
+                consec_solves_to_stop=args.variant_adaptive_consec_solves,
                 max_per_class=args.variant_max_per_class,
-                **stream_kwargs,
+                seed=args.variant_seed,
+                max_total=args.variant_count if args.variant_count > 0 else None,
             )
-        variant_state_path = os.path.join(experiment_log_dir, "variant_state.json")
-        with open(variant_state_path, "w") as f:
-            json.dump({
-                "seed": args.variant_seed,
-                "offset": args.variant_offset,
-                "count": args.variant_count,
-                "order": args.variant_order,
-                "max_per_class": args.variant_max_per_class,
-                "variant_spec": args.variant_spec,
-                "total_variant_pool": len(variant_ids),
-                "sequence": sequence,
-            }, f)
-        spec_filter_msg = f", spec_filter={args.variant_spec}" if args.variant_spec else ""
-        logger.info(
-            f"Variant stream: {len(sequence)} problems "
-            f"(order={args.variant_order}, offset={args.variant_offset}, "
-            f"seed={args.variant_seed}, pool={len(variant_ids)} variants{spec_filter_msg})."
-        )
+            variant_state_path = os.path.join(experiment_log_dir, "variant_state.json")
+            with open(variant_state_path, "w") as f:
+                json.dump({
+                    "seed": args.variant_seed,
+                    "order": args.variant_order,
+                    "max_per_class": args.variant_max_per_class,
+                    "consec_solves_to_stop": args.variant_adaptive_consec_solves,
+                    "max_total": args.variant_count if args.variant_count > 0 else None,
+                    "variant_spec": args.variant_spec,
+                    "total_variant_pool": len(variant_ids),
+                    "class_order": adaptive_scheduler.class_order,
+                }, f)
+            spec_filter_msg = f", spec_filter={args.variant_spec}" if args.variant_spec else ""
+            max_total_msg = f", max_total={args.variant_count}" if args.variant_count > 0 else ""
+            logger.info(
+                f"Variant stream (adaptive): {len(adaptive_scheduler.class_order)} classes "
+                f"(seed={args.variant_seed}, max_per_class={args.variant_max_per_class}, "
+                f"consec_solves_to_stop={args.variant_adaptive_consec_solves}"
+                f"{max_total_msg}, pool={len(variant_ids)} variants{spec_filter_msg})."
+            )
 
-        # Determine start index by scanning for completed results
-        agent_to_run = args.agent
-        for idx, pid in enumerate(sequence):
-            search_pattern = os.path.join(experiment_log_dir, f"*_{idx:05d}_{pid}_{agent_to_run}_results.csv")
-            existing_files = glob.glob(search_pattern)
-            completed = any(is_result_complete(f) for f in existing_files)
-            if completed:
-                sequence_start_idx = idx + 1
+            # Resume: replay completed result CSVs through the scheduler so its
+            # per-class state and seq_idx counter pick up where they left off.
+            agent_to_run = args.agent
+            replay_pattern = os.path.join(
+                experiment_log_dir, f"*_*_*_{agent_to_run}_results.csv"
+            )
+            replay_entries: list[tuple[int, str, bool]] = []
+            for f_path in glob.glob(replay_pattern):
+                if not is_result_complete(f_path):
+                    continue
+                parsed = _parse_adaptive_csv_filename(f_path, agent_to_run)
+                if parsed is None:
+                    continue
+                seq_idx, pid = parsed
+                solved = _read_solved_from_result_csv(f_path)
+                replay_entries.append((seq_idx, pid, solved))
+            replay_entries.sort(key=lambda t: t[0])
+            for _, pid, solved in replay_entries:
+                adaptive_scheduler.record_completion(pid, solved=solved)
+            if replay_entries:
+                next_idx = replay_entries[-1][0] + 1
+                adaptive_scheduler.set_next_seq_idx(next_idx)
+                logger.info(
+                    f"Adaptive resume: replayed {len(replay_entries)} completions; "
+                    f"next seq_idx={next_idx}."
+                )
             else:
-                break
-        logger.info(f"Variant mode: starting from index {sequence_start_idx}/{len(sequence)}.")
+                logger.info("Adaptive resume: no prior completions found.")
+        else:
+            stream_kwargs = dict(
+                variant_ids=variant_ids,
+                count=args.variant_count,
+                offset=args.variant_offset,
+                seed=args.variant_seed,
+            )
+            if args.variant_order == "flat":
+                sequence = generate_variant_stream(**stream_kwargs)
+            elif args.variant_order == "round_robin":
+                sequence = generate_variant_stream_by_class(**stream_kwargs)
+            else:  # grouped
+                sequence = generate_variant_stream_grouped(
+                    max_per_class=args.variant_max_per_class,
+                    **stream_kwargs,
+                )
+            variant_state_path = os.path.join(experiment_log_dir, "variant_state.json")
+            with open(variant_state_path, "w") as f:
+                json.dump({
+                    "seed": args.variant_seed,
+                    "offset": args.variant_offset,
+                    "count": args.variant_count,
+                    "order": args.variant_order,
+                    "max_per_class": args.variant_max_per_class,
+                    "variant_spec": args.variant_spec,
+                    "total_variant_pool": len(variant_ids),
+                    "sequence": sequence,
+                }, f)
+            spec_filter_msg = f", spec_filter={args.variant_spec}" if args.variant_spec else ""
+            logger.info(
+                f"Variant stream: {len(sequence)} problems "
+                f"(order={args.variant_order}, offset={args.variant_offset}, "
+                f"seed={args.variant_seed}, pool={len(variant_ids)} variants{spec_filter_msg})."
+            )
+
+            # Determine start index by scanning for completed results
+            agent_to_run = args.agent
+            for idx, pid in enumerate(sequence):
+                search_pattern = os.path.join(experiment_log_dir, f"*_{idx:05d}_{pid}_{agent_to_run}_results.csv")
+                existing_files = glob.glob(search_pattern)
+                completed = any(is_result_complete(f) for f in existing_files)
+                if completed:
+                    sequence_start_idx = idx + 1
+                else:
+                    break
+            logger.info(f"Variant mode: starting from index {sequence_start_idx}/{len(sequence)}.")
 
     elif getattr(args, "sequence_len", 0) > 0:
         sequence_state_path = os.path.join(experiment_log_dir, "sequence_state.json")
@@ -1231,7 +1367,11 @@ def run_parallel(args):
 
     # Filter problems if resuming (non-sequence mode)
     problems_to_run = []
-    if sequence is not None:
+    if adaptive_scheduler is not None:
+        # Adaptive mode: dispatch is dynamic via the scheduler. We pass an empty
+        # pending list and let the supervisor pull from the scheduler.
+        problems_to_run = []
+    elif sequence is not None:
         # Build pending list with (seq_idx, pid) tuples for queue-based dispatch
         problems_to_run = [(idx, pid) for idx, pid in enumerate(sequence) if idx >= sequence_start_idx]
     elif is_resuming:
@@ -1267,7 +1407,12 @@ def run_parallel(args):
 
     processes = []
     worker_map = {}  # Map process to worker ID
-    if sequence is not None:
+    if adaptive_scheduler is not None:
+        logger.info(
+            f"Running adaptive variant stream over {len(adaptive_scheduler.class_order)} "
+            f"classes with {args.parallel} workers."
+        )
+    elif sequence is not None:
         logger.info(
             f"Running sequence of {len(sequence)} problems (starting at {sequence_start_idx}) with {args.parallel} workers."
         )
@@ -1378,6 +1523,24 @@ def run_parallel(args):
                                     or status.startswith("Error")
                                     or status.startswith("Skipped")
                                 ):
+                                    # Adaptive mode: feed solved/not-solved into the
+                                    # scheduler so it can decide what to dispatch
+                                    # next. Only "Completed" counts as a real
+                                    # attempt — Error/Skipped reflect infrastructure
+                                    # issues that shouldn't burn the per-class
+                                    # budget.
+                                    if (
+                                        adaptive_scheduler is not None
+                                        and status.startswith("Completed")
+                                    ):
+                                        actual_pid = pid.split(":", 1)[1] if ":" in pid else pid
+                                        solved = bool(info.get("solved", False))
+                                        adaptive_scheduler.record_completion(actual_pid, solved=solved)
+                                        logger.info(
+                                            f"Adaptive: recorded completion for {actual_pid} "
+                                            f"(solved={solved}). class_state="
+                                            f"{adaptive_scheduler.class_state_summary()}"
+                                        )
                                     del assigned_tasks[wid]
 
                         # 2. Assign New Tasks to Idle Workers
@@ -1388,10 +1551,15 @@ def run_parallel(args):
                                     idle_workers.append(i)
 
                         for wid in idle_workers:
-                            if not pending_problems:
-                                break
+                            if adaptive_scheduler is not None:
+                                problem_to_assign = adaptive_scheduler.next_problem()
+                                if problem_to_assign is None:
+                                    break
+                            else:
+                                if not pending_problems:
+                                    break
+                                problem_to_assign = pending_problems.pop(0)
 
-                            problem_to_assign = pending_problems.pop(0)
                             if isinstance(problem_to_assign, tuple):
                                 s_idx, s_pid = problem_to_assign
                                 assigned_tasks[wid] = f"{s_idx:05d}:{s_pid}"
@@ -1400,7 +1568,11 @@ def run_parallel(args):
                             worker_queues[wid].put(problem_to_assign)
 
                         # 4. Check Termination
-                        if not pending_problems and not assigned_tasks:
+                        if adaptive_scheduler is not None:
+                            scheduler_exhausted = adaptive_scheduler.is_done()
+                        else:
+                            scheduler_exhausted = not pending_problems
+                        if scheduler_exhausted and not assigned_tasks:
                             logger.info(
                                 "All tasks completed or assigned. Sending shutdown signals. "
                                 f"pending={len(pending_problems)} assigned={dict(assigned_tasks)} "
@@ -1450,9 +1622,15 @@ def run_parallel(args):
                                         })
 
                             # Restart Logic: If there is still work to do, restart the worker
-                            if pending_problems and not shutdown_sent:
+                            has_more_work = (
+                                (adaptive_scheduler is not None and not adaptive_scheduler.is_done())
+                                or bool(pending_problems)
+                            )
+                            if has_more_work and not shutdown_sent:
                                 logger.info(
-                                    f"Restarting Worker {wid} to handle {len(pending_problems)} pending problems."
+                                    f"Restarting Worker {wid} to handle pending work "
+                                    f"(adaptive={adaptive_scheduler is not None}, "
+                                    f"pending={len(pending_problems)})."
                                 )
                                 progress.console.print(f"[bold yellow]🔄 Restarting Worker {wid}[/bold yellow]")
 
@@ -1495,13 +1673,29 @@ def run_parallel(args):
                             manager_dead = True
                             # Dispatch any remaining pending problems round-robin to workers
                             # so they can finish without the supervisor's scheduling loop.
-                            if not shutdown_sent and pending_problems:
-                                alive_workers = [i for i in range(args.parallel) if processes[i].is_alive()]
-                                if alive_workers:
-                                    for pi, prob in enumerate(pending_problems):
-                                        wid = alive_workers[pi % len(alive_workers)]
-                                        worker_queues[wid].put(prob)
-                                    logger.info(f"Dispatched {len(pending_problems)} remaining problems to {len(alive_workers)} workers")
+                            if not shutdown_sent:
+                                # In adaptive mode we lose the feedback signal once
+                                # the Manager dies, so we drain the scheduler greedily
+                                # without recording outcomes — best-effort completion.
+                                drain: list[Any] = []
+                                if adaptive_scheduler is not None:
+                                    while True:
+                                        nxt = adaptive_scheduler.next_problem()
+                                        if nxt is None:
+                                            break
+                                        drain.append(nxt)
+                                else:
+                                    drain = list(pending_problems)
+                                if drain:
+                                    alive_workers = [i for i in range(args.parallel) if processes[i].is_alive()]
+                                    if alive_workers:
+                                        for pi, prob in enumerate(drain):
+                                            wid = alive_workers[pi % len(alive_workers)]
+                                            worker_queues[wid].put(prob)
+                                        logger.info(
+                                            f"Dispatched {len(drain)} remaining problems to "
+                                            f"{len(alive_workers)} workers"
+                                        )
                                 pending_problems.clear()
                             # Send shutdown sentinels AFTER all remaining work so workers
                             # drain their queues before stopping.
@@ -1948,18 +2142,30 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--variant-order",
-        choices=["flat", "round_robin", "grouped"],
+        choices=["flat", "round_robin", "grouped", "adaptive"],
         default="round_robin",
         help="Variant stream ordering: flat=epoch shuffle of all variants, "
              "round_robin=one per class per round (default), "
-             "grouped=drain one class before moving to the next.",
+             "grouped=drain one class before moving to the next, "
+             "adaptive=stay in a class until N consecutive solves or "
+             "X attempts (requires --variant-adaptive-consec-solves and "
+             "--variant-max-per-class).",
     )
     parser.add_argument(
         "--variant-max-per-class",
         type=int,
         default=None,
-        help="When --variant-order=grouped, take at most N variants per class "
-             "before moving on. Default: take all.",
+        help="When --variant-order=grouped or adaptive, take at most N variants "
+             "per class before moving on. Default for grouped: take all. "
+             "Required for adaptive.",
+    )
+    parser.add_argument(
+        "--variant-adaptive-consec-solves",
+        type=int,
+        default=None,
+        help="Adaptive mode only: advance to the next class once the last N "
+             "completions in the current class are all solved. Required when "
+             "--variant-order=adaptive.",
     )
     parser.add_argument(
         "--variant-spec",
@@ -1982,17 +2188,28 @@ if __name__ == "__main__":
 
     # Validate variant mode constraints
     if args.variants:
-        if args.variant_count <= 0:
+        if args.variant_order != "adaptive" and args.variant_count <= 0:
             parser.error("--variant-count is required and must be > 0 when --variants is set")
         if args.problem:
             parser.error("--variants and --problem are mutually exclusive")
         if args.sequence_len > 0:
             parser.error("--variants and --sequence-len are mutually exclusive")
         if args.variant_max_per_class is not None:
-            if args.variant_order != "grouped":
-                parser.error("--variant-max-per-class requires --variant-order=grouped")
+            if args.variant_order not in ("grouped", "adaptive"):
+                parser.error("--variant-max-per-class requires --variant-order=grouped or adaptive")
             if args.variant_max_per_class <= 0:
                 parser.error("--variant-max-per-class must be > 0")
+        if args.variant_order == "adaptive":
+            if args.variant_max_per_class is None:
+                parser.error("--variant-max-per-class is required when --variant-order=adaptive")
+            if args.variant_adaptive_consec_solves is None:
+                parser.error("--variant-adaptive-consec-solves is required when --variant-order=adaptive")
+            if args.variant_adaptive_consec_solves <= 0:
+                parser.error("--variant-adaptive-consec-solves must be > 0")
+            if args.variant_count < 0:
+                parser.error("--variant-count must be >= 0 when --variant-order=adaptive (0 = no global cap)")
+    if args.variant_adaptive_consec_solves is not None and args.variant_order != "adaptive":
+        parser.error("--variant-adaptive-consec-solves requires --variant-order=adaptive")
     if args.variant_spec and not args.variants:
         parser.error("--variant-spec requires --variants")
     if args.variant_spec:

@@ -95,6 +95,7 @@ generate_variant_stream = _vg_mod.generate_variant_stream
 generate_variant_stream_by_class = _vg_mod.generate_variant_stream_by_class
 generate_variant_stream_grouped = _vg_mod.generate_variant_stream_grouped
 filter_variant_ids_by_spec = _vg_mod.filter_variant_ids_by_spec
+AdaptiveScheduler = _vg_mod.AdaptiveScheduler
 
 _ensure_app_stubs()
 _vu_mod = _load_module("variant_utils", _PROBLEMS_DIR / "variant_utils.py")
@@ -807,3 +808,283 @@ class TestFilterVariantIdsBySpec:
         assert all(
             vid.startswith("readiness_probe_misconfiguration__v_") for vid in result
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests: AdaptiveScheduler
+# ---------------------------------------------------------------------------
+
+def _drain(scheduler, max_steps: int = 1000) -> list[tuple[int, str]]:
+    """Pull next_problem until None or step cap reached."""
+    out = []
+    for _ in range(max_steps):
+        nxt = scheduler.next_problem()
+        if nxt is None:
+            return out
+        out.append(nxt)
+    raise AssertionError(f"scheduler did not terminate after {max_steps} steps")
+
+
+class TestAdaptiveScheduler:
+    POOL = [
+        "class_a__v_1",
+        "class_a__v_2",
+        "class_a__v_3",
+        "class_a__v_4",
+        "class_b__v_1",
+        "class_b__v_2",
+        "class_c__v_1",
+    ]
+
+    def test_class_order_is_sorted(self):
+        # Insert pool in scrambled order; class order should still be sorted.
+        pool = ["zclass__v_a", "aclass__v_a", "mclass__v_a"]
+        sched = AdaptiveScheduler(pool, consec_solves_to_stop=1, max_per_class=1)
+        assert sched.class_order == ["aclass", "mclass", "zclass"]
+
+    def test_seq_idx_is_monotonic(self):
+        sched = AdaptiveScheduler(
+            self.POOL, consec_solves_to_stop=10, max_per_class=3, seed=7
+        )
+        seqs = []
+        for _ in range(5):
+            nxt = sched.next_problem()
+            assert nxt is not None
+            seqs.append(nxt[0])
+        assert seqs == [0, 1, 2, 3, 4]
+
+    def test_seq_idx_starts_at_offset(self):
+        sched = AdaptiveScheduler(
+            self.POOL,
+            consec_solves_to_stop=10,
+            max_per_class=2,
+            start_seq_idx=42,
+        )
+        first = sched.next_problem()
+        assert first is not None
+        assert first[0] == 42
+
+    def test_mastery_short_circuits_class(self):
+        """N consecutive solves drains current class and advances."""
+        sched = AdaptiveScheduler(
+            self.POOL,
+            consec_solves_to_stop=3,
+            max_per_class=10,
+            seed=123,
+        )
+        # First three picks should all come from class_a (sorted order)
+        # because we report them as solved before any other class is touched.
+        picks = []
+        for _ in range(3):
+            seq, pid = sched.next_problem()
+            picks.append(pid)
+            sched.record_completion(pid, solved=True)
+        assert all(p.startswith("class_a__") for p in picks)
+        # Next pick must move to class_b — class_a is mastered.
+        seq, pid = sched.next_problem()
+        assert pid.startswith("class_b__")
+
+    def test_max_per_class_advances_after_budget(self):
+        """X failed attempts drain the class even without mastery."""
+        sched = AdaptiveScheduler(
+            self.POOL,
+            consec_solves_to_stop=5,
+            max_per_class=3,
+            seed=11,
+        )
+        for _ in range(3):
+            seq, pid = sched.next_problem()
+            assert pid.startswith("class_a__")
+            sched.record_completion(pid, solved=False)
+        # Budget spent — next pick must be class_b.
+        seq, pid = sched.next_problem()
+        assert pid.startswith("class_b__")
+
+    def test_pool_reshuffle_allows_repeats(self):
+        """When the pool is smaller than max_per_class, repeats are allowed."""
+        pool = ["only_class__v_a", "only_class__v_b"]  # pool size 2
+        sched = AdaptiveScheduler(
+            pool,
+            consec_solves_to_stop=10,  # never reachable
+            max_per_class=6,
+            seed=42,
+        )
+        picks = []
+        for _ in range(6):
+            seq, pid = sched.next_problem()
+            picks.append(pid)
+            sched.record_completion(pid, solved=False)
+        # Six picks emitted — both ids appear, with repeats.
+        assert len(picks) == 6
+        assert set(picks) == {"only_class__v_a", "only_class__v_b"}
+        # After 6 attempts the class is done.
+        assert sched.next_problem() is None
+
+    def test_full_run_terminates(self):
+        """Drain a fixed pool until None is returned."""
+        sched = AdaptiveScheduler(
+            self.POOL,
+            consec_solves_to_stop=2,
+            max_per_class=3,
+            seed=99,
+        )
+        results = []
+        while True:
+            nxt = sched.next_problem()
+            if nxt is None:
+                break
+            results.append(nxt)
+            # Always fail so each class drains to max_per_class.
+            sched.record_completion(nxt[1], solved=False)
+        # Three classes * 3 attempts each = 9 picks.
+        assert len(results) == 9
+        seq_ids = [s for s, _ in results]
+        assert seq_ids == list(range(9))
+
+    def test_replay_rebuilds_state(self):
+        """A fresh scheduler replayed with the same outcomes matches a live one."""
+        live = AdaptiveScheduler(
+            self.POOL, consec_solves_to_stop=2, max_per_class=4, seed=5,
+        )
+        # Run live for 6 picks with mixed outcomes.
+        outcomes: list[tuple[str, bool]] = []
+        for i in range(6):
+            seq, pid = live.next_problem()
+            solved = (i % 2 == 0)  # alternating
+            live.record_completion(pid, solved=solved)
+            outcomes.append((pid, solved))
+
+        # Replay: feed the same outcomes to a new scheduler. We don't call
+        # next_problem during replay; we rely on record_completion alone.
+        replayed = AdaptiveScheduler(
+            self.POOL, consec_solves_to_stop=2, max_per_class=4, seed=5,
+        )
+        for pid, solved in outcomes:
+            replayed.record_completion(pid, solved=solved)
+        replayed.set_next_seq_idx(len(outcomes))
+
+        # Both schedulers should now produce identical next picks.
+        for _ in range(8):
+            a = live.next_problem()
+            b = replayed.next_problem()
+            assert a == b
+            if a is None:
+                break
+            # Mirror further outcomes so the schedulers stay in lockstep.
+            live.record_completion(a[1], solved=True)
+            replayed.record_completion(b[1], solved=True)
+
+    def test_record_completion_unknown_class_is_ignored(self):
+        """Replay should be robust to ids from outside the current pool."""
+        sched = AdaptiveScheduler(
+            self.POOL, consec_solves_to_stop=1, max_per_class=1,
+        )
+        # Should not raise.
+        sched.record_completion("not_a_real_class__v_x", solved=True)
+        nxt = sched.next_problem()
+        assert nxt is not None
+
+    def test_class_state_summary_reflects_progress(self):
+        sched = AdaptiveScheduler(
+            self.POOL, consec_solves_to_stop=2, max_per_class=3, seed=1,
+        )
+        for _ in range(2):
+            seq, pid = sched.next_problem()
+            sched.record_completion(pid, solved=True)
+        summary = sched.class_state_summary()
+        assert summary["class_a"]["attempts"] == 2
+        assert summary["class_a"]["recent_solves"] == [True, True]
+        assert summary["class_a"]["done"] is True
+        assert summary["class_b"]["attempts"] == 0
+        assert summary["class_b"]["done"] is False
+
+    def test_invalid_args_raise(self):
+        with pytest.raises(ValueError):
+            AdaptiveScheduler([], consec_solves_to_stop=1, max_per_class=1)
+        with pytest.raises(ValueError):
+            AdaptiveScheduler(self.POOL, consec_solves_to_stop=0, max_per_class=1)
+        with pytest.raises(ValueError):
+            AdaptiveScheduler(self.POOL, consec_solves_to_stop=1, max_per_class=0)
+        with pytest.raises(ValueError):
+            AdaptiveScheduler(self.POOL, consec_solves_to_stop=1, max_per_class=1, max_total=0)
+
+    def test_max_total_stops_at_n(self):
+        """max_total caps total dispatches before per-class budgets are spent."""
+        sched = AdaptiveScheduler(
+            self.POOL, consec_solves_to_stop=5, max_per_class=10, max_total=3,
+        )
+        dispatched = []
+        while True:
+            nxt = sched.next_problem()
+            if nxt is None:
+                break
+            dispatched.append(nxt)
+            sched.record_completion(nxt[1], solved=False)
+        assert len(dispatched) == 3
+        assert sched.is_done()
+
+    def test_max_total_is_done_mid_class(self):
+        """is_done() returns True as soon as max_total is reached."""
+        sched = AdaptiveScheduler(
+            self.POOL, consec_solves_to_stop=5, max_per_class=10, max_total=2,
+        )
+        assert not sched.is_done()
+        sched.next_problem()
+        assert not sched.is_done()
+        sched.next_problem()
+        # next_seq_idx is now 2 == max_total
+        assert sched.is_done()
+        assert sched.next_problem() is None
+
+    def test_max_total_none_preserves_existing_behavior(self):
+        """max_total=None leaves existing termination behavior unchanged."""
+        sched = AdaptiveScheduler(
+            self.POOL, consec_solves_to_stop=1, max_per_class=1, max_total=None,
+        )
+        dispatched = []
+        while True:
+            nxt = sched.next_problem()
+            if nxt is None:
+                break
+            dispatched.append(nxt)
+            sched.record_completion(nxt[1], solved=True)
+        # One problem per class (3 classes), each mastered after 1 solve.
+        assert len(dispatched) == 3
+        assert sched.is_done()
+
+    def test_max_total_respected_after_resume(self):
+        """Replaying completions restores next_seq_idx; max_total still fires."""
+        # Simulate a run that completed 2 problems, then resumed with max_total=3.
+        sched = AdaptiveScheduler(
+            self.POOL, consec_solves_to_stop=5, max_per_class=10, max_total=3,
+        )
+        p0 = sched.next_problem()
+        p1 = sched.next_problem()
+        assert p0 is not None and p1 is not None
+
+        # Replay into a fresh scheduler (simulating resume).
+        fresh = AdaptiveScheduler(
+            self.POOL, consec_solves_to_stop=5, max_per_class=10, max_total=3,
+        )
+        fresh.record_completion(p0[1], solved=False)
+        fresh.record_completion(p1[1], solved=False)
+        fresh.set_next_seq_idx(2)
+
+        # Only one more problem should be dispatched before hitting max_total=3.
+        nxt = fresh.next_problem()
+        assert nxt is not None
+        assert nxt[0] == 2
+        assert fresh.next_problem() is None
+        assert fresh.is_done()
+
+    def test_set_next_seq_idx_no_backwards(self):
+        sched = AdaptiveScheduler(
+            self.POOL, consec_solves_to_stop=1, max_per_class=1,
+        )
+        sched.next_problem()  # advances next_seq_idx to 1
+        with pytest.raises(ValueError):
+            sched.set_next_seq_idx(0)
+        sched.set_next_seq_idx(5)
+        nxt = sched.next_problem()
+        assert nxt is not None
+        assert nxt[0] == 5

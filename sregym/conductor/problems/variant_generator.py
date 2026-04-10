@@ -2,6 +2,7 @@
 
 import hashlib
 import random
+from collections import deque
 from dataclasses import dataclass
 from itertools import product
 from typing import Any, Callable
@@ -310,6 +311,184 @@ def generate_variant_stream_grouped(
         pos_in_epoch = 0
 
     return result
+
+
+class AdaptiveScheduler:
+    """Per-class adaptive scheduler for variant streams.
+
+    Walks problem classes in sorted order. For each class, dispatches variants
+    one at a time and tracks pass/fail outcomes. Advances to the next class
+    when *either*:
+
+      - The last ``consec_solves_to_stop`` outcomes for the current class are
+        all solves (the agent has demonstrated mastery), or
+      - ``max_per_class`` total attempts have been made in the current class
+        (the budget is spent — give up).
+
+    An optional ``max_total`` cap stops the scheduler once that many problems
+    have been dispatched in total across all classes (checked in
+    :meth:`next_problem` and :meth:`is_done`).
+
+    Within a class, variants are seeded-shuffled using the same recipe as the
+    other variant streams (``seed + _stable_hash(class_name) + epoch``). When a
+    class's pool is exhausted before either stop criterion fires, the scheduler
+    increments the class epoch and re-shuffles, allowing repeats.
+
+    Each call to :meth:`next_problem` returns a ``(seq_idx, pid)`` tuple where
+    ``seq_idx`` is a monotonically increasing counter starting from
+    ``start_seq_idx``. ``next_problem`` returns ``None`` once all classes have
+    been completed or abandoned (or the global ``max_total`` cap is reached).
+
+    Outcomes are reported via :meth:`record_completion`. The scheduler infers
+    the class from the variant ID by splitting on ``__v_``.
+
+    Resume is supported by replaying historical completions in the order they
+    happened. The scheduler's "current class" pointer always advances to the
+    earliest class that has not yet been completed/abandoned, so a fresh
+    instance fed the same completions ends up in the same state.
+    """
+
+    def __init__(
+        self,
+        variant_ids: list[str],
+        consec_solves_to_stop: int,
+        max_per_class: int,
+        seed: int = 42,
+        start_seq_idx: int = 0,
+        max_total: int | None = None,
+    ) -> None:
+        if not variant_ids:
+            raise ValueError("variant_ids must not be empty")
+        if consec_solves_to_stop <= 0:
+            raise ValueError("consec_solves_to_stop must be > 0")
+        if max_per_class <= 0:
+            raise ValueError("max_per_class must be > 0")
+        if max_total is not None and max_total <= 0:
+            raise ValueError("max_total must be > 0")
+
+        self._seed = seed
+        self._consec_solves_to_stop = consec_solves_to_stop
+        self._max_per_class = max_per_class
+        self._max_total = max_total
+
+        self._groups = _group_by_class(variant_ids)
+        self._class_order: list[str] = sorted(self._groups.keys())
+
+        # Per-class state. ``recent`` is a deque of bools (latest at the right);
+        # mastery is reached when it is full and all entries are True.
+        self._queues: dict[str, list[str]] = {name: [] for name in self._class_order}
+        self._epochs: dict[str, int] = {name: 0 for name in self._class_order}
+        self._attempts: dict[str, int] = {name: 0 for name in self._class_order}
+        self._recent: dict[str, deque[bool]] = {
+            name: deque(maxlen=consec_solves_to_stop) for name in self._class_order
+        }
+        self._done: dict[str, bool] = {name: False for name in self._class_order}
+
+        self._class_idx = 0
+        self._next_seq_idx = start_seq_idx
+
+    # -- internal helpers ----------------------------------------------------
+
+    def _refill(self, name: str) -> None:
+        """Reshuffle the queue for ``name`` using the next epoch."""
+        epoch = self._epochs[name]
+        rng = random.Random(self._seed + _stable_hash(name) + epoch)
+        order = self._groups[name].copy()
+        rng.shuffle(order)
+        self._queues[name] = order
+        self._epochs[name] = epoch + 1
+
+    def _is_class_done(self, name: str) -> bool:
+        if self._done[name]:
+            return True
+        if self._attempts[name] >= self._max_per_class:
+            return True
+        recent = self._recent[name]
+        return len(recent) == self._consec_solves_to_stop and all(recent)
+
+    def _advance_class(self) -> None:
+        """Move ``_class_idx`` past any classes that are now done."""
+        while self._class_idx < len(self._class_order):
+            name = self._class_order[self._class_idx]
+            if self._is_class_done(name):
+                self._done[name] = True
+                self._class_idx += 1
+            else:
+                return
+
+    @staticmethod
+    def _class_of(pid: str) -> str:
+        return pid.split("__v_")[0]
+
+    # -- public API ----------------------------------------------------------
+
+    def next_problem(self) -> tuple[int, str] | None:
+        """Return the next ``(seq_idx, pid)`` to dispatch, or ``None`` if all
+        classes are exhausted or the global ``max_total`` cap is reached."""
+        if self._max_total is not None and self._next_seq_idx >= self._max_total:
+            return None
+        self._advance_class()
+        if self._class_idx >= len(self._class_order):
+            return None
+
+        name = self._class_order[self._class_idx]
+        if not self._queues[name]:
+            self._refill(name)
+
+        pid = self._queues[name].pop(0)
+        seq_idx = self._next_seq_idx
+        self._next_seq_idx += 1
+        return (seq_idx, pid)
+
+    def record_completion(self, pid: str, solved: bool) -> None:
+        """Record an outcome and update per-class state."""
+        name = self._class_of(pid)
+        if name not in self._attempts:
+            # Unknown class (shouldn't happen in practice — pid was generated
+            # by this scheduler). Ignore silently to keep replay robust.
+            return
+        self._attempts[name] += 1
+        self._recent[name].append(bool(solved))
+        if self._is_class_done(name):
+            self._done[name] = True
+
+    def is_done(self) -> bool:
+        """True if every class has been completed or abandoned, or the global
+        ``max_total`` cap has been reached."""
+        if self._max_total is not None and self._next_seq_idx >= self._max_total:
+            return True
+        self._advance_class()
+        return self._class_idx >= len(self._class_order)
+
+    @property
+    def next_seq_idx(self) -> int:
+        return self._next_seq_idx
+
+    def set_next_seq_idx(self, value: int) -> None:
+        if value < self._next_seq_idx:
+            raise ValueError(
+                f"set_next_seq_idx must not go backwards "
+                f"(have {self._next_seq_idx}, got {value})"
+            )
+        self._next_seq_idx = value
+
+    def class_state_summary(self) -> dict[str, dict[str, Any]]:
+        """Return a small dict-of-dicts describing per-class progress.
+
+        Useful for logging / debugging.
+        """
+        return {
+            name: {
+                "attempts": self._attempts[name],
+                "recent_solves": list(self._recent[name]),
+                "done": self._done[name],
+            }
+            for name in self._class_order
+        }
+
+    @property
+    def class_order(self) -> list[str]:
+        return list(self._class_order)
 
 
 def generate_variant_stream(
