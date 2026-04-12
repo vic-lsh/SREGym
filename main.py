@@ -905,9 +905,102 @@ def _build_kind_config_with_registry_auth(base_config_path: str, docker_user: st
     return tmp.name
 
 
+_REUSE_KUBECONFIG_DIR = os.path.expanduser("~/.cache/sregym/kubeconfigs")
+_REUSE_BOOL_TRUE = {"1", "true", "yes", "on"}
+
+
+def _reuse_cluster_enabled() -> bool:
+    """True iff SREGYM_REUSE_CLUSTER is set and SREGYM_FORCE_RECREATE_CLUSTER is not."""
+    reuse = os.environ.get("SREGYM_REUSE_CLUSTER", "").strip().lower() in _REUSE_BOOL_TRUE
+    force = os.environ.get("SREGYM_FORCE_RECREATE_CLUSTER", "").strip().lower() in _REUSE_BOOL_TRUE
+    return reuse and not force
+
+
+def _stable_kubeconfig_path(worker_id: int) -> str:
+    """Per-worker kubeconfig path that survives across `run_sregym.sh` invocations."""
+    os.makedirs(_REUSE_KUBECONFIG_DIR, exist_ok=True)
+    return os.path.join(_REUSE_KUBECONFIG_DIR, f"worker_{worker_id}.kubeconfig")
+
+
+def _existing_cluster_is_reusable(cluster_name: str, kubeconfig_path: str) -> tuple[bool, str]:
+    """Probe whether `cluster_name` exists and is healthy enough to reuse.
+
+    Returns (ok, reason). When ok is False, reason is a human-readable explanation
+    suitable for logging.
+    """
+    if not os.path.exists(kubeconfig_path):
+        return False, f"no stable kubeconfig at {kubeconfig_path}"
+    try:
+        clusters = subprocess.check_output(
+            ["kind", "get", "clusters"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        ).splitlines()
+    except (subprocess.SubprocessError, OSError) as e:
+        return False, f"`kind get clusters` failed: {e}"
+    if cluster_name not in clusters:
+        return False, f"cluster {cluster_name} not registered with kind"
+    try:
+        result = subprocess.run(
+            ["kubectl", "--kubeconfig", kubeconfig_path, "get", "nodes", "--no-headers"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (subprocess.SubprocessError, OSError) as e:
+        return False, f"kubectl get nodes failed: {e}"
+    node_lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+    if not node_lines:
+        return False, "no nodes found in existing cluster"
+    not_ready = [ln.split()[0] for ln in node_lines if " Ready" not in ln]
+    if not_ready:
+        return False, f"nodes not Ready: {not_ready}"
+    return True, ""
+
+
+def _attach_existing_cluster(
+    worker_id: int, experiment_log_dir: str, cluster_name: str
+) -> tuple[str, str]:
+    """Wire up env vars and per-run kubeconfig copy for a reused cluster."""
+    stable_path = _stable_kubeconfig_path(worker_id)
+    kubeconfig_dir = os.path.join(experiment_log_dir, "kubeconfigs")
+    os.makedirs(kubeconfig_dir, exist_ok=True)
+    kubeconfig_path = os.path.join(kubeconfig_dir, f"worker_{worker_id}.kubeconfig")
+    shutil.copy2(stable_path, kubeconfig_path)
+
+    os.environ["KUBECONFIG"] = kubeconfig_path
+    os.environ["SREGYM_BASE_KUBECONFIG"] = kubeconfig_path
+    os.environ["SREGYM_KIND_CLUSTER_NAME"] = cluster_name
+
+    logger.info(
+        f"Worker {worker_id} reusing existing cluster {cluster_name}; "
+        f"kubeconfig={kubeconfig_path}"
+    )
+    return cluster_name, kubeconfig_path
+
+
 def _create_worker_cluster(worker_id: int, experiment_log_dir: str) -> tuple[str, str]:
-    """Create a dedicated kind cluster for one worker and return (cluster_name, kubeconfig_path)."""
+    """Create a dedicated kind cluster for one worker and return (cluster_name, kubeconfig_path).
+
+    When SREGYM_REUSE_CLUSTER is set (and SREGYM_FORCE_RECREATE_CLUSTER is not),
+    an existing healthy `sregym-w{id}` cluster is reused instead of being torn
+    down and recreated. If reuse is requested but the cluster is missing or
+    unhealthy, falls back to a full recreate.
+    """
     cluster_name = f"{KIND_CLUSTER_PREFIX}{worker_id}"
+
+    if _reuse_cluster_enabled():
+        stable_path = _stable_kubeconfig_path(worker_id)
+        ok, reason = _existing_cluster_is_reusable(cluster_name, stable_path)
+        if ok:
+            return _attach_existing_cluster(worker_id, experiment_log_dir, cluster_name)
+        logger.info(
+            f"Reuse requested but unavailable for {cluster_name}: {reason}. "
+            f"Falling back to full recreate."
+        )
+
     kubeconfig_dir = os.path.join(experiment_log_dir, "kubeconfigs")
     os.makedirs(kubeconfig_dir, exist_ok=True)
     kubeconfig_path = os.path.join(kubeconfig_dir, f"worker_{worker_id}.kubeconfig")
@@ -990,6 +1083,12 @@ def _create_worker_cluster(worker_id: int, experiment_log_dir: str) -> tuple[str
         text=True,
     )
 
+    if _reuse_cluster_enabled():
+        try:
+            shutil.copy2(kubeconfig_path, _stable_kubeconfig_path(worker_id))
+        except OSError as e:
+            logger.warning(f"Failed to persist stable kubeconfig for reuse: {e}")
+
     logger.info(f"Worker {worker_id} cluster ready: {cluster_name}, kubeconfig={kubeconfig_path}")
     return cluster_name, kubeconfig_path
 
@@ -997,6 +1096,9 @@ def _create_worker_cluster(worker_id: int, experiment_log_dir: str) -> tuple[str
 def _delete_worker_cluster(cluster_name: str) -> None:
     """Delete a worker's dedicated kind cluster."""
     if not cluster_name:
+        return
+    if _reuse_cluster_enabled():
+        logger.info(f"Reuse mode: leaving worker kind cluster intact: {cluster_name}")
         return
     logger.info(f"Tearing down worker kind cluster: {cluster_name}")
     subprocess.run(
