@@ -10,6 +10,7 @@ import json
 import socket
 import time
 from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from unittest.mock import MagicMock, patch
 
@@ -56,6 +57,7 @@ def _make_proxy(port: int, mock_pool, hidden_namespaces=None):
     proxy.server_thread = None
     proxy._temp_files = []
     proxy._upstream_pool = None
+    proxy.api_scheme = "https"
     proxy.api_host = "fake-k8s-api"
     proxy.api_port = 6443
     proxy.ca_cert = None
@@ -84,17 +86,73 @@ def _running_proxy(mock_pool, hidden_namespaces=None):
         proxy.stop()
 
 
-def _http_request(port: int, method: str, path: str, body: bytes | None = None):
+def _http_request(
+    port: int,
+    method: str,
+    path: str,
+    body: bytes | None = None,
+    headers: dict[str, str] | None = None,
+):
     """Send an HTTP request to the proxy and return (status, body_bytes)."""
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-    headers = {}
+    request_headers = dict(headers or {})
     if body is not None:
-        headers["Content-Length"] = str(len(body))
-    conn.request(method, path, body=body, headers=headers)
+        request_headers["Content-Length"] = str(len(body))
+    conn.request(method, path, body=body, headers=request_headers)
     resp = conn.getresponse()
     data = resp.read()
     conn.close()
     return resp.status, data
+
+
+def _read_http_headers(sock: socket.socket) -> bytes:
+    """Read an HTTP response header block from a raw socket."""
+    data = b""
+    while b"\r\n\r\n" not in data:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+    return data
+
+
+@contextmanager
+def _running_upgrade_upstream():
+    """Start a tiny upstream server that upgrades then echoes tunneled bytes."""
+
+    class UpgradeEchoHandler(BaseHTTPRequestHandler):
+        received = []
+
+        def log_message(self, format, *args):
+            return
+
+        def do_GET(self):
+            self.send_response_only(101, "Switching Protocols")
+            self.send_header("Connection", "Upgrade")
+            self.send_header("Upgrade", self.headers.get("Upgrade", "websocket"))
+            self.end_headers()
+            self.wfile.flush()
+
+            self.connection.settimeout(1.0)
+            try:
+                payload = self.connection.recv(4096)
+            except socket.timeout:
+                payload = b""
+            UpgradeEchoHandler.received.append(payload)
+            if payload:
+                self.connection.sendall(b"upstream:" + payload)
+
+    port = _find_free_port()
+    server = ThreadingHTTPServer(("127.0.0.1", port), UpgradeEchoHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    time.sleep(0.05)
+    try:
+        yield port, UpgradeEchoHandler.received
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +302,43 @@ class TestFilteringLogic:
         assert "my-app" in names
         assert "chaos-operator" not in names
 
+    def test_unlisted_cluster_wide_resource_type_is_still_filtered(self):
+        """Any cluster-wide list with namespaced items should filter hidden namespaces."""
+        upstream_body = {
+            "items": [
+                {"metadata": {"name": "public-ingress", "namespace": "default"}},
+                {"metadata": {"name": "secret-ingress", "namespace": "chaos-mesh"}},
+            ]
+        }
+        mock_pool = MagicMock()
+        mock_pool.urlopen.return_value = _make_mock_response(200, upstream_body)
+
+        with _running_proxy(mock_pool) as proxy:
+            status, body = _http_request(proxy.listen_port, "GET", "/apis/networking.k8s.io/v1/ingresses")
+
+        assert status == 200
+        data = json.loads(body)
+        names = [item["metadata"]["name"] for item in data["items"]]
+        assert names == ["public-ingress"]
+
+    def test_cluster_wide_watch_stream_filters_hidden_namespace_events(self):
+        """Line-delimited watch events from hidden namespaces must be removed."""
+        upstream_body = (
+            b'{"type":"ADDED","object":{"metadata":{"name":"visible","namespace":"default"}}}\n'
+            b'{"type":"ADDED","object":{"metadata":{"name":"hidden","namespace":"chaos-mesh"}}}\n'
+        )
+        mock_pool = MagicMock()
+        mock_pool.urlopen.return_value = _make_mock_response(200, upstream_body)
+
+        with _running_proxy(mock_pool) as proxy:
+            status, body = _http_request(proxy.listen_port, "GET", "/api/v1/pods?watch=true")
+
+        assert status == 200
+        decoded_lines = [json.loads(line) for line in body.decode().splitlines() if line.strip()]
+        assert decoded_lines == [
+            {"type": "ADDED", "object": {"metadata": {"name": "visible", "namespace": "default"}}}
+        ]
+
     def test_namespaced_endpoint_not_filtered(self):
         """Requests scoped to a specific (non-hidden) namespace are not filtered."""
         upstream_body = {
@@ -364,6 +459,32 @@ class TestMethodForwarding:
         assert status == 200
         call_args = mock_pool.urlopen.call_args
         assert call_args[0][0] == method
+
+    def test_hop_by_hop_headers_not_forwarded_on_normal_requests(self):
+        """Normal proxied requests should strip hop-by-hop headers before forwarding upstream."""
+        upstream_body = {"ok": True}
+        mock_pool = MagicMock()
+        mock_pool.urlopen.return_value = _make_mock_response(200, upstream_body)
+
+        with _running_proxy(mock_pool) as proxy:
+            status, _ = _http_request(
+                proxy.listen_port,
+                "GET",
+                "/api/v1/nodes",
+                headers={
+                    "Connection": "keep-alive, upgrade",
+                    "Keep-Alive": "timeout=30",
+                    "Upgrade": "websocket",
+                    "TE": "trailers",
+                },
+            )
+
+        assert status == 200
+        forwarded_headers = mock_pool.urlopen.call_args.kwargs["headers"]
+        assert "Connection" not in forwarded_headers
+        assert "Keep-Alive" not in forwarded_headers
+        assert "Upgrade" not in forwarded_headers
+        assert "TE" not in forwarded_headers
 
 
 # ---------------------------------------------------------------------------
@@ -523,6 +644,46 @@ class TestErrorHandling:
             status, body = _http_request(proxy.listen_port, "GET", "/api/v1/nodes")
 
         assert status == 200
+
+
+class TestUpgradeTunneling:
+
+    def test_exec_upgrade_request_tunnels_bytes_after_101(self):
+        """Upgraded exec-style requests must tunnel bytes after the 101 response."""
+        with _running_upgrade_upstream() as (upstream_port, received):
+            upstream_pool = urllib3.HTTPConnectionPool("127.0.0.1", upstream_port, maxsize=2, retries=False)
+            port = _find_free_port()
+            proxy = _make_proxy(port, upstream_pool)
+            proxy.api_host = "127.0.0.1"
+            proxy.api_port = upstream_port
+            proxy.api_scheme = "http"
+            proxy.start()
+            time.sleep(0.05)
+            try:
+                with socket.create_connection(("127.0.0.1", proxy.listen_port), timeout=2) as sock:
+                    sock.settimeout(2)
+                    sock.sendall(
+                        (
+                            "GET /api/v1/namespaces/default/pods/demo/exec?command=sh HTTP/1.1\r\n"
+                            "Host: 127.0.0.1\r\n"
+                            "Connection: Upgrade\r\n"
+                            "Upgrade: websocket\r\n"
+                            "Sec-WebSocket-Version: 13\r\n"
+                            "Sec-WebSocket-Key: dGVzdA==\r\n"
+                            "\r\n"
+                        ).encode()
+                    )
+                    headers = _read_http_headers(sock)
+                    assert b"101 Switching Protocols" in headers
+
+                    sock.sendall(b"ping")
+                    echoed = sock.recv(1024)
+
+                assert echoed == b"upstream:ping"
+                assert received == [b"ping"]
+            finally:
+                proxy.stop()
+                upstream_pool.close()
 
 
 # ---------------------------------------------------------------------------
