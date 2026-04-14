@@ -45,6 +45,11 @@ from logger import init_logger
 from mcp_server.configs.load_all_cfg import mcp_server_cfg
 from mcp_server.sregym_mcp_server import app as mcp_app
 from sregym.agent_launcher import AgentLauncher
+from sregym.agent_exit import (
+    DEFAULT_GRACEFUL_EXIT_TIMEOUT_SECONDS,
+    resolve_graceful_exit_timeout_seconds,
+    wait_for_process_exit,
+)
 from sregym.agent_registry import get_agent, list_agents
 from sregym.conductor.conductor import Conductor
 from sregym.conductor.conductor_api import request_shutdown, run_api
@@ -516,6 +521,7 @@ def driver_loop(
                     # Use a unique directory per problem to avoid race conditions on instruction.txt/output files
                     agent_base_dir = os.path.join(experiment_log_dir, agent_to_run)
                     agent_log_dir = os.path.join(agent_base_dir, conductor.problem_id)
+                    agent_registration = None
 
                     if not use_external_harness:
                         _info = _safe_status_read(status_dict, seq_key, {})
@@ -532,8 +538,8 @@ def driver_loop(
                         LAUNCHER.cleanup_agent(agent_to_run)
                         _default_registry = Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml"
                         _registry_path = Path(os.environ.get("SREGYM_AGENT_REGISTRY", _default_registry))
-                        reg = get_agent(agent_to_run, path=_registry_path)
-                        if reg:
+                        agent_registration = get_agent(agent_to_run, path=_registry_path)
+                        if agent_registration:
                             extra_args = ""
                             # Pass explicit log dir to external-summarizer agents (e.g. gemini_cli)
                             if agent_to_run in AGENT_OUTPUT_FILES:
@@ -554,7 +560,7 @@ def driver_loop(
                             if not inject_summary:
                                 extra_args += " --no-inject-summary"
 
-                            await LAUNCHER.ensure_started(reg, extra_args=extra_args.strip())
+                            await LAUNCHER.ensure_started(agent_registration, extra_args=extra_args.strip())
 
                     # Poll until grading completes or agent exits
                     agent_exit_code: int | None = None
@@ -598,20 +604,30 @@ def driver_loop(
                     if not use_external_harness:
                         agent_proc = LAUNCHER._procs.get(agent_to_run)
                         if agent_proc:
-                            console.log("⏳ Waiting for agent process to complete...")
-                            timeout = 30  # seconds
-                            elapsed = 0
-                            while elapsed < timeout:
-                                agent_proc.proc.poll()
-                                if agent_proc.proc.returncode is not None:
-                                    console.log(
-                                        f"✅ Agent process completed with return code {agent_proc.proc.returncode}"
-                                    )
-                                    break
-                                await asyncio.sleep(1)
-                                elapsed += 1
+                            timeout = resolve_graceful_exit_timeout_seconds(agent_registration)
+                            if timeout is None:
+                                console.log(
+                                    "⏳ Waiting for agent process to complete "
+                                    "(no timeout for post-run finalization)..."
+                                )
                             else:
-                                console.log(f"⚠️  Agent process did not complete within {timeout}s, will force cleanup")
+                                console.log(
+                                    f"⏳ Waiting for agent process to complete "
+                                    f"(timeout: {int(DEFAULT_GRACEFUL_EXIT_TIMEOUT_SECONDS)}s)..."
+                                )
+                            completed = await wait_for_process_exit(
+                                agent_proc.proc,
+                                timeout_seconds=timeout,
+                            )
+                            if completed:
+                                console.log(
+                                    f"✅ Agent process completed with return code {agent_proc.proc.returncode}"
+                                )
+                            else:
+                                console.log(
+                                    f"⚠️  Agent process did not complete within {int(timeout)}s, "
+                                    "will force cleanup"
+                                )
 
                     snapshot = {"problem_id": pid}
                     if seq_idx is not None:
