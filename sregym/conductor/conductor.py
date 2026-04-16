@@ -2,6 +2,7 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -26,10 +27,27 @@ from sregym.service.kubectl import KubeCtl
 from sregym.service.telemetry.prometheus import Prometheus
 
 
+_DEFAULT_CLEANUP_DEFER_TIMEOUT_SECONDS = 600.0
+
+
 class Conductor:
-    def __init__(self, tasklist_path: str | None = None):
+    def __init__(self, tasklist_path: str | None = None, defer_cleanup: bool = False):
         self.base_kubeconfig = require_kubeconfig_path()
         self._tasklist_path = tasklist_path
+
+        # Opt-in per-agent via `defer_cleanup: true` in agents.yaml. When True,
+        # after the final stage is evaluated the conductor transitions to
+        # "awaiting_cleanup" instead of running teardown. This lets agents that
+        # do post-submit reflection (e.g. crucible: recovery-diagnosis + playbook
+        # generation) inspect the live cluster before it is torn down.
+        # Teardown runs on an explicit POST /cleanup from the agent, on the
+        # driver's crash-path force_cleanup(), or on the watchdog timer — whichever
+        # fires first. All paths serialize on self._cleanup_lock for exactly-once.
+        self._defer_cleanup = defer_cleanup
+        # Serializes teardown so any combination of /cleanup, driver crash-path, and
+        # watchdog timer invokes _run_teardown() exactly once.
+        self._cleanup_lock = threading.Lock()
+        self._cleanup_timer: threading.Timer | None = None
 
         # core services
         self.problems = ProblemRegistry()
@@ -290,10 +308,22 @@ class Conductor:
             except Exception as e:
                 self.logger.warning(f"Failed to set NoiseManager stage: {e}")
         else:
-            # No more stages; finish the problem
-            self._finish_problem()
+            # No more stages. If deferred cleanup is enabled, gate teardown on an
+            # explicit signal (POST /cleanup, driver crash-path, or watchdog) so the
+            # agent can run post-submit reflection against a live cluster.
+            if self._defer_cleanup:
+                self.submission_stage = "awaiting_cleanup"
+                self.logger.info("[STAGE] Awaiting cleanup signal from agent")
+                self._start_cleanup_watchdog()
+            else:
+                self._finish_problem()
 
-    def _finish_problem(self):
+    def _run_teardown(self):
+        """Synchronously recover fault, undeploy app, reconcile cluster state.
+
+        Not idempotent on its own — must be called through force_cleanup()
+        or _finish_problem(), both of which serialize on self._cleanup_lock.
+        """
         self.logger.info("[STAGE] Done, recover fault")
 
         # Stop noises
@@ -319,9 +349,58 @@ class Conductor:
             except Exception as e:
                 self.logger.warning(f"Failed to reconcile cluster state: {e}")
 
-        # Set to "done" after all cleanup is complete to prevent race condition
-        # where the next problem starts before cleanup finishes
-        self.submission_stage = "done"
+    def _finish_problem(self):
+        with self._cleanup_lock:
+            if self.submission_stage == "done":
+                return
+            self._cancel_cleanup_watchdog()
+            self._run_teardown()
+            # Set to "done" after all cleanup is complete to prevent race condition
+            # where the next problem starts before cleanup finishes
+            self.submission_stage = "done"
+
+    def force_cleanup(self):
+        """Public entry used by the POST /cleanup handler, the driver's crash
+        path, and the watchdog timer. Idempotent: safe to call from multiple
+        call sites and stages."""
+        with self._cleanup_lock:
+            if self.submission_stage == "done":
+                return
+            if self.submission_stage != "awaiting_cleanup":
+                self.logger.warning(
+                    f"force_cleanup called at unexpected stage {self.submission_stage!r}; "
+                    "running teardown anyway to guarantee cluster cleanup."
+                )
+            self._cancel_cleanup_watchdog()
+            self._run_teardown()
+            self.submission_stage = "done"
+
+    def _start_cleanup_watchdog(self):
+        timeout_env = os.getenv("SREGYM_CLEANUP_DEFER_TIMEOUT_SECONDS")
+        try:
+            timeout = float(timeout_env) if timeout_env else _DEFAULT_CLEANUP_DEFER_TIMEOUT_SECONDS
+        except ValueError:
+            timeout = _DEFAULT_CLEANUP_DEFER_TIMEOUT_SECONDS
+        self._cancel_cleanup_watchdog()
+        timer = threading.Timer(timeout, self._cleanup_watchdog_fired, args=(timeout,))
+        timer.daemon = True
+        self._cleanup_timer = timer
+        timer.start()
+
+    def _cancel_cleanup_watchdog(self):
+        timer = self._cleanup_timer
+        if timer is not None:
+            timer.cancel()
+            self._cleanup_timer = None
+
+    def _cleanup_watchdog_fired(self, timeout: float):
+        self.logger.warning(
+            f"Cleanup deferral watchdog fired after {timeout:.0f}s; running teardown."
+        )
+        try:
+            self.force_cleanup()
+        except Exception as e:
+            self.logger.exception(f"Watchdog-triggered force_cleanup failed: {e}")
 
     async def start_problem(self) -> StartProblemResult:
         """
@@ -451,8 +530,9 @@ class Conductor:
         next_index = self.current_stage_index + 1
         self._advance_to_next_stage(start_index=next_index)
 
-        # Restart noise if there are more stages
-        if self.submission_stage != "done":
+        # Restart noise only when advancing to another real stage. Do NOT restart while
+        # in "awaiting_cleanup" (deferred-teardown gate) or after "done" (teardown ran).
+        if self.submission_stage not in {"done", "awaiting_cleanup"}:
             try:
                 nm = get_noise_manager()
                 self.logger.info("Restarting noise manager for next stage...")

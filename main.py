@@ -562,9 +562,13 @@ def driver_loop(
 
                             await LAUNCHER.ensure_started(agent_registration, extra_args=extra_args.strip())
 
-                    # Poll until grading completes or agent exits
+                    # Poll until grading completes or agent exits.
+                    # "awaiting_cleanup" is a terminal-for-the-agent state when deferred
+                    # cleanup is enabled — the agent is expected to do post-submit work and
+                    # then POST /cleanup (handled below after the natural-exit wait).
                     agent_exit_code: int | None = None
-                    while conductor.submission_stage != "done":
+                    _terminal_stages = {"done", "awaiting_cleanup"}
+                    while conductor.submission_stage not in _terminal_stages:
                         if status_dict is not None:
                             current_stage = conductor.submission_stage or "Running"
                             _info = _safe_status_read(status_dict, seq_key, {})
@@ -628,6 +632,16 @@ def driver_loop(
                                     f"⚠️  Agent process did not complete within {int(timeout)}s, "
                                     "will force cleanup"
                                 )
+
+                    # Safety-net: if the conductor is still holding at "awaiting_cleanup"
+                    # (deferred-cleanup path) OR was left mid-stage by a crashed agent,
+                    # run teardown now so the cluster is clean before the next problem.
+                    # Idempotent via conductor._cleanup_lock.
+                    if conductor.submission_stage != "done":
+                        try:
+                            await asyncio.to_thread(conductor.force_cleanup)
+                        except Exception as e:
+                            console.log(f"⚠️  Post-agent force_cleanup failed: {e}")
 
                     snapshot = {"problem_id": pid}
                     if seq_idx is not None:
@@ -2063,7 +2077,22 @@ def main(
     os.environ["KUBECONFIG"] = base_kubeconfig
     os.environ["SREGYM_BASE_KUBECONFIG"] = base_kubeconfig
 
-    conductor = Conductor(tasklist_path=getattr(args, "tasklist", None))
+    # Resolve whether this agent opts into deferred cleanup (see AgentRegistration).
+    # When enabled, the conductor holds teardown until /cleanup is POSTed, and the
+    # agent subprocess sees SREGYM_DEFER_CLEANUP=1 so it knows to make that call.
+    defer_cleanup = False
+    if args.agent and not args.use_external_harness:
+        _default_registry = Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml"
+        _registry_path = Path(os.environ.get("SREGYM_AGENT_REGISTRY", _default_registry))
+        _reg = get_agent(args.agent, path=_registry_path)
+        if _reg and _reg.defer_cleanup:
+            defer_cleanup = True
+            os.environ["SREGYM_DEFER_CLEANUP"] = "1"
+
+    conductor = Conductor(
+        tasklist_path=getattr(args, "tasklist", None),
+        defer_cleanup=defer_cleanup,
+    )
 
     # Start the driver in the background; it will call request_shutdown() when finished
     driver_thread = threading.Thread(

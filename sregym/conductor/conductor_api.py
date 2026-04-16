@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import threading
@@ -82,6 +83,27 @@ async def submit_solution(req: SubmitRequest):
     return results
 
 
+@app.post("/cleanup")
+async def post_cleanup():
+    """Trigger deferred teardown. Only valid when submission_stage is
+    "awaiting_cleanup". Returns a noop response if teardown already ran."""
+    if _conductor is None:
+        logger.error("No problem has been started")
+        raise HTTPException(status_code=400, detail="No problem has been started")
+
+    stage = _conductor.submission_stage
+    if stage == "done":
+        return {"status": "noop", "stage": stage}
+    if stage != "awaiting_cleanup":
+        raise HTTPException(
+            status_code=409,
+            detail=f"/cleanup is only valid when stage is 'awaiting_cleanup' (current: {stage!r})",
+        )
+
+    await asyncio.to_thread(_conductor.force_cleanup)
+    return {"status": "ok", "stage": _conductor.submission_stage}
+
+
 @app.get("/status")
 async def get_status():
     if _conductor is None:
@@ -144,7 +166,8 @@ def run_api(conductor):
             """
 **Available Endpoints**
 - **POST /submit**: `{ "solution": "<your-solution>" }` → grades the current stage
-- **GET /status**: returns `{ "stage": "setup" | "diagnosis" | "mitigation" | "done" }`
+- **POST /cleanup**: triggers deferred teardown (only valid when stage is `awaiting_cleanup`)
+- **GET /status**: returns `{ "stage": "setup" | "diagnosis" | "mitigation" | "awaiting_cleanup" | "done" }`
 - **GET /stages**: returns `{ "stages": ["diagnosis", "mitigation", ...] }` — planned stage sequence
 """
         )

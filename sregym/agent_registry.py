@@ -19,6 +19,16 @@ class AgentRegistration:
     # Optional opt-in: wait for the agent to exit naturally after the
     # conductor reaches "done" instead of applying the generic timeout.
     wait_for_natural_exit: bool | None = None
+    # Optional opt-in: after the final stage is evaluated, hold teardown
+    # (recover_fault + undeploy + reconcile) until the agent POSTs /cleanup.
+    # Agents that do post-submit reflection against the live cluster (e.g.
+    # crucible's recovery-diagnosis + playbook generation) need this. Without
+    # it, the conductor tears down synchronously on the final /submit and the
+    # reflection step sees a deleted namespace. sregym reads this flag at
+    # startup, passes it to Conductor(defer_cleanup=...), and injects
+    # SREGYM_DEFER_CLEANUP=1 into the agent subprocess env so the agent knows
+    # to POST /cleanup when its post-submit work is complete.
+    defer_cleanup: bool | None = None
 
 
 def _ensure_file(path: Path) -> None:
@@ -37,6 +47,7 @@ def list_agents(path: Path = DEFAULT_REG_PATH) -> dict[str, AgentRegistration]:
             kickoff_workdir=agent_data.get("kickoff_workdir"),
             kickoff_env=agent_data.get("kickoff_env") or {},
             wait_for_natural_exit=agent_data.get("wait_for_natural_exit"),
+            defer_cleanup=agent_data.get("defer_cleanup"),
         )
     return out
 
