@@ -109,6 +109,7 @@ class AgentLauncher:
         """
         existing = self._procs.get(agent_name)
         if not existing:
+            self._clean_exp_env()
             return
 
         # Check if already terminated
