@@ -446,8 +446,10 @@ def driver_loop(
                     )
 
             # Prepare for logging redirection if in parallel mode
+            problem_logs_dir = os.path.join(experiment_log_dir, "problem_logs")
+            os.makedirs(problem_logs_dir, exist_ok=True)
             redirect_ctx = (
-                open(os.path.join(experiment_log_dir, f"{pid}.log"), "w") if status_dict is not None else None
+                open(os.path.join(problem_logs_dir, f"{pid}.log"), "w") if status_dict is not None else None
             )
             original_stdout = sys.stdout
             original_stderr = sys.stderr
