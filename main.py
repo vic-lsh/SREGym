@@ -320,20 +320,14 @@ def driver_loop(
         all_results_for_agent = []
 
         def write_error_result(problem_id: str, error_message: str, sequence_index: int = None,
-                              start_date_time: str = None):
+                              start_date_time: str = None, problem_run_dir: str = None):
             """Write a structured result row even when execution fails before grading."""
             if not agent_to_run:
                 return
             current_date_time = start_date_time or get_current_datetime_formatted()
-            if sequence_index is not None:
-                csv_path = os.path.join(
-                    experiment_log_dir,
-                    f"{current_date_time}_{sequence_index:05d}_{problem_id}_{agent_to_run}_results.csv",
-                )
-            else:
-                csv_path = os.path.join(
-                    experiment_log_dir, f"{current_date_time}_{problem_id}_{agent_to_run}_results.csv"
-                )
+            if problem_run_dir is None:
+                raise RuntimeError("write_error_result requires problem_run_dir")
+            csv_path = os.path.join(problem_run_dir, f"results_{current_date_time}.csv")
             snapshot = {
                 "problem_id": problem_id,
                 "run_status": "Error",
@@ -407,19 +401,24 @@ def driver_loop(
             # Unique key for this sequence slot (disambiguates repeated pids)
             seq_key = f"{seq_idx:05d}:{pid}" if seq_idx is not None else pid
 
-            # Check for existing results (Resume capability)
-            # We look for any timestamped file matching the pattern *_{pid}_{agent_to_run}_results.csv
-            # Only checking if agent_to_run is specified (not external harness)
+            # Resolve per-problem run directory (reuse existing if any, else create a new one).
+            # Layout: <experiment_log_dir>/problem_runs/<MMDD_HHMM>_[<seq:05d>_]<pid>/
+            pid_suffix = f"{seq_idx:05d}_{pid}" if seq_idx is not None else pid
+            runs_root = os.path.join(experiment_log_dir, "problem_runs")
+            existing_run_dirs = sorted(glob.glob(os.path.join(runs_root, f"*_{pid_suffix}")))
+            if existing_run_dirs:
+                problem_run_dir = existing_run_dirs[-1]
+            else:
+                problem_dir_ts = get_current_datetime_formatted()
+                problem_run_dir = os.path.join(runs_root, f"{problem_dir_ts}_{pid_suffix}")
+            os.makedirs(problem_run_dir, exist_ok=True)
+            agent_log_dir = os.path.join(problem_run_dir, "agent")
+            os.makedirs(agent_log_dir, exist_ok=True)
+
+            # Check for existing results (Resume capability) under the problem run dir.
             completed_iterations = 0
             if agent_to_run and not use_external_harness:
-                if seq_idx is not None:
-                    # Sequence mode: match by seq_idx to disambiguate repeated problems
-                    search_pattern = os.path.join(
-                        experiment_log_dir, f"*_{seq_idx:05d}_{pid}_{agent_to_run}_results.csv"
-                    )
-                else:
-                    search_pattern = os.path.join(experiment_log_dir, f"*_{pid}_{agent_to_run}_results.csv")
-                existing_files = glob.glob(search_pattern)
+                existing_files = glob.glob(os.path.join(problem_run_dir, "results_*.csv"))
 
                 for f_path in existing_files:
                     if is_result_complete(f_path):
@@ -446,10 +445,8 @@ def driver_loop(
                     )
 
             # Prepare for logging redirection if in parallel mode
-            problem_logs_dir = os.path.join(experiment_log_dir, "problem_logs")
-            os.makedirs(problem_logs_dir, exist_ok=True)
             redirect_ctx = (
-                open(os.path.join(problem_logs_dir, f"{pid}.log"), "w") if status_dict is not None else None
+                open(os.path.join(problem_run_dir, "run.log"), "w") if status_dict is not None else None
             )
             original_stdout = sys.stdout
             original_stderr = sys.stderr
@@ -519,10 +516,9 @@ def driver_loop(
                         console.log(f"✅ Fault injected for problem '{pid}'. Exiting for external harness.")
                         return []
 
-                    # Define agent log directory
-                    # Use a unique directory per problem to avoid race conditions on instruction.txt/output files
+                    # Agent base dir is retained for AGENT_OUTPUT_FILES summary-dir plumbing only.
+                    # Per-problem agent_log_dir is resolved above (problem_run_dir/agent).
                     agent_base_dir = os.path.join(experiment_log_dir, agent_to_run)
-                    agent_log_dir = os.path.join(agent_base_dir, conductor.problem_id)
                     agent_registration = None
 
                     if not use_external_harness:
@@ -665,16 +661,8 @@ def driver_loop(
                     fieldnames = sorted(snapshot.keys())
                     current_date_time = iteration_start_time
 
-                    # Write results to experiment_log_dir
-                    if seq_idx is not None:
-                        csv_path = os.path.join(
-                            experiment_log_dir,
-                            f"{current_date_time}_{seq_idx:05d}_{pid}_{agent_to_run}_results.csv",
-                        )
-                    else:
-                        csv_path = os.path.join(
-                            experiment_log_dir, f"{current_date_time}_{pid}_{agent_to_run}_results.csv"
-                        )
+                    # Write results into the per-problem run dir.
+                    csv_path = os.path.join(problem_run_dir, f"results_{current_date_time}.csv")
                     with open(csv_path, "w", newline="") as csvfile:
                         writer = csv.DictWriter(csvfile, fieldnames=fieldnames, quoting=csv.QUOTE_NONNUMERIC)
                         writer.writeheader()
@@ -744,7 +732,8 @@ def driver_loop(
                     console.log(f"⚠️  Post-error cleanup also failed: {cleanup_err}")
                 if not use_external_harness:
                     write_error_result(pid, str(e), sequence_index=seq_idx,
-                                       start_date_time=iteration_start_time)
+                                       start_date_time=iteration_start_time,
+                                       problem_run_dir=problem_run_dir)
                 _info = _safe_status_read(status_dict, seq_key, {})
                 _st = _info.get("start_time", time.time()) if isinstance(_info, dict) else time.time()
                 _safe_status_update(status_dict, seq_key, {
