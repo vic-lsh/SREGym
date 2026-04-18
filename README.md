@@ -64,6 +64,49 @@ kind create cluster --config kind/kind-config-arm.yaml
 
 <h2 id="⚙️usage">⚙️ Usage</h2>
 
+### Live App Deployment
+
+Use this when you want a dedicated cluster with a live application for a human or another agent to interact with directly.
+
+From the repo root, use the wrapper script:
+
+```bash
+bash scripts/run_sregym_live.sh deploy --app hotel_reservation
+bash scripts/run_sregym_live.sh deploy --app hotel_reservation --with-k8s-proxy
+```
+
+Deploy a healthy application:
+
+```bash
+python main.py deploy --app hotel_reservation
+```
+
+Deploy an application with a specific benchmark problem already injected:
+
+```bash
+python main.py deploy --problem wrong_service_selector_hotel_reservation
+```
+
+Start the filtered localhost Kubernetes API proxy as part of the live deployment:
+
+```bash
+python main.py deploy --app hotel_reservation --with-k8s-proxy
+```
+
+Both commands provision a dedicated kind cluster, deploy the app and supporting infrastructure, persist deployment state under `logs/live_deployments/`, and print:
+
+- the deployment name
+- the cluster name
+- the kubeconfig path
+- a localhost frontend URL when port-forwarding succeeds
+- a proxy URL and proxy kubeconfig path when `--with-k8s-proxy` is set
+
+To tear the environment down later:
+
+```bash
+python main.py undeploy --deployment-name <name>
+```
+
 ### Running an Agent
 
 #### Quick Start

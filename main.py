@@ -12,12 +12,14 @@ import random
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
-from datetime import datetime
+from datetime import UTC, datetime
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import psutil
@@ -76,7 +78,16 @@ def agent_supports_summary(agent_name: str) -> bool:
 
 
 KIND_CLUSTER_PREFIX = "sregym-w"
+LIVE_CLUSTER_PREFIX = "sregym-live"
 WORKER_META_KEY_PREFIX = "__worker_meta__"
+LIVE_COMMANDS = {"deploy", "undeploy", "serve-k8s-proxy"}
+CLI_APP_NAME_ALIASES = {
+    "astronomy_shop": "Astronomy Shop",
+    "hotel_reservation": "Hotel Reservation",
+    "social_network": "Social Network",
+    "fleet_cast": "Fleet Cast",
+    "blueprint_hotel_reservation": "Blueprint Hotel Reservation",
+}
 
 # Exceptions raised when the multiprocessing Manager's IPC pipe is broken.
 # When this happens, status_dict proxy operations fail — but that should not
@@ -256,6 +267,454 @@ def generate_sequence(problem_ids: list, n: int, seed: int) -> list:
     """Generate a deterministic sequence of n problem IDs sampled with replacement."""
     rng = random.Random(seed)
     return [rng.choice(problem_ids) for _ in range(n)]
+
+
+@dataclass
+class FrontendPortForwardInfo:
+    local_port: int
+    pid: int
+    url: str
+
+
+@dataclass
+class K8sProxyInfo:
+    port: int
+    pid: int
+    url: str
+    kubeconfig_path: str
+
+
+@dataclass
+class LiveDeploymentState:
+    deployment_name: str
+    deployment_dir: str
+    cluster_name: str
+    kubeconfig_path: str
+    app_name: str
+    namespace: str
+    problem_id: str | None
+    frontend_service: str
+    frontend_target_port: int
+    frontend_local_port: int | None
+    frontend_url: str | None
+    frontend_port_forward_pid: int | None
+    k8s_proxy_port: int | None
+    k8s_proxy_pid: int | None
+    k8s_proxy_url: str | None
+    k8s_proxy_kubeconfig_path: str | None
+    created_at: str
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "LiveDeploymentState":
+        return cls(
+            deployment_name=str(data["deployment_name"]),
+            deployment_dir=str(data["deployment_dir"]),
+            cluster_name=str(data["cluster_name"]),
+            kubeconfig_path=str(data["kubeconfig_path"]),
+            app_name=str(data["app_name"]),
+            namespace=str(data["namespace"]),
+            problem_id=data.get("problem_id"),
+            frontend_service=str(data["frontend_service"]),
+            frontend_target_port=int(data["frontend_target_port"]),
+            frontend_local_port=(
+                int(data["frontend_local_port"]) if data.get("frontend_local_port") is not None else None
+            ),
+            frontend_url=data.get("frontend_url"),
+            frontend_port_forward_pid=(
+                int(data["frontend_port_forward_pid"])
+                if data.get("frontend_port_forward_pid") is not None
+                else None
+            ),
+            k8s_proxy_port=int(data["k8s_proxy_port"]) if data.get("k8s_proxy_port") is not None else None,
+            k8s_proxy_pid=int(data["k8s_proxy_pid"]) if data.get("k8s_proxy_pid") is not None else None,
+            k8s_proxy_url=data.get("k8s_proxy_url"),
+            k8s_proxy_kubeconfig_path=data.get("k8s_proxy_kubeconfig_path"),
+            created_at=str(data["created_at"]),
+        )
+
+    @classmethod
+    def load(cls, path: str | Path) -> "LiveDeploymentState":
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+        return cls.from_dict(data)
+
+    def write(self, path: str | Path) -> None:
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(self.to_dict(), handle, indent=2, sort_keys=True)
+
+
+class _LiveAppProblem:
+    def __init__(self, app):
+        self.app = app
+        self.namespace = app.namespace
+
+    def requires_khaos(self) -> bool:
+        return False
+
+    def inject_fault(self) -> None:
+        return None
+
+    def recover_fault(self) -> None:
+        return None
+
+
+def _default_live_deployments_root() -> str:
+    return os.path.abspath(os.path.join("logs", "live_deployments"))
+
+
+def _sanitize_deployment_name(name: str) -> str:
+    sanitized = re.sub(r"[^a-z0-9._-]+", "-", name.strip().lower()).strip(".-_")
+    if not sanitized:
+        raise ValueError("Deployment name must contain at least one alphanumeric character.")
+    return sanitized[:48]
+
+
+def _default_deployment_name(problem_id: str | None, app_name: str | None) -> str:
+    target = problem_id or app_name or "live"
+    return _sanitize_deployment_name(f"{target}-{get_current_datetime_formatted()}")
+
+
+def _deployment_dir_for_name(deployment_name: str, deployments_root: str | None = None) -> str:
+    root = os.path.abspath(deployments_root or _default_live_deployments_root())
+    return os.path.join(root, _sanitize_deployment_name(deployment_name))
+
+
+def _deployment_state_path(deployment_name: str, deployments_root: str | None = None) -> str:
+    return os.path.join(_deployment_dir_for_name(deployment_name, deployments_root), "deployment_state.json")
+
+
+def _resolve_cli_app_name(app_name: str) -> str:
+    normalized = app_name.strip()
+    alias_key = normalized.lower().replace("-", "_").replace(" ", "_")
+    if alias_key in CLI_APP_NAME_ALIASES:
+        return CLI_APP_NAME_ALIASES[alias_key]
+
+    for display_name in CLI_APP_NAME_ALIASES.values():
+        if normalized.lower() == display_name.lower():
+            return display_name
+
+    raise ValueError(
+        f"Unknown app '{app_name}'. Valid app names: {sorted(CLI_APP_NAME_ALIASES)}"
+    )
+
+
+def _cluster_name_for_live_deployment(deployment_name: str) -> str:
+    cluster_safe_name = _sanitize_deployment_name(deployment_name).replace("_", "-")
+    return f"{LIVE_CLUSTER_PREFIX}-{cluster_safe_name}"[:60]
+
+
+def _pick_free_local_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _stop_trace_port_forward(app) -> None:
+    trace_api = getattr(app, "trace_api", None)
+    if trace_api and hasattr(trace_api, "stop_port_forward"):
+        try:
+            trace_api.stop_port_forward()
+        except Exception as exc:
+            logger.warning(f"Failed to stop trace port-forward for live deployment: {exc}")
+
+
+def _start_frontend_port_forward(
+    *,
+    kubeconfig_path: str,
+    namespace: str,
+    service_name: str,
+    target_port: int,
+    local_port: int | None = None,
+    log_path: str | None = None,
+) -> FrontendPortForwardInfo | None:
+    chosen_port = local_port or _pick_free_local_port()
+    log_target = log_path or os.devnull
+    env = os.environ.copy()
+    env["KUBECONFIG"] = kubeconfig_path
+    env["SREGYM_BASE_KUBECONFIG"] = kubeconfig_path
+
+    with open(log_target, "a", encoding="utf-8") as log_handle:
+        process = subprocess.Popen(
+            [
+                "kubectl",
+                "--kubeconfig",
+                kubeconfig_path,
+                "-n",
+                namespace,
+                "port-forward",
+                f"svc/{service_name}",
+                f"{chosen_port}:{target_port}",
+                "--address",
+                "127.0.0.1",
+            ],
+            stdout=log_handle,
+            stderr=log_handle,
+            start_new_session=True,
+            text=True,
+            env=env,
+        )
+
+    time.sleep(2)
+    if process.poll() is not None:
+        logger.warning(
+            "Frontend port-forward exited early for service "
+            f"{service_name} in namespace {namespace}; see {log_target}"
+        )
+        return None
+
+    return FrontendPortForwardInfo(
+        local_port=chosen_port,
+        pid=process.pid,
+        url=f"http://127.0.0.1:{chosen_port}",
+    )
+
+
+def _terminate_port_forward(pid: int | None) -> None:
+    _terminate_background_process(pid, description="frontend port-forward")
+
+
+def _terminate_background_process(pid: int | None, *, description: str) -> None:
+    if not pid:
+        return
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except PermissionError as exc:
+        logger.warning(f"Failed to terminate {description} process group {pid}: {exc}")
+
+
+def _write_live_k8s_proxy_kubeconfig(*, listen_port: int, output_path: str) -> str:
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    kubeconfig = f"""apiVersion: v1
+kind: Config
+current-context: sregym-agent
+clusters:
+- name: sregym-proxy
+  cluster:
+    server: http://127.0.0.1:{listen_port}
+    insecure-skip-tls-verify: true
+contexts:
+- name: sregym-agent
+  context:
+    cluster: sregym-proxy
+    user: sregym-agent
+users:
+- name: sregym-agent
+  user: {{}}
+"""
+    with open(output_path, "w", encoding="utf-8") as handle:
+        handle.write(kubeconfig)
+    return output_path
+
+
+def _wait_for_local_listener(*, port: int, process: subprocess.Popen, timeout_seconds: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(f"process exited with code {process.returncode}")
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                return
+        except OSError:
+            time.sleep(0.1)
+
+    raise TimeoutError(f"Timed out waiting for local listener on port {port}")
+
+
+def _start_live_k8s_proxy(
+    *,
+    kubeconfig_path: str,
+    deployment_dir: str,
+    listen_port: int | None = None,
+    log_path: str | None = None,
+) -> K8sProxyInfo:
+    chosen_port = listen_port or _pick_free_local_port()
+    log_target = log_path or os.devnull
+    proxy_kubeconfig_path = os.path.join(deployment_dir, "kubeconfigs", "agent-proxy.kubeconfig")
+    env = os.environ.copy()
+    env["KUBECONFIG"] = kubeconfig_path
+    env["SREGYM_BASE_KUBECONFIG"] = kubeconfig_path
+    env["PYTHONUNBUFFERED"] = "1"
+
+    command = [
+        sys.executable,
+        os.path.abspath(__file__),
+        "serve-k8s-proxy",
+        "--kubeconfig-path",
+        kubeconfig_path,
+        "--listen-port",
+        str(chosen_port),
+    ]
+
+    with open(log_target, "a", encoding="utf-8") as log_handle:
+        process = subprocess.Popen(
+            command,
+            stdout=log_handle,
+            stderr=log_handle,
+            start_new_session=True,
+            text=True,
+            env=env,
+        )
+
+    try:
+        _wait_for_local_listener(port=chosen_port, process=process)
+    except Exception as exc:
+        _terminate_background_process(process.pid, description="K8s proxy")
+        raise RuntimeError(f"Failed to start K8s proxy on port {chosen_port}; see {log_target}") from exc
+
+    _write_live_k8s_proxy_kubeconfig(listen_port=chosen_port, output_path=proxy_kubeconfig_path)
+    return K8sProxyInfo(
+        port=chosen_port,
+        pid=process.pid,
+        url=f"http://127.0.0.1:{chosen_port}",
+        kubeconfig_path=proxy_kubeconfig_path,
+    )
+
+
+def _terminate_live_k8s_proxy(pid: int | None) -> None:
+    _terminate_background_process(pid, description="K8s proxy")
+
+
+def _build_live_state(
+    *,
+    deployment_name: str,
+    deployment_dir: str,
+    cluster_name: str,
+    kubeconfig_path: str,
+    app,
+    problem_id: str | None,
+    port_forward: FrontendPortForwardInfo | None,
+    k8s_proxy: K8sProxyInfo | None,
+) -> LiveDeploymentState:
+    return LiveDeploymentState(
+        deployment_name=deployment_name,
+        deployment_dir=deployment_dir,
+        cluster_name=cluster_name,
+        kubeconfig_path=kubeconfig_path,
+        app_name=app.name,
+        namespace=app.namespace,
+        problem_id=problem_id,
+        frontend_service=app.frontend_service,
+        frontend_target_port=app.frontend_port,
+        frontend_local_port=port_forward.local_port if port_forward else None,
+        frontend_url=port_forward.url if port_forward else None,
+        frontend_port_forward_pid=port_forward.pid if port_forward else None,
+        k8s_proxy_port=k8s_proxy.port if k8s_proxy else None,
+        k8s_proxy_pid=k8s_proxy.pid if k8s_proxy else None,
+        k8s_proxy_url=k8s_proxy.url if k8s_proxy else None,
+        k8s_proxy_kubeconfig_path=k8s_proxy.kubeconfig_path if k8s_proxy else None,
+        created_at=datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+    )
+
+
+def deploy_live_environment(
+    *,
+    problem_id: str | None,
+    app_name: str | None,
+    deployment_name: str | None = None,
+    deployments_root: str | None = None,
+    frontend_local_port: int | None = None,
+    with_k8s_proxy: bool = False,
+) -> LiveDeploymentState:
+    if not problem_id and not app_name:
+        raise ValueError("deploy requires either problem_id or app_name")
+
+    resolved_name = _sanitize_deployment_name(deployment_name or _default_deployment_name(problem_id, app_name))
+    deployment_dir = _deployment_dir_for_name(resolved_name, deployments_root)
+    os.makedirs(deployment_dir, exist_ok=True)
+    state_path = os.path.join(deployment_dir, "deployment_state.json")
+    if os.path.exists(state_path):
+        raise FileExistsError(
+            f"Live deployment '{resolved_name}' already exists. Use undeploy first or choose a different name."
+        )
+
+    cluster_name = ""
+    port_forward: FrontendPortForwardInfo | None = None
+    k8s_proxy: K8sProxyInfo | None = None
+    try:
+        cluster_name, kubeconfig_path = _create_live_cluster(resolved_name, deployment_dir)
+        conductor = Conductor()
+
+        if problem_id:
+            problem = conductor.problems.get_problem_instance(problem_id)
+            if app_name:
+                expected_app_name = _resolve_cli_app_name(app_name)
+                if problem.app.name != expected_app_name:
+                    raise ValueError(
+                        f"Problem '{problem_id}' deploys '{problem.app.name}', not '{expected_app_name}'."
+                    )
+            if problem.requires_khaos() and conductor.kubectl.is_emulated_cluster():
+                raise RuntimeError(
+                    f"Problem '{problem_id}' requires Khaos and cannot be deployed on an emulated cluster."
+                )
+        else:
+            resolved_app_name = _resolve_cli_app_name(app_name or "")
+            app = conductor.apps.get_app_instance(resolved_app_name)
+            problem = _LiveAppProblem(app)
+
+        conductor.problem_id = problem_id
+        conductor.problem = problem
+        conductor.app = problem.app
+        conductor.deploy_app()
+        if problem_id:
+            problem.inject_fault()
+        _stop_trace_port_forward(problem.app)
+
+        port_forward = _start_frontend_port_forward(
+            kubeconfig_path=kubeconfig_path,
+            namespace=problem.app.namespace,
+            service_name=problem.app.frontend_service,
+            target_port=problem.app.frontend_port,
+            local_port=frontend_local_port,
+            log_path=os.path.join(deployment_dir, "frontend-port-forward.log"),
+        )
+        if with_k8s_proxy:
+            k8s_proxy = _start_live_k8s_proxy(
+                kubeconfig_path=kubeconfig_path,
+                deployment_dir=deployment_dir,
+                log_path=os.path.join(deployment_dir, "k8s-proxy.log"),
+            )
+        state = _build_live_state(
+            deployment_name=resolved_name,
+            deployment_dir=deployment_dir,
+            cluster_name=cluster_name,
+            kubeconfig_path=kubeconfig_path,
+            app=problem.app,
+            problem_id=problem_id,
+            port_forward=port_forward,
+            k8s_proxy=k8s_proxy,
+        )
+        state.write(state_path)
+        return state
+    except Exception:
+        _terminate_live_k8s_proxy(k8s_proxy.pid if k8s_proxy else None)
+        _terminate_port_forward(port_forward.pid if port_forward else None)
+        if cluster_name:
+            _delete_live_cluster(cluster_name)
+        raise
+
+
+def undeploy_live_environment(
+    deployment_name: str,
+    *,
+    deployments_root: str | None = None,
+) -> LiveDeploymentState:
+    state_path = _deployment_state_path(deployment_name, deployments_root)
+    if not os.path.exists(state_path):
+        raise FileNotFoundError(
+            f"Live deployment '{_sanitize_deployment_name(deployment_name)}' not found at {state_path}"
+        )
+
+    state = LiveDeploymentState.load(state_path)
+    _terminate_port_forward(state.frontend_port_forward_pid)
+    _terminate_live_k8s_proxy(state.k8s_proxy_pid)
+    _delete_live_cluster(state.cluster_name)
+    os.remove(state_path)
+    return state
 
 
 def driver_loop(
@@ -1002,6 +1461,93 @@ def _attach_existing_cluster(
     return cluster_name, kubeconfig_path
 
 
+def _create_kind_cluster(cluster_name: str, kubeconfig_path: str) -> None:
+    config_path = _worker_kind_config_path()
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Kind config file not found: {config_path}")
+
+    docker_user = os.environ.get("DOCKER_USERNAME")
+    docker_password = os.environ.get("DOCKER_PASSWORD")
+    patched_config_path = None
+    if docker_user and docker_password:
+        patched_config_path = _build_kind_config_with_registry_auth(config_path, docker_user, docker_password)
+        config_path = patched_config_path
+        logger.info("Docker Hub credentials will be injected into containerd on all kind nodes.")
+    else:
+        logger.warning(
+            "DOCKER_USERNAME/DOCKER_PASSWORD not set. Kind nodes will pull Docker Hub images unauthenticated."
+        )
+
+    logger.info(f"Preparing isolated kind cluster: {cluster_name}")
+
+    try:
+        cmd = ["docker", "ps", "-a", "-q", "--filter", f"name=^{cluster_name}-"]
+        container_ids = subprocess.check_output(cmd, text=True).strip().split()
+        if container_ids:
+            logger.info(f"Force removing lingering containers for {cluster_name}: {container_ids}")
+            subprocess.run(
+                ["docker", "rm", "-f"] + container_ids,
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+    except Exception as exc:
+        logger.warning(f"Failed to force cleanup containers for {cluster_name}: {exc}")
+
+    subprocess.run(
+        ["kind", "delete", "cluster", "--name", cluster_name],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+
+    try:
+        subprocess.run(
+            [
+                "kind",
+                "create",
+                "cluster",
+                "--name",
+                cluster_name,
+                "--config",
+                config_path,
+                "--kubeconfig",
+                kubeconfig_path,
+                "--wait",
+                "180s",
+            ],
+            check=True,
+        )
+    finally:
+        if patched_config_path and os.path.exists(patched_config_path):
+            os.unlink(patched_config_path)
+
+    _apply_worker_cpu_limit(cluster_name)
+
+    os.environ["KUBECONFIG"] = kubeconfig_path
+    os.environ["SREGYM_BASE_KUBECONFIG"] = kubeconfig_path
+    os.environ["SREGYM_KIND_CLUSTER_NAME"] = cluster_name
+
+    subprocess.run(
+        ["kubectl", "config", "current-context", "--kubeconfig", kubeconfig_path],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+
+
+def _create_live_cluster(deployment_name: str, deployment_dir: str) -> tuple[str, str]:
+    kubeconfig_dir = os.path.join(deployment_dir, "kubeconfigs")
+    os.makedirs(kubeconfig_dir, exist_ok=True)
+    cluster_name = _cluster_name_for_live_deployment(deployment_name)
+    kubeconfig_path = os.path.join(kubeconfig_dir, f"{_sanitize_deployment_name(deployment_name)}.kubeconfig")
+    _create_kind_cluster(cluster_name, kubeconfig_path)
+    logger.info(f"Live deployment cluster ready: {cluster_name}, kubeconfig={kubeconfig_path}")
+    return cluster_name, kubeconfig_path
+
+
 def _create_worker_cluster(worker_id: int, experiment_log_dir: str) -> tuple[str, str]:
     """Create a dedicated kind cluster for one worker and return (cluster_name, kubeconfig_path).
 
@@ -1025,84 +1571,7 @@ def _create_worker_cluster(worker_id: int, experiment_log_dir: str) -> tuple[str
     kubeconfig_dir = os.path.join(experiment_log_dir, "kubeconfigs")
     os.makedirs(kubeconfig_dir, exist_ok=True)
     kubeconfig_path = os.path.join(kubeconfig_dir, f"worker_{worker_id}.kubeconfig")
-    config_path = _worker_kind_config_path()
-
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(f"Kind config file not found: {config_path}")
-
-    docker_user = os.environ.get("DOCKER_USERNAME")
-    docker_password = os.environ.get("DOCKER_PASSWORD")
-    patched_config_path = None
-    if docker_user and docker_password:
-        patched_config_path = _build_kind_config_with_registry_auth(config_path, docker_user, docker_password)
-        config_path = patched_config_path
-        logger.info("Docker Hub credentials will be injected into containerd on all kind nodes.")
-    else:
-        logger.warning(
-            "DOCKER_USERNAME/DOCKER_PASSWORD not set. Kind nodes will pull Docker Hub images unauthenticated."
-        )
-
-    logger.info(f"Preparing isolated kind cluster for worker {worker_id}: {cluster_name}")
-
-    # Force cleanup of any lingering docker containers for this worker
-    # kind delete cluster sometimes misses these if the cluster creation was interrupted
-    try:
-        # distinct name filter to avoid deleting other workers' containers (e.g. w1 vs w10)
-        # Using name=^cluster_name- ensures we target only this cluster's nodes
-        cmd = ["docker", "ps", "-a", "-q", "--filter", f"name=^{cluster_name}-"]
-        container_ids = subprocess.check_output(cmd, text=True).strip().split()
-        if container_ids:
-            logger.info(f"Force removing lingering containers for {cluster_name}: {container_ids}")
-            subprocess.run(
-                ["docker", "rm", "-f"] + container_ids,
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-    except Exception as e:
-        logger.warning(f"Failed to force cleanup containers for {cluster_name}: {e}")
-
-    # Best-effort cleanup in case a previous run crashed and left this worker cluster behind.
-    subprocess.run(
-        ["kind", "delete", "cluster", "--name", cluster_name],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        text=True,
-    )
-
-    subprocess.run(
-        [
-            "kind",
-            "create",
-            "cluster",
-            "--name",
-            cluster_name,
-            "--config",
-            config_path,
-            "--kubeconfig",
-            kubeconfig_path,
-            "--wait",
-            "180s",
-        ],
-        check=True,
-    )
-    if patched_config_path and os.path.exists(patched_config_path):
-        os.unlink(patched_config_path)
-    _apply_worker_cpu_limit(cluster_name)
-
-    os.environ["KUBECONFIG"] = kubeconfig_path
-    os.environ["SREGYM_BASE_KUBECONFIG"] = kubeconfig_path
-    os.environ["SREGYM_KIND_CLUSTER_NAME"] = cluster_name
-
-    # Validate that the worker kubeconfig is immediately usable.
-    subprocess.run(
-        ["kubectl", "config", "current-context", "--kubeconfig", kubeconfig_path],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        text=True,
-    )
+    _create_kind_cluster(cluster_name, kubeconfig_path)
 
     if _reuse_cluster_enabled():
         try:
@@ -1114,6 +1583,23 @@ def _create_worker_cluster(worker_id: int, experiment_log_dir: str) -> tuple[str
     return cluster_name, kubeconfig_path
 
 
+def _delete_kind_cluster(cluster_name: str) -> None:
+    if not cluster_name:
+        return
+    logger.info(f"Tearing down kind cluster: {cluster_name}")
+    subprocess.run(
+        ["kind", "delete", "cluster", "--name", cluster_name],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+
+
+def _delete_live_cluster(cluster_name: str) -> None:
+    _delete_kind_cluster(cluster_name)
+
+
 def _delete_worker_cluster(cluster_name: str) -> None:
     """Delete a worker's dedicated kind cluster."""
     if not cluster_name:
@@ -1121,11 +1607,7 @@ def _delete_worker_cluster(cluster_name: str) -> None:
     if _reuse_cluster_enabled():
         logger.info(f"Reuse mode: leaving worker kind cluster intact: {cluster_name}")
         return
-    logger.info(f"Tearing down worker kind cluster: {cluster_name}")
-    subprocess.run(
-        ["kind", "delete", "cluster", "--name", cluster_name],
-        check=False,
-    )
+    _delete_kind_cluster(cluster_name)
 
 
 def _worker_meta_key(worker_id: int) -> str:
@@ -2153,8 +2635,62 @@ def main(
         return results
 
 
-if __name__ == "__main__":
-    # Parse command-line arguments
+def build_live_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Manage live SREGym application deployments")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    deploy_parser = subparsers.add_parser(
+        "deploy",
+        help="Provision a dedicated kind cluster and deploy an app or problem environment",
+    )
+    deploy_parser.add_argument(
+        "--app",
+        type=str,
+        default=None,
+        help="App to deploy without faults (e.g. hotel_reservation, astronomy_shop)",
+    )
+    deploy_parser.add_argument(
+        "--problem",
+        type=str,
+        default=None,
+        help="Problem ID to deploy and inject into the live cluster",
+    )
+    deploy_parser.add_argument(
+        "--deployment-name",
+        type=str,
+        default=None,
+        help="Stable name for the deployment state directory and cluster",
+    )
+    deploy_parser.add_argument(
+        "--local-port",
+        type=int,
+        default=None,
+        help="Optional localhost port to use for the frontend port-forward",
+    )
+    deploy_parser.add_argument(
+        "--with-k8s-proxy",
+        action="store_true",
+        help="Start the filtered localhost Kubernetes API proxy and emit a proxy kubeconfig for agents",
+    )
+
+    undeploy_parser = subparsers.add_parser(
+        "undeploy",
+        help="Tear down a previously created live deployment",
+    )
+    undeploy_parser.add_argument(
+        "--deployment-name",
+        type=str,
+        required=True,
+        help="Deployment name returned by the deploy command",
+    )
+
+    proxy_parser = subparsers.add_parser("serve-k8s-proxy", help=argparse.SUPPRESS)
+    proxy_parser.add_argument("--kubeconfig-path", type=str, required=True, help=argparse.SUPPRESS)
+    proxy_parser.add_argument("--listen-port", type=int, required=True, help=argparse.SUPPRESS)
+    return parser
+
+
+def build_benchmark_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run SREGym benchmark suite")
     parser.add_argument(
         "--problem",
@@ -2331,17 +2867,28 @@ if __name__ == "__main__":
              "(e.g. readiness_probe_misconfiguration). Repeat the flag to "
              "select multiple specs. Default: all specs.",
     )
-    args = parser.parse_args()
+    return parser
 
-    # Validate that --agent is provided when not using external harness
+
+def _validate_live_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    if args.command == "deploy":
+        if not args.app and not args.problem:
+            parser.error("deploy requires --app or --problem")
+        if args.local_port is not None and args.local_port <= 0:
+            parser.error("--local-port must be > 0")
+        return
+
+    if args.command == "serve-k8s-proxy" and args.listen_port <= 0:
+        parser.error("--listen-port must be > 0")
+
+
+def _validate_benchmark_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     if not args.use_external_harness and args.agent is None:
         parser.error("--agent is required when --use-external-harness is not set")
 
-    # Validate sequence mode constraints
     if args.sequence_len > 0 and args.problem:
         parser.error("--sequence-len and --problem are mutually exclusive")
 
-    # Validate variant mode constraints
     if args.variants:
         if args.variant_order != "adaptive" and args.variant_count <= 0:
             parser.error("--variant-count is required and must be > 0 when --variants is set")
@@ -2369,6 +2916,7 @@ if __name__ == "__main__":
         parser.error("--variant-spec requires --variants")
     if args.variant_spec:
         from sregym.conductor.problems.variant_specs import get_all_variant_specs
+
         known_specs = {spec.base_name for spec in get_all_variant_specs()}
         unknown = [n for n in args.variant_spec if n not in known_specs]
         if unknown:
@@ -2377,7 +2925,6 @@ if __name__ == "__main__":
                 f"Valid names: {sorted(known_specs)}"
             )
 
-    # Validate --seed-summary
     if args.seed_summary:
         if args.experiment_dir and os.path.exists(args.experiment_dir):
             parser.error("--seed-summary cannot be combined with resuming an existing --experiment-dir")
@@ -2385,6 +2932,95 @@ if __name__ == "__main__":
         if not seed_path.is_file():
             parser.error(f"--seed-summary: path does not exist or is not a file: {args.seed_summary}")
 
+
+def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
+    effective_argv = list(argv if argv is not None else sys.argv[1:])
+    if effective_argv and effective_argv[0] in LIVE_COMMANDS:
+        parser = build_live_parser()
+        args = parser.parse_args(effective_argv)
+        _validate_live_args(parser, args)
+        return args
+
+    parser = build_benchmark_parser()
+    args = parser.parse_args(effective_argv)
+    _validate_benchmark_args(parser, args)
+    return args
+
+
+def run_live_command(args: argparse.Namespace) -> int:
+    if args.command == "serve-k8s-proxy":
+        return run_live_k8s_proxy(args)
+
+    if args.command == "deploy":
+        deployment_name = _sanitize_deployment_name(
+            args.deployment_name or _default_deployment_name(args.problem, args.app)
+        )
+        deployment_dir = _deployment_dir_for_name(deployment_name)
+        os.makedirs(deployment_dir, exist_ok=True)
+        os.environ["SREGYM_LOG_FILE"] = os.path.join(deployment_dir, "live_deploy.log")
+        init_logger()
+        state = deploy_live_environment(
+            problem_id=args.problem,
+            app_name=args.app,
+            deployment_name=deployment_name,
+            frontend_local_port=args.local_port,
+            with_k8s_proxy=args.with_k8s_proxy,
+        )
+        print(f"Deployment '{state.deployment_name}' is ready.")
+        print(f"Cluster: {state.cluster_name}")
+        print(f"Kubeconfig: {state.kubeconfig_path}")
+        if state.problem_id:
+            print(f"Injected problem: {state.problem_id}")
+        else:
+            print(f"Application: {state.app_name}")
+        if state.frontend_url:
+            print(f"Frontend URL: {state.frontend_url}")
+        else:
+            print("Frontend URL: unavailable (frontend port-forward failed to start)")
+        if state.k8s_proxy_url and state.k8s_proxy_kubeconfig_path:
+            print(f"K8s Proxy URL: {state.k8s_proxy_url}")
+            print(f"K8s Proxy Kubeconfig: {state.k8s_proxy_kubeconfig_path}")
+        print(f"Undeploy with: python main.py undeploy --deployment-name {state.deployment_name}")
+        return 0
+
+    if args.command == "undeploy":
+        deployment_dir = _deployment_dir_for_name(args.deployment_name)
+        os.makedirs(deployment_dir, exist_ok=True)
+        os.environ["SREGYM_LOG_FILE"] = os.path.join(deployment_dir, "live_undeploy.log")
+        init_logger()
+        state = undeploy_live_environment(args.deployment_name)
+        print(f"Deployment '{state.deployment_name}' removed.")
+        print(f"Deleted cluster: {state.cluster_name}")
+        return 0
+
+    raise ValueError(f"Unsupported live command: {args.command}")
+
+
+def run_live_k8s_proxy(args: argparse.Namespace) -> int:
+    from sregym.service.k8s_proxy import KubernetesAPIProxy
+
+    stop_event = threading.Event()
+
+    def _handle_signal(_signum, _frame):
+        stop_event.set()
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
+    proxy = KubernetesAPIProxy(listen_port=args.listen_port, kubeconfig_path=args.kubeconfig_path)
+    proxy.start()
+    try:
+        stop_event.wait()
+    finally:
+        proxy.stop()
+    return 0
+
+
+if __name__ == "__main__":
+    cli_args = parse_cli_args()
+    if getattr(cli_args, "command", None) in LIVE_COMMANDS:
+        sys.exit(run_live_command(cli_args))
+
     # Always run through the parallel wrapper to ensure consistent logging and behavior
     # even for single-worker runs (capture stdout/stderr, etc.)
-    run_parallel(args)
+    run_parallel(cli_args)
