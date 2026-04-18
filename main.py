@@ -895,6 +895,7 @@ def deploy_live_environment(
             shared_cluster_state.write(_shared_live_cluster_state_path(deployments_root))
         if problem_id:
             problem.inject_fault()
+            problem.verify_fault_applied()
         _stop_trace_port_forward(problem.app)
 
         port_forward = _start_frontend_port_forward(
