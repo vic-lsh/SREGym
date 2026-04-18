@@ -26,3 +26,13 @@ class Problem(ABC):
     @abstractmethod
     def recover_fault(self):
         pass
+
+    def verify_fault_applied(self) -> None:
+        """Optionally assert that the fault is actually in effect after inject_fault.
+
+        Default: no-op. Subclasses override to query live cluster state and raise
+        (any exception) if the expected faulty post-state isn't present. The deploy
+        flow calls this right after inject_fault; a raise fails the deploy before
+        the environment is handed out.
+        """
+        return None

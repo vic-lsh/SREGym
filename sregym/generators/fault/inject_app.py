@@ -1,6 +1,7 @@
 """Inject faults at the application layer: Code, MongoDB, Redis, etc."""
 
 import base64
+import logging
 import textwrap
 import time
 
@@ -9,11 +10,21 @@ from kubernetes import client
 from sregym.generators.fault.base import FaultInjector
 from sregym.service.kubectl import KubeCtl
 
+logger = logging.getLogger("all.sregym.fault.inject_app")
+
+
+class FaultInjectionError(RuntimeError):
+    """Raised when a fault-injection step fails to produce its intended effect."""
+
 
 class ApplicationFaultInjector(FaultInjector):
     def __init__(self, namespace: str):
         self.namespace = namespace
-        self.kubectl = KubeCtl()
+        # Strict kubectl: any non-zero kubectl exit during fault injection raises instead of
+        # silently turning into a stderr-string return value. Downstream this propagates
+        # through @mark_fault_injected and fails the deploy, so we don't hand out a
+        # "working" environment that wasn't actually faulted.
+        self.kubectl = KubeCtl(strict=True)
         self.mongo_service_pod_map = {"mongodb-rate": "rate", "mongodb-geo": "geo"}
 
     def delete_service_pods(self, target_service_pods: list[str]):
@@ -25,35 +36,69 @@ class ApplicationFaultInjector(FaultInjector):
 
     ############# FAULT LIBRARY ################
     # A.1 - revoke_auth: Revoke admin privileges in MongoDB - Auth
+    _REVOKE_AUTH_TARGET_DB = {"mongodb-rate": "rate-db", "mongodb-geo": "geo-db"}
+
     def inject_revoke_auth(self, microservices: list[str]):
-        """Inject a fault to revoke admin privileges in MongoDB."""
-        print(f"Microservices to inject: {microservices}")
+        """Inject a fault to revoke admin privileges in MongoDB.
+
+        Raises FaultInjectionError if the revoke kubectl exec fails, or if the
+        post-inject verification shows the target role is still granted.
+        """
         target_services = ["mongodb-rate", "mongodb-geo"]
         for service in target_services:
-            if service in microservices:
-                pods = self.kubectl.list_pods(self.namespace)
-                # print(pods)
-                target_mongo_pods = [pod.metadata.name for pod in pods.items if service in pod.metadata.name]
-                print(f"Target MongoDB Pods: {target_mongo_pods}")
+            if service not in microservices:
+                continue
 
-                # Find the corresponding service pod
-                target_service_pods = [
-                    pod.metadata.name
-                    for pod in pods.items
-                    if self.mongo_service_pod_map[service] in pod.metadata.name and "mongodb-" not in pod.metadata.name
-                ]
-                print(f"Target Service Pods: {target_service_pods}")
+            pods = self.kubectl.list_pods(self.namespace)
+            target_mongo_pods = [pod.metadata.name for pod in pods.items if service in pod.metadata.name]
+            target_service_pods = [
+                pod.metadata.name
+                for pod in pods.items
+                if self.mongo_service_pod_map[service] in pod.metadata.name and "mongodb-" not in pod.metadata.name
+            ]
+            logger.info(
+                f"inject_revoke_auth service={service} mongo_pods={target_mongo_pods} "
+                f"service_pods={target_service_pods}"
+            )
 
-                for pod in target_mongo_pods:
-                    if service == "mongodb-rate":
-                        revoke_command = f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash /scripts/revoke-admin-rate-mongo.sh"
-                    elif service == "mongodb-geo":
-                        revoke_command = f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash /scripts/revoke-admin-geo-mongo.sh"
-                    result = self.kubectl.exec_command(revoke_command)
-                    print(f"Injection result for {service}: {result}")
+            target_db = self._REVOKE_AUTH_TARGET_DB[service]
+            for pod in target_mongo_pods:
+                script = f"/scripts/revoke-admin-{'rate' if service == 'mongodb-rate' else 'geo'}-mongo.sh"
+                revoke_command = f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash {script}"
+                try:
+                    self.kubectl.exec_command(revoke_command, check=True)
+                except Exception as e:
+                    raise FaultInjectionError(
+                        f"revoke_auth: kubectl exec failed on {pod} (script={script}): {e!r}"
+                    ) from e
+                self._verify_revoke_auth(pod, target_db)
 
-                self.delete_service_pods(target_service_pods)
-                time.sleep(3)
+            self.delete_service_pods(target_service_pods)
+            time.sleep(3)
+
+    def _verify_revoke_auth(self, mongo_pod: str, target_db: str) -> None:
+        """Query the admin user's roles; raise FaultInjectionError if target_db is still granted.
+
+        The revoke shell script does not `set -e`, so it exits 0 even if the mongo
+        command errored. Verifying the post-state via a separate query closes that gap.
+        """
+        verify_cmd = (
+            f"kubectl exec -it {mongo_pod} -n {self.namespace} -- "
+            f"mongo admin --quiet -u admin -p admin --authenticationDatabase admin "
+            f"--eval 'printjson(db.getUser(\"admin\").roles)'"
+        )
+        try:
+            out = self.kubectl.exec_command(verify_cmd, check=True)
+        except Exception as e:
+            raise FaultInjectionError(
+                f"revoke_auth: verification query failed on {mongo_pod}: {e!r}"
+            ) from e
+        if f'"db" : "{target_db}"' in out:
+            raise FaultInjectionError(
+                f"revoke_auth: admin still has role on {target_db} after revoke "
+                f"(pod={mongo_pod}); mongo getUser output: {out!r}"
+            )
+        logger.info(f"revoke_auth verified: admin on {mongo_pod} no longer has a role on {target_db}")
 
     def recover_revoke_auth(self, microservices: list[str]):
         target_services = ["mongodb-rate", "mongodb-geo"]

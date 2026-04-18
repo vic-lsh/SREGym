@@ -31,9 +31,15 @@ WAIT_FOR_POD_READY_TIMEOUT = int(os.getenv("WAIT_FOR_POD_READY_TIMEOUT", "600"))
 
 
 class KubeCtl:
-    def __init__(self, kubeconfig_path: Optional[str] = None):
-        """Initialize the KubeCtl object and load the Kubernetes configuration."""
+    def __init__(self, kubeconfig_path: Optional[str] = None, *, strict: bool = False):
+        """Initialize the KubeCtl object and load the Kubernetes configuration.
+
+        strict=True makes exec_command raise by default on non-zero exit instead of
+        silently returning stderr-as-string. Use in code paths (e.g., fault injection)
+        where a silent failure would corrupt downstream state.
+        """
         self.kubeconfig_path = self._resolve_kubeconfig_path(kubeconfig_path)
+        self._strict = strict
         try:
             self.api_client = config.new_client_from_config(config_file=self.kubeconfig_path)
         except Exception as e:
@@ -487,8 +493,16 @@ class KubeCtl:
             else:
                 logger.error(f"Error checking/creating namespace '{namespace}': {e}")
 
-    def exec_command(self, command: str, input_data=None):
-        """Execute an arbitrary kubectl command."""
+    def exec_command(self, command: str, input_data=None, *, check: Optional[bool] = None):
+        """Execute an arbitrary kubectl command.
+
+        check semantics:
+          - check=True   → re-raise CalledProcessError on non-zero exit
+          - check=False  → return stderr-as-string on non-zero (legacy)
+          - check=None   → use strict-mode setting from __init__ (default False)
+        """
+        if check is None:
+            check = self._strict
         if input_data is not None:
             input_data = input_data.encode("utf-8")
         env = os.environ.copy()
@@ -498,6 +512,13 @@ class KubeCtl:
             out = subprocess.run(command, shell=True, check=True, capture_output=True, input=input_data, env=env)
             return out.stdout.decode("utf-8")
         except subprocess.CalledProcessError as e:
+            logger.error(
+                f"exec_command failed rc={e.returncode} cmd={command!r} "
+                f"stdout={e.stdout.decode('utf-8', errors='replace')!r} "
+                f"stderr={e.stderr.decode('utf-8', errors='replace')!r}"
+            )
+            if check:
+                raise
             return e.stderr.decode("utf-8")
 
         # if out.stderr:

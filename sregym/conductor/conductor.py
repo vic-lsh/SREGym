@@ -234,6 +234,7 @@ class Conductor:
 
         self.logger.info("[ENV] Starting fault injection...")
         self.problem.inject_fault()
+        self.problem.verify_fault_applied()
         self.logger.info("[ENV] Injected fault")
         self.fault_injected = True
 

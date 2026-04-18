@@ -37,6 +37,7 @@ class MultipleIndependentFailures(Problem):
         for p in self.problems:
             print(f"Injecting Fault: {p.__class__.__name__} | Namespace: {p.namespace}")
             p.inject_fault()
+            p.verify_fault_applied()
             time.sleep(1)
         self.faults_str = " | ".join([f"{p.__class__.__name__}" for p in self.problems])
         print(
