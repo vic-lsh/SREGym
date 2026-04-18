@@ -16,9 +16,11 @@ import json
 import logging
 import os
 import signal
+import subprocess
 import sys
 import time
 import traceback
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
@@ -77,6 +79,23 @@ class PodDiff:
 
 
 @dataclass
+class AgentVerification:
+    """Mirror of sregym_agents.fault_verifier.FaultVerification.
+
+    Kept as a local dataclass so this module (inside the bench/sregym
+    submodule) does not have to import sregym_agents. The verifier
+    subprocess writes a JSON blob matching these fields; we hydrate it
+    here.
+    """
+    fault_confirmed: Optional[bool]
+    other_faults: list[str] = field(default_factory=list)
+    reasoning: str = ""
+    raw_output: str = ""
+    parse_error: Optional[str] = None
+    elapsed_s: float = 0.0
+
+
+@dataclass
 class ProblemResult:
     problem_id: str
     worker_id: int
@@ -85,6 +104,7 @@ class ProblemResult:
     pre_probe: Optional[ProbeResult] = None
     post_probe: Optional[ProbeResult] = None
     pod_diff: Optional[PodDiff] = None
+    agent_verification: Optional[AgentVerification] = None
     error_stage: Optional[str] = None
     yellow_reasons: list[str] = field(default_factory=list)
     skip_reason: Optional[str] = None
@@ -176,6 +196,19 @@ def compute_verdict(result: ProblemResult) -> Verdict:
                 f"(pre={pre.success_rate:.2f}, post={post.success_rate:.2f}); "
                 "fault may be silent, inert, or on a non-loadgen path."
             )
+
+    av = result.agent_verification
+    if av is not None and av.fault_confirmed is False:
+        snippet = av.reasoning.strip().splitlines()[0] if av.reasoning.strip() else ""
+        yellow.append(
+            "agent verifier: expected fault not confirmed"
+            + (f" — {snippet}" if snippet else "")
+        )
+    if av is not None and av.other_faults:
+        yellow.append(
+            "agent verifier: unexpected fault(s) present — "
+            + "; ".join(av.other_faults)
+        )
 
     result.yellow_reasons = yellow
     result.verdict = Verdict.YELLOW if yellow else Verdict.PASS
@@ -275,6 +308,7 @@ def run_stress_problem(
     probe_duration_s: float = 30.0,
     snapshot_fn: Callable[[Any], PodSnapshot] = snapshot_pods,
     sleep_fn: Callable[[float], None] = time.sleep,
+    agent_verifier_fn: Optional[Callable[..., AgentVerification]] = None,
 ) -> ProblemResult:
     """Run a single problem end-to-end on `conductor`, without agent involvement.
 
@@ -382,6 +416,28 @@ def run_stress_problem(
         except Exception as exc:
             result.post_probe = ProbeResult(error=f"{type(exc).__name__}: {exc}")
 
+    # --- AGENT VERIFY (optional) ----------------------------------------
+    if agent_verifier_fn is not None:
+        av_start = time.monotonic()
+        try:
+            av = agent_verifier_fn(problem=problem, worker_id=worker_id)
+        except Exception as exc:
+            av_elapsed = time.monotonic() - av_start
+            err = f"{type(exc).__name__}: {exc}"
+            # Verifier crashes are not counted as stage failures — the
+            # injection pipeline itself is still green; we just don't get
+            # the agent's second opinion.
+            result.stages.append(StageOutcome(
+                stage="agent_verify", ok=False, duration_s=av_elapsed, error=err,
+            ))
+            logger.warning(f"[{problem_id}] agent_verify raised: {err}")
+        else:
+            av_elapsed = time.monotonic() - av_start
+            result.agent_verification = av
+            result.stages.append(StageOutcome(
+                stage="agent_verify", ok=True, duration_s=av_elapsed,
+            ))
+
     # --- RECOVER --------------------------------------------------------
     _record_stage(result, "recover", problem.recover_fault)
 
@@ -462,10 +518,26 @@ def write_report(results: list[ProblemResult], path: Path | str) -> None:
 def summarize_report(results: list[ProblemResult]) -> str:
     counts = {v.value: 0 for v in Verdict}
     failed_by_stage: dict[str, int] = {}
+    av_confirmed = 0
+    av_not_confirmed = 0
+    av_other_faults = 0
+    av_parse_error = 0
+    av_present = 0
     for r in results:
         counts[Verdict(r.verdict).value] += 1
         if r.error_stage:
             failed_by_stage[r.error_stage] = failed_by_stage.get(r.error_stage, 0) + 1
+        if r.agent_verification is not None:
+            av_present += 1
+            av = r.agent_verification
+            if av.fault_confirmed is True:
+                av_confirmed += 1
+            elif av.fault_confirmed is False:
+                av_not_confirmed += 1
+            if av.other_faults:
+                av_other_faults += 1
+            if av.parse_error:
+                av_parse_error += 1
     lines = [
         f"total={len(results)} "
         f"pass={counts['pass']} fail={counts['fail']} "
@@ -474,6 +546,12 @@ def summarize_report(results: list[ProblemResult]) -> str:
     if failed_by_stage:
         by_stage = ", ".join(f"{k}={v}" for k, v in sorted(failed_by_stage.items()))
         lines.append(f"failed stages: {by_stage}")
+    if av_present:
+        lines.append(
+            f"agent_verify: confirmed={av_confirmed} not_confirmed={av_not_confirmed} "
+            f"other_faults_found={av_other_faults} parse_errors={av_parse_error} "
+            f"(of {av_present} runs)"
+        )
     return "\n".join(lines)
 
 
@@ -508,6 +586,14 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Per-probe loadgen sampling duration.")
     p.add_argument("--out-dir", type=str, default=None,
                    help="Output directory (default: bench/sregym/logs/stress/<timestamp>).")
+    p.add_argument("--agent-verify", action="store_true",
+                   help="After injection, invoke sregym_agents.fault_verifier to "
+                        "check whether the expected fault is present and whether "
+                        "there are any unexpected faults.")
+    p.add_argument("--agent-verify-model", type=str, default=None,
+                   help="Optional model override for the fault verifier agent.")
+    p.add_argument("--agent-verify-timeout-sec", type=int, default=300,
+                   help="Timeout for each fault-verifier invocation.")
     return p.parse_args(argv)
 
 
@@ -515,6 +601,95 @@ def _default_out_dir() -> Path:
     bench = Path(__file__).resolve().parent
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     return bench / "logs" / "stress" / ts
+
+
+def _outer_repo_root() -> Path:
+    """Outer sds repo root (two levels up from bench/sregym/stress_test.py)."""
+    return Path(__file__).resolve().parents[2]
+
+
+def _invoke_fault_verifier_subprocess(
+    *,
+    problem_id: str,
+    root_cause: str,
+    app_name: str,
+    namespace: str,
+    kubeconfig_path: str,
+    worker_id: int,
+    out_dir: Path,
+    model: Optional[str],
+    timeout_s: int,
+) -> AgentVerification:
+    """Spawn `python -m sregym_agents.fault_verifier` from the outer repo root.
+
+    The outer repo is a uv workspace that includes `libs/agent_cli/` and
+    `sregym_agents/`; the bench/sregym submodule is not a member of that
+    workspace, so we have to hop back out to the outer root with `uv run`
+    to get the verifier package on the import path.
+    """
+    repo_root = _outer_repo_root()
+    av_dir = out_dir / "agent_verify"
+    av_dir.mkdir(parents=True, exist_ok=True)
+    output_path = av_dir / f"w{worker_id}_{problem_id}_{uuid.uuid4().hex[:8]}.json"
+
+    argv = [
+        "uv", "run", "python", "-m", "sregym_agents.fault_verifier",
+        "--problem-id", problem_id,
+        "--root-cause", root_cause,
+        "--app-name", app_name,
+        "--namespace", namespace,
+        "--kubeconfig-path", kubeconfig_path,
+        "--output", str(output_path),
+        "--timeout-sec", str(timeout_s),
+    ]
+    if model:
+        argv += ["--model", model]
+
+    env = {**os.environ, "KUBECONFIG": kubeconfig_path}
+    started = time.monotonic()
+    try:
+        subprocess.run(
+            argv,
+            cwd=str(repo_root),
+            env=env,
+            check=False,
+            timeout=timeout_s + 60,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return AgentVerification(
+            fault_confirmed=None,
+            parse_error=f"verifier subprocess timeout after {exc.timeout:.0f}s",
+            elapsed_s=time.monotonic() - started,
+        )
+    except Exception as exc:
+        return AgentVerification(
+            fault_confirmed=None,
+            parse_error=f"{type(exc).__name__}: {exc}",
+            elapsed_s=time.monotonic() - started,
+        )
+
+    if not output_path.exists():
+        return AgentVerification(
+            fault_confirmed=None,
+            parse_error=f"verifier produced no output at {output_path}",
+            elapsed_s=time.monotonic() - started,
+        )
+    try:
+        data = json.loads(output_path.read_text())
+    except Exception as exc:
+        return AgentVerification(
+            fault_confirmed=None,
+            parse_error=f"could not parse verifier output: {exc}",
+            elapsed_s=time.monotonic() - started,
+        )
+    return AgentVerification(
+        fault_confirmed=data.get("fault_confirmed"),
+        other_faults=list(data.get("other_faults") or []),
+        reasoning=str(data.get("reasoning") or ""),
+        raw_output=str(data.get("raw_output") or ""),
+        parse_error=data.get("parse_error"),
+        elapsed_s=float(data.get("elapsed_s") or 0.0),
+    )
 
 
 def _resolve_user_path(p: str) -> Path:
@@ -589,9 +764,24 @@ def _worker_entry(args: argparse.Namespace, worker_id: int, queue: Any, out_dir:
         cluster_name = ""
         results: list[ProblemResult] = []
         try:
-            cluster_name, _ = worker_infra.create_worker_cluster(worker_id, str(out_dir))
+            cluster_name, kubeconfig_path = worker_infra.create_worker_cluster(worker_id, str(out_dir))
             from sregym.conductor.conductor import Conductor  # noqa: E402
             conductor = Conductor()
+
+            agent_verifier_fn: Optional[Callable[..., AgentVerification]] = None
+            if args.agent_verify:
+                def agent_verifier_fn(*, problem: Any, worker_id: int) -> AgentVerification:  # noqa: ARG001
+                    return _invoke_fault_verifier_subprocess(
+                        problem_id=getattr(conductor, "problem_id", "") or "",
+                        root_cause=getattr(problem, "root_cause", "") or "",
+                        app_name=getattr(problem.app, "name", "") or "",
+                        namespace=getattr(problem, "namespace", "") or "",
+                        kubeconfig_path=kubeconfig_path,
+                        worker_id=worker_id,
+                        out_dir=out_dir,
+                        model=args.agent_verify_model,
+                        timeout_s=args.agent_verify_timeout_sec,
+                    )
 
             done = 0
             while True:
@@ -612,6 +802,7 @@ def _worker_entry(args: argparse.Namespace, worker_id: int, queue: Any, out_dir:
                         worker_id=worker_id,
                         probe_enabled=not args.no_loadgen_probe,
                         probe_duration_s=args.probe_duration_sec,
+                        agent_verifier_fn=agent_verifier_fn,
                     )
                 except Exception as exc:
                     r = ProblemResult(
@@ -680,11 +871,23 @@ def main(argv: Optional[list[str]] = None) -> int:
         data = json.loads(part.read_text())
         for item in data.get("problems", []):
             # Rehydrate minimally for summary; downstream consumers read JSON.
+            av_item = item.get("agent_verification")
+            av = None
+            if av_item:
+                av = AgentVerification(
+                    fault_confirmed=av_item.get("fault_confirmed"),
+                    other_faults=list(av_item.get("other_faults") or []),
+                    reasoning=str(av_item.get("reasoning") or ""),
+                    raw_output=str(av_item.get("raw_output") or ""),
+                    parse_error=av_item.get("parse_error"),
+                    elapsed_s=float(av_item.get("elapsed_s") or 0.0),
+                )
             all_results.append(ProblemResult(
                 problem_id=item["problem_id"],
                 worker_id=item.get("worker_id", i),
                 verdict=Verdict(item.get("verdict", "pass")),
                 error_stage=item.get("error_stage"),
+                agent_verification=av,
             ))
 
     write_report(all_results, out_dir / "report.json")
