@@ -290,6 +290,8 @@ class LiveDeploymentState:
     deployment_dir: str
     cluster_name: str
     kubeconfig_path: str
+    shared_cluster: bool
+    cluster_reused: bool
     app_name: str
     namespace: str
     problem_id: str | None
@@ -314,6 +316,8 @@ class LiveDeploymentState:
             deployment_dir=str(data["deployment_dir"]),
             cluster_name=str(data["cluster_name"]),
             kubeconfig_path=str(data["kubeconfig_path"]),
+            shared_cluster=bool(data.get("shared_cluster", False)),
+            cluster_reused=bool(data.get("cluster_reused", False)),
             app_name=str(data["app_name"]),
             namespace=str(data["namespace"]),
             problem_id=data.get("problem_id"),
@@ -344,6 +348,103 @@ class LiveDeploymentState:
     def write(self, path: str | Path) -> None:
         with open(path, "w", encoding="utf-8") as handle:
             json.dump(self.to_dict(), handle, indent=2, sort_keys=True)
+
+
+@dataclass
+class PersistedClusterBaseline:
+    namespaces: set[str]
+    cluster_roles: set[str]
+    cluster_role_bindings: set[str]
+    persistent_volumes: set[str]
+    storage_classes: set[str]
+    crds: set[str]
+    node_labels: dict[str, dict[str, str]]
+    node_taints: dict[str, list]
+    coredns_configmap_data: dict[str, str]
+
+    def to_dict(self) -> dict:
+        return {
+            "namespaces": sorted(self.namespaces),
+            "cluster_roles": sorted(self.cluster_roles),
+            "cluster_role_bindings": sorted(self.cluster_role_bindings),
+            "persistent_volumes": sorted(self.persistent_volumes),
+            "storage_classes": sorted(self.storage_classes),
+            "crds": sorted(self.crds),
+            "node_labels": self.node_labels,
+            "node_taints": self.node_taints,
+            "coredns_configmap_data": self.coredns_configmap_data,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "PersistedClusterBaseline":
+        return cls(
+            namespaces=set(data.get("namespaces", [])),
+            cluster_roles=set(data.get("cluster_roles", [])),
+            cluster_role_bindings=set(data.get("cluster_role_bindings", [])),
+            persistent_volumes=set(data.get("persistent_volumes", [])),
+            storage_classes=set(data.get("storage_classes", [])),
+            crds=set(data.get("crds", [])),
+            node_labels=dict(data.get("node_labels", {})),
+            node_taints=dict(data.get("node_taints", {})),
+            coredns_configmap_data=dict(data.get("coredns_configmap_data", {})),
+        )
+
+    @classmethod
+    def from_cluster_baseline(cls, baseline) -> "PersistedClusterBaseline":
+        return cls(
+            namespaces=set(getattr(baseline, "namespaces", set())),
+            cluster_roles=set(getattr(baseline, "cluster_roles", set())),
+            cluster_role_bindings=set(getattr(baseline, "cluster_role_bindings", set())),
+            persistent_volumes=set(getattr(baseline, "persistent_volumes", set())),
+            storage_classes=set(getattr(baseline, "storage_classes", set())),
+            crds=set(getattr(baseline, "crds", set())),
+            node_labels=dict(getattr(baseline, "node_labels", {})),
+            node_taints=dict(getattr(baseline, "node_taints", {})),
+            coredns_configmap_data=dict(getattr(baseline, "coredns_configmap_data", {})),
+        )
+
+
+@dataclass
+class SharedLiveClusterState:
+    cluster_name: str
+    kubeconfig_path: str
+    baseline: PersistedClusterBaseline | None
+    created_at: str
+
+    def to_dict(self) -> dict:
+        return {
+            "cluster_name": self.cluster_name,
+            "kubeconfig_path": self.kubeconfig_path,
+            "baseline": self.baseline.to_dict() if self.baseline else None,
+            "created_at": self.created_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SharedLiveClusterState":
+        baseline_data = data.get("baseline")
+        return cls(
+            cluster_name=str(data["cluster_name"]),
+            kubeconfig_path=str(data["kubeconfig_path"]),
+            baseline=PersistedClusterBaseline.from_dict(baseline_data) if baseline_data else None,
+            created_at=str(data["created_at"]),
+        )
+
+    @classmethod
+    def load(cls, path: str | Path) -> "SharedLiveClusterState":
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+        return cls.from_dict(data)
+
+    def write(self, path: str | Path) -> None:
+        os.makedirs(os.path.dirname(os.fspath(path)), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(self.to_dict(), handle, indent=2, sort_keys=True)
+
+
+@dataclass
+class LiveUndeployResult:
+    state: LiveDeploymentState
+    cluster_deleted: bool
 
 
 class _LiveAppProblem:
@@ -384,6 +485,52 @@ def _deployment_dir_for_name(deployment_name: str, deployments_root: str | None 
 
 def _deployment_state_path(deployment_name: str, deployments_root: str | None = None) -> str:
     return os.path.join(_deployment_dir_for_name(deployment_name, deployments_root), "deployment_state.json")
+
+
+def _shared_live_cluster_root(deployments_root: str | None = None) -> str:
+    return os.path.join(os.path.abspath(deployments_root or _default_live_deployments_root()), "_shared")
+
+
+def _shared_live_cluster_state_path(deployments_root: str | None = None) -> str:
+    return os.path.join(_shared_live_cluster_root(deployments_root), "cluster_state.json")
+
+
+def _shared_live_cluster_name() -> str:
+    return f"{LIVE_CLUSTER_PREFIX}-shared"
+
+
+def _shared_live_cluster_kubeconfig_path(deployments_root: str | None = None) -> str:
+    return os.path.join(_shared_live_cluster_root(deployments_root), "kubeconfigs", "shared.kubeconfig")
+
+
+def _list_active_live_deployments(deployments_root: str | None = None) -> list[str]:
+    root = os.path.abspath(deployments_root or _default_live_deployments_root())
+    if not os.path.isdir(root):
+        return []
+
+    active_deployments: list[str] = []
+    for entry in os.scandir(root):
+        if not entry.is_dir():
+            continue
+        if entry.name == "_shared":
+            continue
+        state_path = os.path.join(entry.path, "deployment_state.json")
+        if os.path.exists(state_path):
+            active_deployments.append(entry.name)
+    return sorted(active_deployments)
+
+
+def _remove_shared_live_cluster_state(deployments_root: str | None = None) -> None:
+    state_path = _shared_live_cluster_state_path(deployments_root)
+    if os.path.exists(state_path):
+        os.remove(state_path)
+
+
+def _load_shared_live_cluster_state(deployments_root: str | None = None) -> SharedLiveClusterState | None:
+    state_path = _shared_live_cluster_state_path(deployments_root)
+    if not os.path.exists(state_path):
+        return None
+    return SharedLiveClusterState.load(state_path)
 
 
 def _resolve_cli_app_name(app_name: str) -> str:
@@ -579,12 +726,94 @@ def _terminate_live_k8s_proxy(pid: int | None) -> None:
     _terminate_background_process(pid, description="K8s proxy")
 
 
+def _attach_live_cluster(cluster_name: str, kubeconfig_path: str) -> None:
+    os.environ["KUBECONFIG"] = kubeconfig_path
+    os.environ["SREGYM_BASE_KUBECONFIG"] = kubeconfig_path
+    os.environ["SREGYM_KIND_CLUSTER_NAME"] = cluster_name
+    logger.info(f"Live deployment reusing cluster {cluster_name}; kubeconfig={kubeconfig_path}")
+
+
+def _create_or_reuse_shared_live_cluster(
+    *,
+    deployments_root: str | None = None,
+    recreate: bool = False,
+) -> tuple[SharedLiveClusterState, bool]:
+    shared_state = _load_shared_live_cluster_state(deployments_root)
+    if shared_state and not recreate:
+        ok, reason = _existing_cluster_is_reusable(shared_state.cluster_name, shared_state.kubeconfig_path)
+        if ok:
+            _attach_live_cluster(shared_state.cluster_name, shared_state.kubeconfig_path)
+            return shared_state, True
+        logger.info(
+            f"Shared live cluster {shared_state.cluster_name} is not reusable: {reason}. Recreating it."
+        )
+
+    cluster_name = _shared_live_cluster_name()
+    kubeconfig_path = _shared_live_cluster_kubeconfig_path(deployments_root)
+    os.makedirs(os.path.dirname(kubeconfig_path), exist_ok=True)
+    _create_kind_cluster(cluster_name, kubeconfig_path)
+    shared_state = SharedLiveClusterState(
+        cluster_name=cluster_name,
+        kubeconfig_path=kubeconfig_path,
+        baseline=None,
+        created_at=datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+    )
+    shared_state.write(_shared_live_cluster_state_path(deployments_root))
+    logger.info(f"Shared live cluster ready: {cluster_name}, kubeconfig={kubeconfig_path}")
+    return shared_state, False
+
+
+def _resolve_live_problem(conductor: Conductor, *, problem_id: str | None, app_name: str | None):
+    if problem_id:
+        problem = conductor.problems.get_problem_instance(problem_id)
+        if app_name:
+            expected_app_name = _resolve_cli_app_name(app_name)
+            if problem.app.name != expected_app_name:
+                raise ValueError(
+                    f"Problem '{problem_id}' deploys '{problem.app.name}', not '{expected_app_name}'."
+                )
+        if problem.requires_khaos() and conductor.kubectl.is_emulated_cluster():
+            raise RuntimeError(
+                f"Problem '{problem_id}' requires Khaos and cannot be deployed on an emulated cluster."
+            )
+        return problem
+
+    resolved_app_name = _resolve_cli_app_name(app_name or "")
+    app = conductor.apps.get_app_instance(resolved_app_name)
+    return _LiveAppProblem(app)
+
+
+def _assign_live_problem(conductor: Conductor, *, problem_id: str | None, problem) -> None:
+    conductor.problem_id = problem_id
+    conductor.problem = problem
+    conductor.app = problem.app
+
+
+def _cleanup_live_problem_environment(
+    *,
+    conductor: Conductor,
+    problem_id: str | None,
+    problem,
+    baseline: PersistedClusterBaseline | None,
+) -> None:
+    _assign_live_problem(conductor, problem_id=problem_id, problem=problem)
+    if baseline is not None:
+        conductor.cluster_state.baseline = baseline
+        conductor._baseline_captured = True
+    problem.recover_fault()
+    conductor.undeploy_app()
+    if baseline is not None:
+        conductor.cluster_state.reconcile_to_baseline()
+
+
 def _build_live_state(
     *,
     deployment_name: str,
     deployment_dir: str,
     cluster_name: str,
     kubeconfig_path: str,
+    shared_cluster: bool,
+    cluster_reused: bool,
     app,
     problem_id: str | None,
     port_forward: FrontendPortForwardInfo | None,
@@ -595,6 +824,8 @@ def _build_live_state(
         deployment_dir=deployment_dir,
         cluster_name=cluster_name,
         kubeconfig_path=kubeconfig_path,
+        shared_cluster=shared_cluster,
+        cluster_reused=cluster_reused,
         app_name=app.name,
         namespace=app.namespace,
         problem_id=problem_id,
@@ -619,6 +850,7 @@ def deploy_live_environment(
     deployments_root: str | None = None,
     frontend_local_port: int | None = None,
     with_k8s_proxy: bool = False,
+    recreate_cluster: bool = False,
 ) -> LiveDeploymentState:
     if not problem_id and not app_name:
         raise ValueError("deploy requires either problem_id or app_name")
@@ -631,35 +863,36 @@ def deploy_live_environment(
         raise FileExistsError(
             f"Live deployment '{resolved_name}' already exists. Use undeploy first or choose a different name."
         )
+    active_deployments = _list_active_live_deployments(deployments_root)
+    if active_deployments:
+        raise FileExistsError(
+            "Only one live deployment can be active at a time. "
+            f"Undeploy {active_deployments[0]!r} before creating another one."
+        )
 
     cluster_name = ""
+    cluster_reused = False
+    shared_cluster_state: SharedLiveClusterState | None = None
+    conductor: Conductor | None = None
+    problem = None
     port_forward: FrontendPortForwardInfo | None = None
     k8s_proxy: K8sProxyInfo | None = None
     try:
-        cluster_name, kubeconfig_path = _create_live_cluster(resolved_name, deployment_dir)
+        shared_cluster_state, cluster_reused = _create_or_reuse_shared_live_cluster(
+            deployments_root=deployments_root,
+            recreate=recreate_cluster,
+        )
+        cluster_name = shared_cluster_state.cluster_name
+        kubeconfig_path = shared_cluster_state.kubeconfig_path
         conductor = Conductor()
-
-        if problem_id:
-            problem = conductor.problems.get_problem_instance(problem_id)
-            if app_name:
-                expected_app_name = _resolve_cli_app_name(app_name)
-                if problem.app.name != expected_app_name:
-                    raise ValueError(
-                        f"Problem '{problem_id}' deploys '{problem.app.name}', not '{expected_app_name}'."
-                    )
-            if problem.requires_khaos() and conductor.kubectl.is_emulated_cluster():
-                raise RuntimeError(
-                    f"Problem '{problem_id}' requires Khaos and cannot be deployed on an emulated cluster."
-                )
-        else:
-            resolved_app_name = _resolve_cli_app_name(app_name or "")
-            app = conductor.apps.get_app_instance(resolved_app_name)
-            problem = _LiveAppProblem(app)
-
-        conductor.problem_id = problem_id
-        conductor.problem = problem
-        conductor.app = problem.app
+        problem = _resolve_live_problem(conductor, problem_id=problem_id, app_name=app_name)
+        _assign_live_problem(conductor, problem_id=problem_id, problem=problem)
         conductor.deploy_app()
+        if conductor.cluster_state.baseline is not None:
+            shared_cluster_state.baseline = PersistedClusterBaseline.from_cluster_baseline(
+                conductor.cluster_state.baseline
+            )
+            shared_cluster_state.write(_shared_live_cluster_state_path(deployments_root))
         if problem_id:
             problem.inject_fault()
         _stop_trace_port_forward(problem.app)
@@ -683,6 +916,8 @@ def deploy_live_environment(
             deployment_dir=deployment_dir,
             cluster_name=cluster_name,
             kubeconfig_path=kubeconfig_path,
+            shared_cluster=True,
+            cluster_reused=cluster_reused,
             app=problem.app,
             problem_id=problem_id,
             port_forward=port_forward,
@@ -694,7 +929,19 @@ def deploy_live_environment(
         _terminate_live_k8s_proxy(k8s_proxy.pid if k8s_proxy else None)
         _terminate_port_forward(port_forward.pid if port_forward else None)
         if cluster_name:
-            _delete_live_cluster(cluster_name)
+            if cluster_reused and conductor is not None and problem is not None:
+                try:
+                    _cleanup_live_problem_environment(
+                        conductor=conductor,
+                        problem_id=problem_id,
+                        problem=problem,
+                        baseline=shared_cluster_state.baseline if shared_cluster_state else None,
+                    )
+                except Exception as cleanup_exc:
+                    logger.warning(f"Failed to clean up reused shared cluster after live deploy error: {cleanup_exc}")
+            else:
+                _delete_live_cluster(cluster_name)
+                _remove_shared_live_cluster_state(deployments_root)
         raise
 
 
@@ -702,7 +949,8 @@ def undeploy_live_environment(
     deployment_name: str,
     *,
     deployments_root: str | None = None,
-) -> LiveDeploymentState:
+    delete_cluster: bool = False,
+) -> LiveUndeployResult:
     state_path = _deployment_state_path(deployment_name, deployments_root)
     if not os.path.exists(state_path):
         raise FileNotFoundError(
@@ -712,9 +960,59 @@ def undeploy_live_environment(
     state = LiveDeploymentState.load(state_path)
     _terminate_port_forward(state.frontend_port_forward_pid)
     _terminate_live_k8s_proxy(state.k8s_proxy_pid)
-    _delete_live_cluster(state.cluster_name)
+    cluster_deleted = False
+
+    if state.shared_cluster and not delete_cluster:
+        shared_cluster_state = _load_shared_live_cluster_state(deployments_root)
+        if shared_cluster_state and shared_cluster_state.baseline is not None:
+            ok, reason = _existing_cluster_is_reusable(
+                shared_cluster_state.cluster_name,
+                shared_cluster_state.kubeconfig_path,
+            )
+            if ok:
+                try:
+                    _attach_live_cluster(shared_cluster_state.cluster_name, shared_cluster_state.kubeconfig_path)
+                    conductor = Conductor()
+                    problem = _resolve_live_problem(
+                        conductor,
+                        problem_id=state.problem_id,
+                        app_name=state.app_name,
+                    )
+                    _cleanup_live_problem_environment(
+                        conductor=conductor,
+                        problem_id=state.problem_id,
+                        problem=problem,
+                        baseline=shared_cluster_state.baseline,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"Shared-cluster cleanup failed for deployment {state.deployment_name}: {exc}. "
+                        "Deleting the cluster instead."
+                    )
+                    _delete_live_cluster(state.cluster_name)
+                    _remove_shared_live_cluster_state(deployments_root)
+                    cluster_deleted = True
+            else:
+                logger.warning(
+                    f"Shared-cluster cleanup fallback: cluster {shared_cluster_state.cluster_name} "
+                    f"is not reusable ({reason}). Deleting it."
+                )
+                _delete_live_cluster(state.cluster_name)
+                _remove_shared_live_cluster_state(deployments_root)
+                cluster_deleted = True
+        else:
+            logger.warning("Shared live cluster state is missing or incomplete. Deleting the cluster instead.")
+            _delete_live_cluster(state.cluster_name)
+            _remove_shared_live_cluster_state(deployments_root)
+            cluster_deleted = True
+    else:
+        _delete_live_cluster(state.cluster_name)
+        if state.shared_cluster:
+            _remove_shared_live_cluster_state(deployments_root)
+        cluster_deleted = True
+
     os.remove(state_path)
-    return state
+    return LiveUndeployResult(state=state, cluster_deleted=cluster_deleted)
 
 
 def driver_loop(
@@ -1536,16 +1834,6 @@ def _create_kind_cluster(cluster_name: str, kubeconfig_path: str) -> None:
         stderr=subprocess.DEVNULL,
         text=True,
     )
-
-
-def _create_live_cluster(deployment_name: str, deployment_dir: str) -> tuple[str, str]:
-    kubeconfig_dir = os.path.join(deployment_dir, "kubeconfigs")
-    os.makedirs(kubeconfig_dir, exist_ok=True)
-    cluster_name = _cluster_name_for_live_deployment(deployment_name)
-    kubeconfig_path = os.path.join(kubeconfig_dir, f"{_sanitize_deployment_name(deployment_name)}.kubeconfig")
-    _create_kind_cluster(cluster_name, kubeconfig_path)
-    logger.info(f"Live deployment cluster ready: {cluster_name}, kubeconfig={kubeconfig_path}")
-    return cluster_name, kubeconfig_path
 
 
 def _create_worker_cluster(worker_id: int, experiment_log_dir: str) -> tuple[str, str]:
@@ -2641,7 +2929,7 @@ def build_live_parser() -> argparse.ArgumentParser:
 
     deploy_parser = subparsers.add_parser(
         "deploy",
-        help="Provision a dedicated kind cluster and deploy an app or problem environment",
+        help="Deploy an app or problem environment onto the reusable live kind cluster",
     )
     deploy_parser.add_argument(
         "--app",
@@ -2672,16 +2960,26 @@ def build_live_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Start the filtered localhost Kubernetes API proxy and emit a proxy kubeconfig for agents",
     )
+    deploy_parser.add_argument(
+        "--recreate-cluster",
+        action="store_true",
+        help="Discard any existing reusable live cluster and recreate it before deployment",
+    )
 
     undeploy_parser = subparsers.add_parser(
         "undeploy",
-        help="Tear down a previously created live deployment",
+        help="Remove a live deployment from the reusable cluster",
     )
     undeploy_parser.add_argument(
         "--deployment-name",
         type=str,
         required=True,
         help="Deployment name returned by the deploy command",
+    )
+    undeploy_parser.add_argument(
+        "--delete-cluster",
+        action="store_true",
+        help="Delete the reusable live kind cluster instead of keeping it warm for the next deploy",
     )
 
     proxy_parser = subparsers.add_parser("serve-k8s-proxy", help=argparse.SUPPRESS)
@@ -2965,9 +3263,11 @@ def run_live_command(args: argparse.Namespace) -> int:
             deployment_name=deployment_name,
             frontend_local_port=args.local_port,
             with_k8s_proxy=args.with_k8s_proxy,
+            recreate_cluster=args.recreate_cluster,
         )
         print(f"Deployment '{state.deployment_name}' is ready.")
         print(f"Cluster: {state.cluster_name}")
+        print(f"Cluster Reused: {'yes' if state.cluster_reused else 'no'}")
         print(f"Kubeconfig: {state.kubeconfig_path}")
         if state.problem_id:
             print(f"Injected problem: {state.problem_id}")
@@ -2988,9 +3288,12 @@ def run_live_command(args: argparse.Namespace) -> int:
         os.makedirs(deployment_dir, exist_ok=True)
         os.environ["SREGYM_LOG_FILE"] = os.path.join(deployment_dir, "live_undeploy.log")
         init_logger()
-        state = undeploy_live_environment(args.deployment_name)
-        print(f"Deployment '{state.deployment_name}' removed.")
-        print(f"Deleted cluster: {state.cluster_name}")
+        result = undeploy_live_environment(args.deployment_name, delete_cluster=args.delete_cluster)
+        print(f"Deployment '{result.state.deployment_name}' removed.")
+        if result.cluster_deleted:
+            print(f"Deleted cluster: {result.state.cluster_name}")
+        else:
+            print(f"Cluster retained for reuse: {result.state.cluster_name}")
         return 0
 
     raise ValueError(f"Unsupported live command: {args.command}")

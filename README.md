@@ -66,13 +66,14 @@ kind create cluster --config kind/kind-config-arm.yaml
 
 ### Live App Deployment
 
-Use this when you want a dedicated cluster with a live application for a human or another agent to interact with directly.
+Use this when you want a live application for a human or another agent to interact with directly.
 
 From the repo root, use the wrapper script:
 
 ```bash
 bash scripts/run_sregym_live.sh deploy --app hotel_reservation
 bash scripts/run_sregym_live.sh deploy --app hotel_reservation --with-k8s-proxy
+bash scripts/run_sregym_live.sh undeploy --deployment-name hotel-reservation-demo
 ```
 
 Deploy a healthy application:
@@ -93,13 +94,30 @@ Start the filtered localhost Kubernetes API proxy as part of the live deployment
 python main.py deploy --app hotel_reservation --with-k8s-proxy
 ```
 
-Both commands provision a dedicated kind cluster, deploy the app and supporting infrastructure, persist deployment state under `logs/live_deployments/`, and print:
+Both commands use the reusable live `kind` cluster, deploy the app and supporting infrastructure, persist deployment state under `logs/live_deployments/`, and print:
 
 - the deployment name
 - the cluster name
 - the kubeconfig path
 - a localhost frontend URL when port-forwarding succeeds
 - a proxy URL and proxy kubeconfig path when `--with-k8s-proxy` is set
+
+The live CLI now keeps a single shared `kind` cluster warm under `logs/live_deployments/_shared/` and assumes only one active live deployment at a time:
+
+- `deploy` reuses that shared cluster by default instead of recreating it
+- `undeploy` removes the app/fault and stops helper processes, but keeps the cluster for the next deploy
+- use `--recreate-cluster` on `deploy` to force a fresh `kind` cluster
+- use `--delete-cluster` on `undeploy` to remove the shared cluster completely
+
+Examples:
+
+```bash
+python main.py deploy --app hotel_reservation
+python main.py deploy --problem revoke_auth_mongodb-1 --with-k8s-proxy
+python main.py deploy --app hotel_reservation --recreate-cluster
+python main.py undeploy --deployment-name hotel-reservation-demo
+python main.py undeploy --deployment-name hotel-reservation-demo --delete-cluster
+```
 
 To tear the environment down later:
 
