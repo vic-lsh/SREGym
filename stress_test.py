@@ -594,6 +594,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Optional model override for the fault verifier agent.")
     p.add_argument("--agent-verify-timeout-sec", type=int, default=300,
                    help="Timeout for each fault-verifier invocation.")
+    p.add_argument("--with-k8s-proxy", action="store_true",
+                   help="Start the filtered localhost Kubernetes API proxy per "
+                        "worker and route the fault-verifier agent's KUBECONFIG "
+                        "through it (matches `main.py deploy --with-k8s-proxy`). "
+                        "Requires --agent-verify.")
     return p.parse_args(argv)
 
 
@@ -692,6 +697,91 @@ def _invoke_fault_verifier_subprocess(
     )
 
 
+def _make_agent_verifier_fn(
+    *,
+    conductor: Any,
+    kubeconfig_path: str,
+    out_dir: Path,
+    model: Optional[str],
+    timeout_s: int,
+) -> Callable[..., AgentVerification]:
+    """Build the per-worker `agent_verifier_fn` closure passed to `run_stress_problem`.
+
+    `kubeconfig_path` is whatever KUBECONFIG the agent should see — either
+    the raw per-worker kind kubeconfig, or a filtered proxy kubeconfig when
+    `--with-k8s-proxy` is in play.
+    """
+    def _fn(*, problem: Any, worker_id: int) -> AgentVerification:
+        return _invoke_fault_verifier_subprocess(
+            problem_id=getattr(conductor, "problem_id", "") or "",
+            root_cause=getattr(problem, "root_cause", "") or "",
+            app_name=getattr(problem.app, "name", "") or "",
+            namespace=getattr(problem, "namespace", "") or "",
+            kubeconfig_path=kubeconfig_path,
+            worker_id=worker_id,
+            out_dir=out_dir,
+            model=model,
+            timeout_s=timeout_s,
+        )
+    return _fn
+
+
+@dataclass
+class _WorkerProxy:
+    """Tuple of what a running per-worker K8s proxy gives us.
+
+    `kubeconfig_path` is the proxy kubeconfig that agents should use;
+    `pid` is the proxy subprocess's PID, used to terminate it on shutdown.
+    """
+    kubeconfig_path: str
+    pid: int
+
+
+def _start_worker_k8s_proxy(
+    *,
+    kubeconfig_path: str,
+    out_dir: Path,
+    worker_id: int,
+) -> _WorkerProxy:
+    """Start a `main._start_live_k8s_proxy` for this worker.
+
+    Lazy import of `main` (which pulls in MCP/uvicorn/rich) keeps the
+    stress_test module importable under `pytest` without paying for those.
+    """
+    import importlib.util
+
+    bench_dir = Path(__file__).resolve().parent
+    main_path = bench_dir / "main.py"
+    spec = importlib.util.spec_from_file_location("sregym_main", main_path)
+    if spec is None or spec.loader is None:  # pragma: no cover - defensive
+        raise RuntimeError(f"could not load {main_path}")
+    main_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(main_mod)
+
+    proxy_dir = out_dir / f"w{worker_id}" / "k8s_proxy"
+    proxy_dir.mkdir(parents=True, exist_ok=True)
+    info = main_mod._start_live_k8s_proxy(  # type: ignore[attr-defined]
+        kubeconfig_path=kubeconfig_path,
+        deployment_dir=str(proxy_dir),
+        log_path=str(proxy_dir / "k8s_proxy.log"),
+    )
+    return _WorkerProxy(kubeconfig_path=info.kubeconfig_path, pid=info.pid)
+
+
+def _terminate_worker_k8s_proxy(pid: int) -> None:
+    try:
+        import importlib.util
+        bench_dir = Path(__file__).resolve().parent
+        spec = importlib.util.spec_from_file_location("sregym_main", bench_dir / "main.py")
+        if spec is None or spec.loader is None:
+            return
+        main_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(main_mod)
+        main_mod._terminate_live_k8s_proxy(pid)  # type: ignore[attr-defined]
+    except Exception as exc:  # pragma: no cover - best-effort teardown
+        logger.warning(f"k8s proxy teardown failed for pid={pid}: {exc}")
+
+
 def _resolve_user_path(p: str) -> Path:
     """Resolve a user-supplied path arg relative to the shell-invocation cwd.
 
@@ -762,6 +852,7 @@ def _worker_entry(args: argparse.Namespace, worker_id: int, queue: Any, out_dir:
             signal.signal(signal.SIGHUP, _ignore)
 
         cluster_name = ""
+        proxy: Optional[_WorkerProxy] = None
         results: list[ProblemResult] = []
         try:
             cluster_name, kubeconfig_path = worker_infra.create_worker_cluster(worker_id, str(out_dir))
@@ -770,18 +861,26 @@ def _worker_entry(args: argparse.Namespace, worker_id: int, queue: Any, out_dir:
 
             agent_verifier_fn: Optional[Callable[..., AgentVerification]] = None
             if args.agent_verify:
-                def agent_verifier_fn(*, problem: Any, worker_id: int) -> AgentVerification:  # noqa: ARG001
-                    return _invoke_fault_verifier_subprocess(
-                        problem_id=getattr(conductor, "problem_id", "") or "",
-                        root_cause=getattr(problem, "root_cause", "") or "",
-                        app_name=getattr(problem.app, "name", "") or "",
-                        namespace=getattr(problem, "namespace", "") or "",
-                        kubeconfig_path=kubeconfig_path,
-                        worker_id=worker_id,
-                        out_dir=out_dir,
-                        model=args.agent_verify_model,
-                        timeout_s=args.agent_verify_timeout_sec,
-                    )
+                agent_kubeconfig = kubeconfig_path
+                if args.with_k8s_proxy:
+                    try:
+                        proxy = _start_worker_k8s_proxy(
+                            kubeconfig_path=kubeconfig_path,
+                            out_dir=out_dir,
+                            worker_id=worker_id,
+                        )
+                        agent_kubeconfig = proxy.kubeconfig_path
+                        print(f"[w{worker_id}] K8s proxy kubeconfig={agent_kubeconfig} pid={proxy.pid}", flush=True)
+                    except Exception as exc:
+                        logger.exception(f"worker {worker_id} failed to start k8s proxy: {exc}")
+                        print(f"[w{worker_id}] k8s proxy failed to start; falling back to raw kubeconfig: {exc}", flush=True)
+                agent_verifier_fn = _make_agent_verifier_fn(
+                    conductor=conductor,
+                    kubeconfig_path=agent_kubeconfig,
+                    out_dir=out_dir,
+                    model=args.agent_verify_model,
+                    timeout_s=args.agent_verify_timeout_sec,
+                )
 
             done = 0
             while True:
@@ -824,6 +923,8 @@ def _worker_entry(args: argparse.Namespace, worker_id: int, queue: Any, out_dir:
                 if args.stop_on_first_failure and r.verdict == Verdict.FAIL:
                     break
         finally:
+            if proxy is not None:
+                _terminate_worker_k8s_proxy(proxy.pid)
             try:
                 worker_infra.delete_worker_cluster(cluster_name)
             except Exception as exc:
@@ -833,6 +934,11 @@ def _worker_entry(args: argparse.Namespace, worker_id: int, queue: Any, out_dir:
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = _parse_args(argv if argv is not None else sys.argv[1:])
+
+    if args.with_k8s_proxy and not args.agent_verify:
+        print("--with-k8s-proxy requires --agent-verify (the proxy only feeds the verifier agent).",
+              file=sys.stderr)
+        return 2
 
     out_dir = _resolve_user_path(args.out_dir) if args.out_dir else _default_out_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
