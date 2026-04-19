@@ -3,7 +3,6 @@ import logging
 import os
 import threading
 import time
-from typing import Optional
 
 import pyfiglet
 from fastapi import FastAPI, HTTPException
@@ -18,7 +17,7 @@ from sregym.conductor.constants import MAX_DIAGNOSIS_CANDIDATES
 app = FastAPI()
 _conductor = None
 
-_server: Optional[Server] = None
+_server: Server | None = None
 _shutdown_event = threading.Event()
 
 logger = logging.getLogger("all.sregym.conductor_api")
@@ -81,6 +80,57 @@ async def submit_solution(req: SubmitRequest):
 
     logger.debug(f"API returns Grading results by now: {results}")
     return results
+
+
+class SubmitStageRequest(BaseModel):
+    # Autonomous-submit variant: the agent names the stage explicitly
+    # ("diagnosis" or "mitigation") so submissions can be graded in any
+    # order (or skipped) without touching the sequential state machine.
+    solution: str | list[str]
+    stage: str
+
+
+@app.post("/submit_stage")
+async def submit_stage(req: SubmitStageRequest):
+    """Grade a single stage in autonomous-submit mode.
+
+    The response is deliberately neutral (``{"status": "recorded"}``): the
+    whole point of autonomous mode is that the agent must self-verify via
+    the cluster, so leaking the oracle verdict here would defeat the
+    design. Results are still stored on the conductor for offline scoring.
+    """
+    if _conductor is None:
+        logger.error("No conductor set; cannot submit stage.")
+        raise HTTPException(status_code=400, detail="No problem has been started")
+
+    _ALLOWED_STAGES = {"diagnosis", "mitigation"}
+    if req.stage not in _ALLOWED_STAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown stage {req.stage!r}; allowed: {sorted(_ALLOWED_STAGES)}",
+        )
+
+    if isinstance(req.solution, list):
+        if len(req.solution) == 0:
+            raise HTTPException(status_code=400, detail="Submission list must not be empty.")
+        if len(req.solution) > MAX_DIAGNOSIS_CANDIDATES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Submission list has {len(req.solution)} candidates; "
+                    f"maximum allowed is {MAX_DIAGNOSIS_CANDIDATES}."
+                ),
+            )
+
+    try:
+        await _conductor.submit_autonomous(req.stage, req.solution)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        logger.error(f"Autonomous grading error: {e}")
+        raise HTTPException(status_code=500, detail=f"Autonomous grading error: {e}") from e
+
+    return {"status": "recorded"}
 
 
 @app.post("/cleanup")

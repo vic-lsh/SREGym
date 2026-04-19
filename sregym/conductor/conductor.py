@@ -26,7 +26,6 @@ from sregym.service.kubeconfig import require_kubeconfig_path
 from sregym.service.kubectl import KubeCtl
 from sregym.service.telemetry.prometheus import Prometheus
 
-
 _DEFAULT_CLEANUP_DEFER_TIMEOUT_SECONDS = 600.0
 
 
@@ -149,7 +148,7 @@ class Conductor:
             self.tasklist = ["diagnosis", "mitigation"]
             return
 
-        with open(tasklist_path, "r") as f:
+        with open(tasklist_path) as f:
             tasklist = yaml.safe_load(f)
             if not tasklist:
                 msg = "Badly formatted tasklist.yml"
@@ -478,6 +477,29 @@ class Conductor:
                 "✅ Deployment complete. No stages configured; problem will complete without agent submission."
             )
         return StartProblemResult.SUCCESS
+
+    async def submit_autonomous(self, stage: str, solution) -> None:
+        """Grade a single stage without advancing the sequential state machine.
+
+        Autonomous-mode agents (``SREGYM_AUTONOMOUS_SUBMIT=1``) submit
+        diagnosis and mitigation independently via per-stage tools that
+        never surface the oracle verdict. Results are still recorded in
+        ``self.results`` so we can score the run offline — the agent just
+        can't observe them. Deliberately does not touch
+        ``current_stage_index`` / ``submission_stage`` / noise manager,
+        since the normal sequential flow is not in use here.
+        """
+        stage_norm = stage.lower() if isinstance(stage, str) else ""
+        if stage_norm == "diagnosis":
+            if not getattr(self.problem, "diagnosis_oracle", None):
+                raise ValueError("Diagnosis oracle is not attached for this problem")
+            self._evaluate_diagnosis(solution)
+        elif stage_norm == "mitigation":
+            if not getattr(self.problem, "mitigation_oracle", None):
+                raise ValueError("Mitigation oracle is not attached for this problem")
+            self._evaluate_mitigation(solution)
+        else:
+            raise ValueError(f"Unknown stage for autonomous submit: {stage!r}")
 
     async def submit(self, wrapped_cmd: str) -> dict:
         """

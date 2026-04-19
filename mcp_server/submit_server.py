@@ -1,5 +1,4 @@
-import asyncio
-import logging
+import os
 import traceback
 
 import requests
@@ -8,7 +7,6 @@ from kubernetes import client, config
 
 from clients.stratus.configs.langgraph_tool_configs import LanggraphToolConfig
 from clients.stratus.stratus_utils.get_logger import get_logger
-from clients.stratus.tools.localization import get_resource_uid
 from sregym.service.kubeconfig import require_kubeconfig_path
 
 logger = get_logger()
@@ -16,38 +14,111 @@ logger.info("Starting Submission MCP Server")
 
 mcp = FastMCP("Submission MCP Server")
 
+# Autonomous-submit mode: when the env var is set at module load, register
+# per-stage submit tools that never leak the oracle verdict back to the
+# agent. The agent is expected to self-verify via the cluster before
+# submitting. Reading at import time is intentional — FastMCP's
+# ``@mcp.tool`` decorators bind tool identity at module load, so a runtime
+# toggle would not reach the client. See
+# ``sregym_agents/experiment_config.py::config_to_env`` for how the env
+# var is propagated from the experiment TOML.
+_AUTONOMOUS_SUBMIT = os.getenv("SREGYM_AUTONOMOUS_SUBMIT", "").strip() == "1"
 
-@mcp.tool(name="submit")
-def submit(ans: str | list[str]) -> dict[str, str]:
-    """Submit task result to benchmark.
 
-    Args:
-        ans: task result that the agent submits. May be a single string
-            (a single diagnosis/mitigation answer) or a list of candidate
-            diagnoses. When a list is provided, the benchmark grades the
-            submission as successful if its ground-truth matches *any*
-            candidate in the list — useful when the cluster exhibits
-            multiple plausible faults simultaneously.
+def _post_stage_submission(stage: str, ans: str | list[str]) -> dict[str, str]:
+    """POST to the conductor's /submit_stage endpoint and return a neutral ack.
 
-    Returns:
-        dict[str]: http response code and response text of benchmark submission server
+    Must not surface oracle verdicts or grading fields in its return — the
+    agent is expected to self-verify via the cluster, so any leak would
+    undermine the autonomous-mode design.
     """
     langgraph_tool_config = LanggraphToolConfig()
-
-    logger.info("[submit_mcp] submit mcp called")
-    # FIXME: reference url from config file, remove hard coding
-    url = langgraph_tool_config.benchmark_submit_url
+    base = langgraph_tool_config.benchmark_submit_url.rsplit("/", 1)[0]
+    url = f"{base}/submit_stage"
     headers = {"Content-Type": "application/json"}
-    payload = {"solution": ans}
+    payload = {"solution": ans, "stage": stage}
 
     try:
         response = requests.post(url, json=payload, headers=headers)
-        logger.info(f"[submit_mcp] Response status: {response.status_code}, text: {response.text}")
-        return {"status": str(response.status_code), "text": str(response.text)}
-
     except Exception as e:
-        logger.error(f"[submit_mcp] HTTP submission failed: {e}")
-        return {"status": "N/A", "text": f"[submit_mcp] HTTP submission failed: {e}"}
+        logger.error(f"[submit_mcp] autonomous submission HTTP call failed: {e}")
+        return {"status": "error", "text": "submission HTTP call failed"}
+
+    logger.info(f"[submit_mcp] autonomous submit status: {response.status_code}")
+    if response.status_code == 200:
+        return {"status": "recorded"}
+    return {"status": "error", "text": f"HTTP {response.status_code}"}
+
+
+if _AUTONOMOUS_SUBMIT:
+
+    @mcp.tool(name="submit_diagnosis")
+    def submit_diagnosis(ans: str | list[str]) -> dict[str, str]:
+        """Record your root-cause diagnosis for the current problem.
+
+        Args:
+            ans: A concise one-line description of the fault's root cause,
+                or a list of candidate root-cause descriptions.
+
+        Returns:
+            A neutral acknowledgement ("recorded" on success, "error"
+            otherwise). Deliberately does not tell you whether your
+            answer matches the benchmark's expected root cause — verify
+            via the cluster itself.
+        """
+        logger.info("[submit_mcp] submit_diagnosis called")
+        return _post_stage_submission("diagnosis", ans)
+
+    @mcp.tool(name="submit_mitigation")
+    def submit_mitigation(ans: str | list[str]) -> dict[str, str]:
+        """Record the mitigation actions you took for the current problem.
+
+        Args:
+            ans: A short summary of the concrete changes you made
+                (deployment restarts, config fixes, etc.).
+
+        Returns:
+            A neutral acknowledgement ("recorded" on success, "error"
+            otherwise). The mitigation oracle judges the cluster's final
+            state, not the summary text — verify the cluster is healthy
+            before calling this.
+        """
+        logger.info("[submit_mcp] submit_mitigation called")
+        return _post_stage_submission("mitigation", ans)
+
+else:
+
+    @mcp.tool(name="submit")
+    def submit(ans: str | list[str]) -> dict[str, str]:
+        """Submit task result to benchmark.
+
+        Args:
+            ans: task result that the agent submits. May be a single string
+                (a single diagnosis/mitigation answer) or a list of candidate
+                diagnoses. When a list is provided, the benchmark grades the
+                submission as successful if its ground-truth matches *any*
+                candidate in the list — useful when the cluster exhibits
+                multiple plausible faults simultaneously.
+
+        Returns:
+            dict[str]: http response code and response text of benchmark submission server
+        """
+        langgraph_tool_config = LanggraphToolConfig()
+
+        logger.info("[submit_mcp] submit mcp called")
+        # FIXME: reference url from config file, remove hard coding
+        url = langgraph_tool_config.benchmark_submit_url
+        headers = {"Content-Type": "application/json"}
+        payload = {"solution": ans}
+
+        try:
+            response = requests.post(url, json=payload, headers=headers)
+            logger.info(f"[submit_mcp] Response status: {response.status_code}, text: {response.text}")
+            return {"status": str(response.status_code), "text": str(response.text)}
+
+        except Exception as e:
+            logger.error(f"[submit_mcp] HTTP submission failed: {e}")
+            return {"status": "N/A", "text": f"[submit_mcp] HTTP submission failed: {e}"}
 
 
 @mcp.tool(name="localization")
