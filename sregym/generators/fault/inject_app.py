@@ -64,7 +64,7 @@ class ApplicationFaultInjector(FaultInjector):
             target_db = self._REVOKE_AUTH_TARGET_DB[service]
             for pod in target_mongo_pods:
                 script = f"/scripts/revoke-admin-{'rate' if service == 'mongodb-rate' else 'geo'}-mongo.sh"
-                revoke_command = f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash {script}"
+                revoke_command = f"kubectl exec {pod} -n {self.namespace} -- /bin/bash {script}"
                 try:
                     self.kubectl.exec_command(revoke_command, check=True)
                 except Exception as e:
@@ -83,7 +83,7 @@ class ApplicationFaultInjector(FaultInjector):
         command errored. Verifying the post-state via a separate query closes that gap.
         """
         verify_cmd = (
-            f"kubectl exec -it {mongo_pod} -n {self.namespace} -- "
+            f"kubectl exec {mongo_pod} -n {self.namespace} -- "
             f"mongo admin --quiet -u admin -p admin --authenticationDatabase admin "
             f"--eval 'printjson(db.getUser(\"admin\").roles)'"
         )
@@ -115,9 +115,9 @@ class ApplicationFaultInjector(FaultInjector):
                 ]
                 for pod in target_mongo_pods:
                     if service == "mongodb-rate":
-                        recover_command = f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash /scripts/revoke-mitigate-admin-rate-mongo.sh"
+                        recover_command = f"kubectl exec {pod} -n {self.namespace} -- /bin/bash /scripts/revoke-mitigate-admin-rate-mongo.sh"
                     elif service == "mongodb-geo":
-                        recover_command = f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash /scripts/revoke-mitigate-admin-geo-mongo.sh"
+                        recover_command = f"kubectl exec {pod} -n {self.namespace} -- /bin/bash /scripts/revoke-mitigate-admin-geo-mongo.sh"
                     result = self.kubectl.exec_command(recover_command)
                     print(f"Recovery result for {service}: {result}")
 
@@ -140,7 +140,7 @@ class ApplicationFaultInjector(FaultInjector):
                 ]
                 for pod in target_mongo_pods:
                     revoke_command = (
-                        f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash /scripts/remove-admin-mongo.sh"
+                        f"kubectl exec {pod} -n {self.namespace} -- /bin/bash /scripts/remove-admin-mongo.sh"
                     )
                     result = self.kubectl.exec_command(revoke_command)
                     print(f"Injection result for {service}: {result}")
@@ -162,9 +162,9 @@ class ApplicationFaultInjector(FaultInjector):
                 ]
                 for pod in target_mongo_pods:
                     if service == "mongodb-rate":
-                        revoke_command = f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash /scripts/remove-mitigate-admin-rate-mongo.sh"
+                        revoke_command = f"kubectl exec {pod} -n {self.namespace} -- /bin/bash /scripts/remove-mitigate-admin-rate-mongo.sh"
                     elif service == "mongodb-geo":
-                        revoke_command = f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash /scripts/remove-mitigate-admin-geo-mongo.sh"
+                        revoke_command = f"kubectl exec {pod} -n {self.namespace} -- /bin/bash /scripts/remove-mitigate-admin-geo-mongo.sh"
                     result = self.kubectl.exec_command(revoke_command)
                     print(f"Recovery result for {service}: {result}")
 
