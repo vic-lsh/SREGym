@@ -25,3 +25,43 @@ all:
     k8s_target_port_and_auth_miss_mongodb_social_net:
     - diagnosis
     - mitigation
+    # Social network: duplicate PVC mounts (jaeger) + pod anti-affinity deadlock (user-service)
+    # Two distinct Pending causes on different services; events show mixed FailedScheduling reasons
+    duplicate_pvc_and_anti_affinity_social_network:
+    - diagnosis
+    - mitigation
+    # Social network: wrong selector + wrong targetPort, both on user-service
+    # Same service unreachable for two reasons; fixing selector reveals the port mismatch
+    selector_and_target_port_social_network:
+    - diagnosis
+    - mitigation
+    # Hotel reservation: liveness probe misconfig (recommendation) + wrong binary (profile)
+    # Two CrashLoopBackOff sources on different services; restart reasons look alike
+    liveness_probe_and_wrong_bin_hotel_res:
+    - diagnosis
+    - mitigation
+    # Astronomy shop: cluster-wide stale CoreDNS + missing CART_ADDR on frontend
+    # Loud DNS outage dominates signals; after fix the missing env var is the remaining cause
+    stale_coredns_and_missing_env_astronomy_shop:
+    - diagnosis
+    - mitigation
+    # Astronomy shop: RBAC init-container failure (frontend) + env shadowing on frontend-proxy
+    # Fixing RBAC shifts the symptom to misrouted traffic from the shadowed FRONTEND_HOST
+    rbac_and_env_shadowing_astronomy_shop:
+    - diagnosis
+    - mitigation
+    # Hotel reservation: undersized memory (mongodb-rate) + liveness probe misconfig (recommendation)
+    # OOM-kills and probe-kills both look like restart loops; separate root causes per service
+    resource_too_small_and_probe_misconfig_hotel_res:
+    - diagnosis
+    - mitigation
+    # Hotel reservation: mongodb-geo admin revoked + mongodb-rate user unregistered
+    # Two "mongo auth" failures with distinct fixes; tempting to generalize to a single cause
+    revoke_auth_geo_and_storage_user_rate_hotel_res:
+    - diagnosis
+    - mitigation
+    # Astronomy shop: DNS NXDOMAIN for frontend + aggressive liveness probe on aux-service
+    # One app, two unrelated cluster-level faults; easy to assume a single "flaky cluster" narrative
+    service_dns_and_liveness_too_aggressive_astronomy_shop:
+    - diagnosis
+    - mitigation

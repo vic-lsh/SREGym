@@ -249,6 +249,51 @@ class ProblemRegistry:
                 K8STargetPortMisconfig(faulty_service="user-service"),
                 MongoDBAuthMissing(),
             ]),
+            # --- Tier S: symptom-collapse (same surface error, different root causes) ---
+            # Social network — two distinct Pending causes (different services, both unschedulable)
+            "duplicate_pvc_and_anti_affinity_social_network": lambda: SameAppMultiFault([
+                DuplicatePVCMounts(app_name="social_network", faulty_service="jaeger"),
+                PodAntiAffinityDeadlock(faulty_service="user-service"),
+            ]),
+            # Social network — both make user-service unreachable (selector + targetPort on same svc)
+            "selector_and_target_port_social_network": lambda: SameAppMultiFault([
+                WrongServiceSelector(app_name="social_network", faulty_service="user-service"),
+                K8STargetPortMisconfig(faulty_service="user-service"),
+            ]),
+            # Hotel reservation — two CrashLoop sources (probe misconfig on recommendation, wrong bin on profile)
+            "liveness_probe_and_wrong_bin_hotel_res": lambda: SameAppMultiFault([
+                LivenessProbeMisconfiguration(app_name="hotel_reservation", faulty_service="recommendation"),
+                WrongBinUsage(faulty_service="profile"),
+            ]),
+            # --- Tier A: loud fault masks quiet one ---
+            # Astronomy shop — global CoreDNS failure hides missing CART_ADDR on frontend
+            "stale_coredns_and_missing_env_astronomy_shop": lambda: SameAppMultiFault([
+                StaleCoreDNSConfig(app_name="astronomy_shop"),
+                MissingEnvVariable(app_name="astronomy_shop", faulty_service="frontend"),
+            ]),
+            # Astronomy shop — RBAC blocks init container; fixing shifts failure to env shadowing
+            "rbac_and_env_shadowing_astronomy_shop": lambda: SameAppMultiFault([
+                RBACMisconfiguration(app_name="astronomy_shop", faulty_service="frontend"),
+                EnvVariableShadowing(app_name="astronomy_shop", faulty_service="frontend-proxy"),
+            ]),
+            # --- Tier A: restart / OOM twofer ---
+            # Hotel reservation — undersized memory on mongodb-rate + liveness probe kill on recommendation
+            "resource_too_small_and_probe_misconfig_hotel_res": lambda: SameAppMultiFault([
+                ResourceRequestTooSmall(app_name="hotel_reservation", faulty_service="mongodb-rate"),
+                LivenessProbeMisconfiguration(app_name="hotel_reservation", faulty_service="recommendation"),
+            ]),
+            # --- Tier B: dual mongo auth, different failure modes ---
+            # Hotel reservation — admin revoked on geo + user unregistered on rate
+            "revoke_auth_geo_and_storage_user_rate_hotel_res": lambda: SameAppMultiFault([
+                MongoDBRevokeAuth(faulty_service="mongodb-geo"),
+                MongoDBUserUnregistered(faulty_service="mongodb-rate"),
+            ]),
+            # --- Tier B: two independent cluster faults in one app ---
+            # Astronomy shop — DNS NXDOMAIN on frontend + aggressive probe restart-looping aux-service
+            "service_dns_and_liveness_too_aggressive_astronomy_shop": lambda: SameAppMultiFault([
+                ServiceDNSResolutionFailure(app_name="astronomy_shop", faulty_service="frontend"),
+                LivenessProbeTooAggressive(app_name="astronomy_shop"),
+            ]),
             # ad hoc:
             "kubelet_crash": KubeletCrash,
             "workload_imbalance": WorkloadImbalance,
