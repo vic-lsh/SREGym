@@ -455,6 +455,7 @@ class Conductor:
         self.app = self.problem.app
         self.detection_oracle = DetectionOracle(self.problem)
         self.results = {}
+        self.diagnosis_submissions = []
 
         self.dependency_check(["kubectl", "helm"])
         self.logger.debug("Dependency check passed: kubectl, helm")

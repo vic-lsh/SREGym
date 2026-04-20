@@ -30,7 +30,7 @@ class ApplicationFaultInjector(FaultInjector):
     def delete_service_pods(self, target_service_pods: list[str]):
         """Kill the corresponding service pod to enforce the fault."""
         for pod in target_service_pods:
-            delete_pod_command = f"kubectl delete pod {pod} -n {self.namespace}"
+            delete_pod_command = f"kubectl delete pod {pod} -n {self.namespace} --ignore-not-found"
             delete_result = self.kubectl.exec_command(delete_pod_command)
             print(f"Deleted service pod {pod} to enforce the fault: {delete_result}")
 
