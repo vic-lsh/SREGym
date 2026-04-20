@@ -88,6 +88,10 @@ class Conductor:
         self.submission_stage = None
         self.results = {}
 
+        # Autonomous-mode deferred diagnosis grading: accumulate all submit_diagnosis
+        # calls during the episode; grade holistically in force_cleanup after agent exits.
+        self.diagnosis_submissions: list[str] = []
+
         self.tasklist = None
         self.logger = logging.getLogger("all.sregym.conductor")
 
@@ -264,6 +268,10 @@ class Conductor:
         """Evaluation logic for mitigation stage."""
         # Currently mitigation_oracle.evaluate() does not take the agent solution directly.
         self.logger.info("Start Eval for Mitigation", extra={"sol": solution})
+        try:
+            get_noise_manager().stop()
+        except Exception as e:
+            self.logger.warning(f"Failed to stop NoiseManager before mitigation eval: {e}")
         r = self.problem.mitigation_oracle.evaluate()
         self.results["Mitigation"] = r
         self.results["TTM"] = time.time() - self.execution_start_time
@@ -360,6 +368,36 @@ class Conductor:
             # where the next problem starts before cleanup finishes
             self.submission_stage = "done"
 
+    def _evaluate_diagnosis_deferred(self):
+        """Grade accumulated autonomous-mode diagnosis submissions after agent exits.
+
+        Concatenates all submissions and calls the problem's diagnosis oracle.
+        Only runs when at least one submission was collected and the oracle exists.
+        """
+        if not self.diagnosis_submissions:
+            self.logger.warning("Deferred diagnosis grading: no submissions collected.")
+            self.results["Diagnosis"] = {"success": False, "accuracy": 0.0}
+            return
+        if not getattr(self.problem, "diagnosis_oracle", None):
+            self.logger.warning("Deferred diagnosis grading: no diagnosis oracle on problem.")
+            return
+
+        combined = "\n".join(self.diagnosis_submissions)
+        self.logger.info(
+            f"Deferred diagnosis grading: evaluating {len(self.diagnosis_submissions)} "
+            f"submission(s) combined into {len(combined)} chars."
+        )
+        r = self.problem.diagnosis_oracle.evaluate(combined)
+        r["deferred"] = True
+        r["num_submissions"] = len(self.diagnosis_submissions)
+        self.results["Diagnosis"] = r
+        self.results["TTL"] = time.time() - self.execution_start_time
+        self.logger.info(
+            f"[EVAL] Deferred Diagnosis "
+            f"{'Succeeded' if r.get('success') else 'Failed'} | "
+            f"accuracy={r.get('accuracy', 0.0):.1f}"
+        )
+
     def force_cleanup(self):
         """Public entry used by the POST /cleanup handler, the driver's crash
         path, and the watchdog timer. Idempotent: safe to call from multiple
@@ -372,6 +410,8 @@ class Conductor:
                     f"force_cleanup called at unexpected stage {self.submission_stage!r}; "
                     "running teardown anyway to guarantee cluster cleanup."
                 )
+            if self.diagnosis_submissions and "Diagnosis" not in self.results:
+                self._evaluate_diagnosis_deferred()
             self._cancel_cleanup_watchdog()
             self._run_teardown()
             self.submission_stage = "done"

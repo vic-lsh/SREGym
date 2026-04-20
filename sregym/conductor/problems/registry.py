@@ -52,6 +52,7 @@ from sregym.conductor.problems.recommendation_service_cache_failure import Recom
 from sregym.conductor.problems.resource_request import ResourceRequestTooLarge, ResourceRequestTooSmall
 from sregym.conductor.problems.revoke_auth import MongoDBRevokeAuth
 from sregym.conductor.problems.rolling_update_misconfigured import RollingUpdateMisconfigured
+from sregym.conductor.problems.same_app_multi_fault import SameAppMultiFault
 from sregym.conductor.problems.scale_pod import ScalePodSocialNet
 from sregym.conductor.problems.service_dns_resolution_failure import ServiceDNSResolutionFailure
 from sregym.conductor.problems.service_port_conflict import ServicePortConflict
@@ -66,12 +67,12 @@ from sregym.conductor.problems.trainticket_f17 import TrainTicketF17
 from sregym.conductor.problems.update_incompatible_correlated import UpdateIncompatibleCorrelated
 from sregym.conductor.problems.valkey_auth_disruption import ValkeyAuthDisruption
 from sregym.conductor.problems.valkey_memory_disruption import ValkeyMemoryDisruption
+from sregym.conductor.problems.variant_generator import filter_variant_ids_by_spec, generate_all_variants
+from sregym.conductor.problems.variant_specs import get_all_variant_specs
 from sregym.conductor.problems.workload_imbalance import WorkloadImbalance
 from sregym.conductor.problems.wrong_bin_usage import WrongBinUsage
 from sregym.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from sregym.conductor.problems.wrong_service_selector import WrongServiceSelector
-from sregym.conductor.problems.variant_generator import filter_variant_ids_by_spec, generate_all_variants
-from sregym.conductor.problems.variant_specs import get_all_variant_specs
 from sregym.service.kubectl import KubeCtl
 
 
@@ -221,6 +222,33 @@ class ProblemRegistry:
             "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="payment-service"),
             # ==================== MULTIPLE INDEPENDENT FAILURES ====================
             "social_net_hotel_res_astro_shop_concurrent_failures": lambda: MultipleIndependentFailures(problems=[K8STargetPortMisconfig(faulty_service="user-service"),MongoDBRevokeAuth(faulty_service="mongodb-geo"),WrongServiceSelector(),]),
+            # ==================== SAME-APP MULTI-FAULT (stress-test diagnosis) ====================
+            # Astronomy shop — connection failures (all surface as ECONNREFUSED / 5xx)
+            "missing_env_and_port_misconfig_astronomy_shop": lambda: SameAppMultiFault([
+                MissingEnvVariable(app_name="astronomy_shop", faulty_service="frontend"),
+                IncorrectPortAssignment(),
+            ]),
+            # Astronomy shop — both kill cart via valkey (auth vs OOM)
+            "valkey_auth_and_memory_disruption_astronomy_shop": lambda: SameAppMultiFault([
+                ValkeyAuthDisruption(),
+                ValkeyMemoryDisruption(),
+            ]),
+            # Hotel reservation — both crash geo service (auth vs configmap drift)
+            # ConfigMapDrift must go first: it execs into the geo pod, which MongoDBRevokeAuth deletes.
+            "revoke_auth_mongodb_and_configmap_drift_hotel_res": lambda: SameAppMultiFault([
+                ConfigMapDrift(faulty_service="geo"),
+                MongoDBRevokeAuth(faulty_service="mongodb-geo"),
+            ]),
+            # Hotel reservation — rate auth + geo misconfig (different services, same app)
+            "revoke_auth_mongodb_and_misconfig_app_hotel_res": lambda: SameAppMultiFault([
+                MongoDBRevokeAuth(faulty_service="mongodb-rate"),
+                MisconfigAppHotelRes(),
+            ]),
+            # Social network — k8s port mismatch + mongodb TLS misconfiguration
+            "k8s_target_port_and_auth_miss_mongodb_social_net": lambda: SameAppMultiFault([
+                K8STargetPortMisconfig(faulty_service="user-service"),
+                MongoDBAuthMissing(),
+            ]),
             # ad hoc:
             "kubelet_crash": KubeletCrash,
             "workload_imbalance": WorkloadImbalance,
@@ -280,7 +308,7 @@ class ProblemRegistry:
             # if tasklist.yml does not exist, run all the problems
             return list(self.PROBLEM_REGISTRY.keys())
 
-        with open(tl_path, "r") as f:
+        with open(tl_path) as f:
             tasklist = yaml.safe_load(f)
         return list(tasklist["all"]["problems"].keys())
 

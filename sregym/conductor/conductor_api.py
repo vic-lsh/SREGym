@@ -83,6 +83,42 @@ async def submit_solution(req: SubmitRequest):
     return results
 
 
+@app.post("/submit_diagnosis")
+async def submit_diagnosis(req: SubmitRequest):
+    """Autonomous-mode diagnosis submission. Accumulates the answer for deferred
+    grading after the agent exits; returns a neutral acknowledgement."""
+    if _conductor is None:
+        raise HTTPException(status_code=400, detail="No problem has been started")
+    solution = req.solution if isinstance(req.solution, str) else " ".join(req.solution)
+    _conductor.diagnosis_submissions.append(solution)
+    logger.info(
+        f"[submit_diagnosis] collected submission #{len(_conductor.diagnosis_submissions)}: "
+        f"{solution[:120]!r}"
+    )
+    return {"status": "acknowledged", "message": "Diagnosis recorded."}
+
+
+@app.post("/submit_mitigation")
+async def submit_mitigation(req: SubmitRequest):
+    """Autonomous-mode mitigation submission. Evaluates the mitigation oracle
+    against the live cluster state and records TTM. Accepted at any active stage
+    so that autonomous agents (which never advance the stage machine) can submit."""
+    if _conductor is None:
+        raise HTTPException(status_code=400, detail="No problem has been started")
+    if "Mitigation" in _conductor.results:
+        return {"status": "acknowledged", "message": "Mitigation already graded."}
+    if not getattr(_conductor.problem, "mitigation_oracle", None):
+        return {"status": "acknowledged", "message": "No mitigation oracle configured."}
+    solution = req.solution if isinstance(req.solution, str) else " ".join(req.solution)
+    logger.info(f"[submit_mitigation] grading mitigation: {solution[:120]!r}")
+    try:
+        _conductor._evaluate_mitigation(solution)
+    except Exception as e:
+        logger.error(f"[submit_mitigation] grading failed: {e}")
+        raise HTTPException(status_code=400, detail=f"Grading error: {e}")
+    return {"status": "acknowledged", "message": "Mitigation recorded."}
+
+
 @app.post("/cleanup")
 async def post_cleanup():
     """Trigger deferred teardown. Only valid when submission_stage is

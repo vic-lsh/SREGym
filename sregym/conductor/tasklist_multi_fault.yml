@@ -1,0 +1,27 @@
+all:
+  problems:
+    # Astronomy shop: missing env var (frontend→cart) + wrong port (checkout→product-catalog)
+    # Both surface as ECONNREFUSED / 5xx; different services and root-cause layers
+    missing_env_and_port_misconfig_astronomy_shop:
+    - diagnosis
+    - mitigation
+    # Astronomy shop: valkey auth required + valkey OOM
+    # Both kill the cart service via valkey; agent may fix auth and miss the memory flood
+    valkey_auth_and_memory_disruption_astronomy_shop:
+    - diagnosis
+    - mitigation
+    # Hotel reservation: mongodb-geo auth revoked + geo configmap drifted
+    # Both crash geo; agent fixes auth, geo restarts but still broken due to bad configmap
+    revoke_auth_mongodb_and_configmap_drift_hotel_res:
+    - diagnosis
+    - mitigation
+    # Hotel reservation: mongodb-rate auth revoked + geo app misconfiguration
+    # Different services both broken; rate pods crash-loop while geo silently misbehaves
+    revoke_auth_mongodb_and_misconfig_app_hotel_res:
+    - diagnosis
+    - mitigation
+    # Social network: user-service targetPort mismatch + url-shorten-mongodb TLS misconfiguration
+    # Both cause service failures; one is k8s networking, one is database auth/TLS
+    k8s_target_port_and_auth_miss_mongodb_social_net:
+    - diagnosis
+    - mitigation

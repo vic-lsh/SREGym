@@ -50,6 +50,52 @@ def submit(ans: str | list[str]) -> dict[str, str]:
         return {"status": "N/A", "text": f"[submit_mcp] HTTP submission failed: {e}"}
 
 
+@mcp.tool(name="submit_diagnosis")
+def submit_diagnosis(ans: str) -> dict[str, str]:
+    """Record your root-cause diagnosis (autonomous mode).
+
+    Args:
+        ans: concise description of the root cause you identified.
+
+    Returns:
+        Neutral acknowledgement — does not reveal whether the answer is correct.
+    """
+    cfg = LanggraphToolConfig()
+    url = cfg.benchmark_submit_url.replace("/submit", "/submit_diagnosis")
+    headers = {"Content-Type": "application/json"}
+    payload = {"solution": ans}
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        logger.info(f"[submit_diagnosis] status: {response.status_code}")
+        return {"status": str(response.status_code), "text": "Diagnosis recorded."}
+    except Exception as e:
+        logger.error(f"[submit_diagnosis] failed: {e}")
+        return {"status": "N/A", "text": f"[submit_diagnosis] failed: {e}"}
+
+
+@mcp.tool(name="submit_mitigation")
+def submit_mitigation(ans: str) -> dict[str, str]:
+    """Record the mitigation actions you took (autonomous mode).
+
+    Args:
+        ans: short summary of the changes you made to restore the cluster.
+
+    Returns:
+        Neutral acknowledgement — does not reveal whether mitigation succeeded.
+    """
+    cfg = LanggraphToolConfig()
+    url = cfg.benchmark_submit_url.replace("/submit", "/submit_mitigation")
+    headers = {"Content-Type": "application/json"}
+    payload = {"solution": ans}
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        logger.info(f"[submit_mitigation] status: {response.status_code}")
+        return {"status": str(response.status_code), "text": "Mitigation recorded."}
+    except Exception as e:
+        logger.error(f"[submit_mitigation] failed: {e}")
+        return {"status": "N/A", "text": f"[submit_mitigation] failed: {e}"}
+
+
 @mcp.tool(name="localization")
 async def localization(
     resource_type: str,
