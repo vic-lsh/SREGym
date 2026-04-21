@@ -7,6 +7,7 @@ from sregym.paths import FAULT_SCRIPTS, HOTEL_RES_METADATA, TARGET_MICROSERVICES
 from sregym.service.apps.base import Application
 from sregym.service.apps.helpers import get_frontend_url
 from sregym.service.kubectl import KubeCtl
+from sregym.service.source_deploy import plan_for_app, source_deploy_enabled
 
 logger = logging.getLogger("all.application")
 logger.propagate = True
@@ -82,7 +83,11 @@ class HotelReservation(Application):
         self.create_namespace()
         self.configure_dockerhub_pull_secret()
         self.create_configmaps()
-        self.kubectl.apply_configs(self.namespace, self.k8s_deploy_path)
+        if source_deploy_enabled():
+            with plan_for_app(self) as plan:
+                self.kubectl.exec_command(f"kubectl apply -k {plan.manifest_path} -n {self.namespace}")
+        else:
+            self.kubectl.apply_configs(self.namespace, self.k8s_deploy_path)
         self.configure_dockerhub_pull_secret(patch_all_service_accounts=True, restart_pods=True)
         self.kubectl.wait_for_ready(self.namespace)
         self.trace_api = TraceAPI(self.namespace)

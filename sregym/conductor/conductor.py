@@ -24,6 +24,7 @@ from sregym.service.k8s_proxy import KubernetesAPIProxy
 from sregym.service.khaos import KhaosController
 from sregym.service.kubeconfig import require_kubeconfig_path
 from sregym.service.kubectl import KubeCtl
+from sregym.service.source_deploy import source_deploy_enabled, unsupported_reason
 from sregym.service.telemetry.prometheus import Prometheus
 
 
@@ -530,6 +531,15 @@ class Conductor:
 
         self.logger.info(f"[Session Start] Problem ID: {self.problem_id}")
         self.logger.info(f"[STAGE] Start testing on problem: {self.problem_id}")
+
+        if source_deploy_enabled():
+            reason = unsupported_reason(self.app.name)
+            if reason is not None:
+                self.logger.warning(
+                    f"Problem '{self.problem_id}' uses app '{self.app.name}', which is unsupported for source deploy: "
+                    f"{reason}. Skipping this problem."
+                )
+                return StartProblemResult.SKIPPED_SOURCE_DEPLOY_UNSUPPORTED
 
         if self.problem.requires_khaos() and self.kubectl.is_emulated_cluster():
             self.logger.warning(

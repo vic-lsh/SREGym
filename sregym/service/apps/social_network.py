@@ -10,6 +10,7 @@ from sregym.service.apps.base import Application
 from sregym.service.apps.helpers import get_frontend_url
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
+from sregym.service.source_deploy import plan_for_app, source_deploy_enabled
 
 logger = logging.getLogger("all.sregym.social_network")
 logger.propagate = True
@@ -100,18 +101,22 @@ class SocialNetwork(Application):
         self.create_tls_secret()
         node_architectures = self.kubectl.get_node_architectures()
         is_arm = any(arch in ["arm64", "aarch64"] for arch in node_architectures)
+        helm_configs = dict(self.helm_configs)
+        extra_args = list(helm_configs.get("extra_args", []))
 
-        if is_arm:
-            # Use the ARM-compatible image for media-frontend
-            if "extra_args" not in self.helm_configs:
-                self.helm_configs["extra_args"] = []
-
-            self.helm_configs["extra_args"].append(
-                "--set media-frontend.container.image=jacksonarthurclark/media-frontend"
-            )
-            self.helm_configs["extra_args"].append("--set media-frontend.container.imageVersion=latest")
-
-        Helm.install(**self.helm_configs)
+        if source_deploy_enabled():
+            with plan_for_app(self, node_architectures=node_architectures) as plan:
+                extra_args.extend(plan.helm_extra_args)
+                helm_configs["extra_args"] = extra_args
+                Helm.install(**helm_configs)
+        else:
+            if is_arm:
+                # Use the ARM-compatible image for media-frontend.
+                extra_args.append("--set media-frontend.container.image=jacksonarthurclark/media-frontend")
+                extra_args.append("--set media-frontend.container.imageVersion=latest")
+            if extra_args:
+                helm_configs["extra_args"] = extra_args
+            Helm.install(**helm_configs)
         Helm.assert_if_deployed(self.helm_configs["namespace"])
         self.trace_api = TraceAPI(self.namespace)
         self.trace_api.start_port_forward()

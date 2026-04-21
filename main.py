@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import csv
 import glob
+import inspect
 import json
 import logging
 import multiprocessing
@@ -57,6 +58,7 @@ from sregym.conductor.conductor import Conductor
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.service.kubeconfig import require_kubeconfig_path
+from sregym.service.source_deploy import ensure_app_supported
 from sregym.worker_infra import (
     KIND_CLUSTER_PREFIX as _WORKER_INFRA_KIND_CLUSTER_PREFIX,
     apply_worker_cpu_limit as _apply_worker_cpu_limit,
@@ -600,6 +602,68 @@ def _resolve_cli_app_name(app_name: str) -> str:
     )
 
 
+def _filter_problem_ids_by_app(problem_source, problem_ids: list[str], app_filter: str) -> list[str]:
+    """Restrict a list of problem IDs to those targeting the requested app."""
+    expected_app_name = _resolve_cli_app_name(app_filter)
+    return [problem_id for problem_id in problem_ids if _problem_targets_app(problem_source, problem_id, expected_app_name)]
+
+
+def _problem_targets_app(problem_source, problem_id: str, expected_app_name: str) -> bool:
+    """Infer a problem's target app without constructing live problem instances."""
+    alias_token = expected_app_name.lower().replace(" ", "_").replace("-", "_")
+    if alias_token in problem_id:
+        return True
+
+    factory = problem_source.get_problem(problem_id)
+    if factory is None:
+        return False
+
+    app_name = _infer_problem_app_name(factory)
+    return app_name == expected_app_name
+
+
+def _infer_problem_app_name(factory) -> str | None:
+    """Best-effort static inference of a problem factory's target app."""
+    try:
+        signature = inspect.signature(factory)
+    except (TypeError, ValueError):
+        signature = None
+
+    if signature is not None:
+        param = signature.parameters.get("app_name")
+        if param is not None and isinstance(param.default, str) and param.default is not inspect.Signature.empty:
+            return _normalize_problem_app_name(param.default)
+
+    try:
+        source = inspect.getsource(factory)
+    except (OSError, TypeError):
+        source = ""
+
+    match = re.search(r'app_name\s*=\s*["\']([^"\']+)["\']', source)
+    if match:
+        return _normalize_problem_app_name(match.group(1))
+
+    class_markers = {
+        "HotelReservation": "Hotel Reservation",
+        "SocialNetwork": "Social Network",
+        "AstronomyShop": "Astronomy Shop",
+        "FleetCast": "Fleet Cast",
+        "BlueprintHotelReservation": "Blueprint Hotel Reservation",
+    }
+    for marker, app_name in class_markers.items():
+        if marker in source:
+            return app_name
+
+    return None
+
+
+def _normalize_problem_app_name(app_name: str) -> str:
+    try:
+        return _resolve_cli_app_name(app_name)
+    except ValueError:
+        return app_name
+
+
 def _cluster_name_for_live_deployment(deployment_name: str) -> str:
     cluster_safe_name = _sanitize_deployment_name(deployment_name).replace("_", "-")
     return f"{LIVE_CLUSTER_PREFIX}-{cluster_safe_name}"[:60]
@@ -898,6 +962,7 @@ def deploy_live_environment(
     *,
     problem_id: str | None,
     app_name: str | None,
+    deploy_from_source: bool = False,
     deployment_name: str | None = None,
     deployments_root: str | None = None,
     frontend_local_port: int | None = None,
@@ -938,6 +1003,9 @@ def deploy_live_environment(
         kubeconfig_path = shared_cluster_state.kubeconfig_path
         conductor = Conductor()
         problem = _resolve_live_problem(conductor, problem_id=problem_id, app_name=app_name)
+        os.environ["SREGYM_DEPLOY_FROM_SOURCE"] = "1" if deploy_from_source else "0"
+        if deploy_from_source:
+            ensure_app_supported(problem.app.name)
         _assign_live_problem(conductor, problem_id=problem_id, problem=problem)
         conductor.deploy_app()
         if conductor.cluster_state.baseline is not None:
@@ -1072,6 +1140,7 @@ def driver_loop(
     conductor: Conductor,
     experiment_log_dir: str,
     problem_filter: str = None,
+    app_filter: str = None,
     agent_to_run: str = None,
     use_external_harness: bool = False,
     repeat: int = 1,
@@ -1091,6 +1160,7 @@ def driver_loop(
         conductor: The Conductor instance
         experiment_log_dir: Directory to store logs and results.
         problem_filter: Optional problem ID to run. If specified, only this problem will be run.
+        app_filter: Optional app selector. If specified, only problems for that app will be run.
         agent_to_run: Agent name to run (required unless use_external_harness is True).
         use_external_harness: If True, inject fault and exit without running evaluation logic.
         enable_summary: If True, pass --enable-summary to the agent.
@@ -1190,6 +1260,11 @@ def driver_loop(
                 # Filter to intersection of available and requested
                 problem_ids = [p for p in problem_ids if p in problem_list]
                 console.log(f"🎯 Running {len(problem_ids)} problems from list")
+
+            if app_filter:
+                problem_ids = _filter_problem_ids_by_app(conductor.problems, problem_ids, app_filter)
+                resolved_app_name = _resolve_cli_app_name(app_filter)
+                console.log(f"🎯 Filtering problems to app: {resolved_app_name} ({len(problem_ids)} problems)")
 
             # sanity check: are there any specified problem ids that do not exist in the registry?
             unknown_problem_ids = set(problem_ids) - set(all_problem_ids)
@@ -1314,6 +1389,20 @@ def driver_loop(
                         _st = _info.get("start_time", time.time()) if isinstance(_info, dict) else time.time()
                         _safe_status_update(status_dict, seq_key, {
                             "status": "Skipped (Khaos Req)",
+                            "pid": pid,
+                            "start_time": _st,
+                            "elapsed": time.time() - _st,
+                            "worker_id": worker_id,
+                        })
+                        continue
+                    if result == StartProblemResult.SKIPPED_SOURCE_DEPLOY_UNSUPPORTED:
+                        console.log(
+                            f"⏭️  Skipping problem '{pid}': app does not support deploy-from-source"
+                        )
+                        _info = _safe_status_read(status_dict, seq_key, {})
+                        _st = _info.get("start_time", time.time()) if isinstance(_info, dict) else time.time()
+                        _safe_status_update(status_dict, seq_key, {
+                            "status": "Skipped (Source Deploy Unsupported)",
                             "pid": pid,
                             "start_time": _st,
                             "elapsed": time.time() - _st,
@@ -1613,6 +1702,7 @@ def _run_driver_and_shutdown(
     conductor: Conductor,
     experiment_log_dir: str,
     problem_filter: str = None,
+    app_filter: str = None,
     agent_to_run: str = None,
     use_external_harness: bool = False,
     repeat: int = 1,
@@ -1630,6 +1720,7 @@ def _run_driver_and_shutdown(
             conductor,
             experiment_log_dir,
             problem_filter=problem_filter,
+            app_filter=app_filter,
             agent_to_run=agent_to_run,
             use_external_harness=use_external_harness,
             repeat=repeat,
@@ -1796,6 +1887,12 @@ def run_parallel(args):
         if unmatched:
             logger.warning(f"--problem-spec: no problems matched spec(s): {unmatched}")
         all_problems = filtered
+
+    if getattr(args, "app_filter", None):
+        all_problems = _filter_problem_ids_by_app(registry, all_problems, args.app_filter)
+        logger.info(
+            f"App filter {_resolve_cli_app_name(args.app_filter)!r}: {len(all_problems)} matching problems."
+        )
 
     if not all_problems:
         logger.error("No problems found to run.")
@@ -2583,6 +2680,7 @@ def main(
             logger.warning(f"⚠️ Failed to initialize noise manager: {e}")
 
     os.environ["MODEL_ID"] = args.model
+    os.environ["SREGYM_DEPLOY_FROM_SOURCE"] = "1" if getattr(args, "deploy_from_source", False) else "0"
     if getattr(args, "judge_model", None):
         os.environ["JUDGE_MODEL_ID"] = args.judge_model
     os.environ["JUDGE_NUM_ROUNDS"] = str(args.judge_rounds)
@@ -2617,6 +2715,7 @@ def main(
             conductor=conductor,
             experiment_log_dir=experiment_log_dir,
             problem_filter=args.problem,
+            app_filter=getattr(args, "app_filter", None),
             agent_to_run=args.agent,
             use_external_harness=args.use_external_harness,
             repeat=args.repeat,
@@ -2720,6 +2819,11 @@ def build_live_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Discard any existing reusable live cluster and recreate it before deployment",
     )
+    deploy_parser.add_argument(
+        "--deploy-from-source",
+        action="store_true",
+        help="Build supported applications from local source and load images into the live kind cluster",
+    )
 
     undeploy_parser = subparsers.add_parser(
         "undeploy",
@@ -2783,6 +2887,17 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
         type=int,
         default=1,
         help="Number of parallel workers to run",
+    )
+    parser.add_argument(
+        "--deploy-from-source",
+        action="store_true",
+        help="Build supported applications from local source and load images into each worker kind cluster",
+    )
+    parser.add_argument(
+        "--app-filter",
+        type=str,
+        default=None,
+        help="Restrict benchmark problems to a single application, e.g. hotel_reservation or social_network",
     )
     parser.add_argument(
         "--enable-summary",
@@ -3015,6 +3130,7 @@ def run_live_command(args: argparse.Namespace) -> int:
         state = deploy_live_environment(
             problem_id=args.problem,
             app_name=args.app,
+            deploy_from_source=args.deploy_from_source,
             deployment_name=deployment_name,
             frontend_local_port=args.local_port,
             with_k8s_proxy=args.with_k8s_proxy,
