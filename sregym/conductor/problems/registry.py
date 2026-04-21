@@ -260,10 +260,40 @@ class ProblemRegistry:
                 WrongServiceSelector(app_name="social_network", faulty_service="user-service"),
                 K8STargetPortMisconfig(faulty_service="user-service"),
             ]),
+            # Social network — nginx-thrift calls user-service directly; destination missing vs caller DNS broken
+            "missing_user_service_and_wrong_dns_policy_social_network": lambda: SameAppMultiFault([
+                MissingService(app_name="social_network", faulty_service="user-service"),
+                WrongDNSPolicy(app_name="social_network", faulty_service="nginx-thrift"),
+            ]),
+            # Astronomy shop — ad service removed + frontend-specific CoreDNS NXDOMAIN
+            "missing_service_and_dns_failure_astronomy_shop": lambda: SameAppMultiFault([
+                MissingService(app_name="astronomy_shop", faulty_service="ad"),
+                ServiceDNSResolutionFailure(app_name="astronomy_shop", faulty_service="frontend"),
+            ]),
+            # Astronomy shop — checkout depends on payment; missing callee vs broken caller DNS
+            "missing_payment_and_wrong_dns_policy_astronomy_shop": lambda: SameAppMultiFault([
+                MissingService(app_name="astronomy_shop", faulty_service="payment"),
+                WrongDNSPolicy(app_name="astronomy_shop", faulty_service="checkout"),
+            ]),
+            # Hotel reservation — search service deleted + frontend selector drifted
+            "missing_service_and_wrong_selector_hotel_res": lambda: SameAppMultiFault([
+                MissingService(app_name="hotel_reservation", faulty_service="search"),
+                WrongServiceSelector(app_name="hotel_reservation", faulty_service="frontend"),
+            ]),
+            # Hotel reservation — frontend search path hits search directly; missing callee vs broken caller DNS
+            "missing_search_and_wrong_dns_policy_hotel_res": lambda: SameAppMultiFault([
+                MissingService(app_name="hotel_reservation", faulty_service="search"),
+                WrongDNSPolicy(app_name="hotel_reservation", faulty_service="frontend"),
+            ]),
             # Hotel reservation — two CrashLoop sources (probe misconfig on recommendation, wrong bin on profile)
             "liveness_probe_and_wrong_bin_hotel_res": lambda: SameAppMultiFault([
                 LivenessProbeMisconfiguration(app_name="hotel_reservation", faulty_service="recommendation"),
                 WrongBinUsage(faulty_service="profile"),
+            ]),
+            # Astronomy shop — two checkout/payment failures from different services
+            "payment_failure_and_unreachable_astronomy_shop": lambda: SameAppMultiFault([
+                PaymentServiceFailure(),
+                PaymentServiceUnreachable(),
             ]),
             # --- Tier A: loud fault masks quiet one ---
             # Astronomy shop — global CoreDNS failure hides missing CART_ADDR on frontend
@@ -288,11 +318,31 @@ class ProblemRegistry:
                 MongoDBRevokeAuth(faulty_service="mongodb-geo"),
                 MongoDBUserUnregistered(faulty_service="mongodb-rate"),
             ]),
+            # Astronomy shop — frontend slowdown from external pressure vs cluster imbalance
+            "loadgen_flood_and_workload_imbalance_astronomy_shop": lambda: SameAppMultiFault([
+                LoadGeneratorFloodHomepage(),
+                WorkloadImbalance(),
+            ]),
+            # Hotel reservation — two different FailedScheduling causes
+            "service_port_conflict_and_resource_request_hotel_res": lambda: SameAppMultiFault([
+                ServicePortConflict(app_name="hotel_reservation", faulty_service="recommendation"),
+                ResourceRequestTooLarge(app_name="hotel_reservation", faulty_service="mongodb-rate"),
+            ]),
+            # Hotel reservation — two storage-related Pending narratives
+            "pvc_claim_mismatch_and_pv_affinity_hotel_res": lambda: SameAppMultiFault([
+                PVCClaimMismatch(),
+                PersistentVolumeAffinityViolation(app_name="Hotel Reservation", faulty_service="mongodb-rate"),
+            ]),
             # --- Tier B: two independent cluster faults in one app ---
             # Astronomy shop — DNS NXDOMAIN on frontend + aggressive probe restart-looping aux-service
             "service_dns_and_liveness_too_aggressive_astronomy_shop": lambda: SameAppMultiFault([
                 ServiceDNSResolutionFailure(app_name="astronomy_shop", faulty_service="frontend"),
                 LivenessProbeTooAggressive(app_name="astronomy_shop"),
+            ]),
+            # Fleet Cast / TiDB operator — distinct CR-level Pending causes
+            "operator_storage_and_toleration_fleetcast": lambda: SameAppMultiFault([
+                K8SOperatorNonExistentStorageFault(),
+                K8SOperatorInvalidAffinityTolerationFault(),
             ]),
             # ad hoc:
             "kubelet_crash": KubeletCrash,

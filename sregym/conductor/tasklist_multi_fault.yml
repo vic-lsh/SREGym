@@ -35,9 +35,39 @@ all:
     selector_and_target_port_social_network:
     - diagnosis
     - mitigation
+    # Social network: user-service deleted + nginx-thrift DNS policy broken
+    # Source-backed caller path: nginx-thrift Lua handlers call user-service directly
+    missing_user_service_and_wrong_dns_policy_social_network:
+    - diagnosis
+    - mitigation
+    # Astronomy shop: ad Service deleted + frontend-specific DNS NXDOMAIN
+    # Both present as service discovery failures, but one is a missing object and one is CoreDNS state
+    missing_service_and_dns_failure_astronomy_shop:
+    - diagnosis
+    - mitigation
+    # Astronomy shop: payment Service deleted + checkout DNS policy broken
+    # Source-backed caller path: checkout uses PAYMENT_ADDR=payment:8080
+    missing_payment_and_wrong_dns_policy_astronomy_shop:
+    - diagnosis
+    - mitigation
+    # Hotel reservation: search Service deleted + frontend selector drift
+    # Both collapse to missing/unhealthy endpoints from callers, but the fixes land on different Service objects
+    missing_service_and_wrong_selector_hotel_res:
+    - diagnosis
+    - mitigation
+    # Hotel reservation: search Service deleted + frontend DNS policy broken
+    # Source-backed caller path: frontend initSearchClient/searchHandler talks to search directly
+    missing_search_and_wrong_dns_policy_hotel_res:
+    - diagnosis
+    - mitigation
     # Hotel reservation: liveness probe misconfig (recommendation) + wrong binary (profile)
     # Two CrashLoopBackOff sources on different services; restart reasons look alike
     liveness_probe_and_wrong_bin_hotel_res:
+    - diagnosis
+    - mitigation
+    # Astronomy shop: payment-service failure + checkout-side payment unreachable flag
+    # Checkout fails in both cases, but one breaks the callee and the other breaks the caller's route to it
+    payment_failure_and_unreachable_astronomy_shop:
     - diagnosis
     - mitigation
     # Astronomy shop: cluster-wide stale CoreDNS + missing CART_ADDR on frontend
@@ -60,8 +90,28 @@ all:
     revoke_auth_geo_and_storage_user_rate_hotel_res:
     - diagnosis
     - mitigation
+    # Astronomy shop: frontend flood from load-generator + cluster imbalance under surge
+    # Both look like latency/timeout under load, but one is traffic pressure and the other is control-plane skew
+    loadgen_flood_and_workload_imbalance_astronomy_shop:
+    - diagnosis
+    - mitigation
+    # Hotel reservation: hostPort conflict + oversized memory request
+    # Both produce Pending pods with FailedScheduling, but for different scheduler reasons
+    service_port_conflict_and_resource_request_hotel_res:
+    - diagnosis
+    - mitigation
+    # Hotel reservation: broken PVC claim names + PV node-affinity violation
+    # Both are storage-flavored Pending failures, but one is claim binding and one is volume placement
+    pvc_claim_mismatch_and_pv_affinity_hotel_res:
+    - diagnosis
+    - mitigation
     # Astronomy shop: DNS NXDOMAIN for frontend + aggressive liveness probe on aux-service
     # One app, two unrelated cluster-level faults; easy to assume a single "flaky cluster" narrative
     service_dns_and_liveness_too_aggressive_astronomy_shop:
+    - diagnosis
+    - mitigation
+    # Fleet Cast / TiDB operator: non-existent StorageClass + invalid toleration effect
+    # Both leave operator-managed pods Pending, but the broken CR fields and repair paths differ
+    operator_storage_and_toleration_fleetcast:
     - diagnosis
     - mitigation
