@@ -92,6 +92,14 @@ class Conductor:
         # calls during the episode; grade holistically in force_cleanup after agent exits.
         self.diagnosis_submissions: list[str] = []
 
+        # Autonomous-mode "done" signal. When the agent calls submit_done, we stamp
+        # TTL at that instant, run the diagnosis judge, and freeze further
+        # submit_diagnosis / submit_mitigation calls. Stored separately from
+        # submission_stage so the existing awaiting_cleanup/done teardown flow is
+        # unaffected.
+        self.autonomous_done: bool = False
+        self._ttl_stamped_at: float | None = None
+
         self.tasklist = None
         self.logger = logging.getLogger("all.sregym.conductor")
 
@@ -391,12 +399,70 @@ class Conductor:
         r["deferred"] = True
         r["num_submissions"] = len(self.diagnosis_submissions)
         self.results["Diagnosis"] = r
-        self.results["TTL"] = time.time() - self.execution_start_time
+        # TTL is stamped at submit_done time when available (autonomous "done"
+        # flow); otherwise fall back to grading-completion time.
+        ttl_end = self._ttl_stamped_at if self._ttl_stamped_at is not None else time.time()
+        self.results["TTL"] = ttl_end - self.execution_start_time
         self.logger.info(
             f"[EVAL] Deferred Diagnosis "
             f"{'Succeeded' if r.get('success') else 'Failed'} | "
             f"accuracy={r.get('accuracy', 0.0):.1f}"
         )
+
+    def submit_done(self) -> dict:
+        """Autonomous-mode "done" signal: stamp TTL, run the deferred diagnosis
+        judge, and freeze further submissions. Idempotent — a second call returns
+        the cached result. Returns rich feedback (judge reasoning, matched
+        candidate, ground-truth expectation) so the agent can use it to produce
+        an accurate incident-memory entry.
+        """
+        if self.autonomous_done:
+            self.logger.info("submit_done called again; returning cached payload.")
+            return self._build_done_payload()
+
+        if self.execution_start_time is None:
+            self.logger.warning("submit_done called before fault injection; stamping TTL=0.")
+            self._ttl_stamped_at = time.time()
+        else:
+            self._ttl_stamped_at = time.time()
+            self.logger.info(
+                f"[submit_done] TTL frozen at {self._ttl_stamped_at - self.execution_start_time:.1f}s"
+            )
+
+        if "Diagnosis" not in self.results:
+            if self.diagnosis_submissions and getattr(self.problem, "diagnosis_oracle", None):
+                self._evaluate_diagnosis_deferred()
+            else:
+                self.logger.warning(
+                    "submit_done: no diagnosis submissions or no oracle; skipping diagnosis grading."
+                )
+
+        self.autonomous_done = True
+        return self._build_done_payload()
+
+    def _build_done_payload(self) -> dict:
+        """Assemble the rich feedback payload returned by submit_done."""
+        diagnosis = self.results.get("Diagnosis")
+        mitigation = self.results.get("Mitigation")
+
+        ground_truth = None
+        oracle = getattr(self.problem, "diagnosis_oracle", None)
+        if oracle is not None:
+            try:
+                ground_truth = getattr(oracle, "checkpoint", None)
+            except Exception:
+                ground_truth = None
+
+        return {
+            "status": "done",
+            "ttl": self.results.get("TTL"),
+            "ttm": self.results.get("TTM"),
+            "diagnosis": diagnosis,
+            "mitigation": mitigation,
+            "ground_truth_diagnosis": ground_truth,
+            "num_diagnosis_submissions": len(self.diagnosis_submissions),
+            "diagnosis_submissions": list(self.diagnosis_submissions),
+        }
 
     def force_cleanup(self):
         """Public entry used by the POST /cleanup handler, the driver's crash
@@ -456,6 +522,8 @@ class Conductor:
         self.detection_oracle = DetectionOracle(self.problem)
         self.results = {}
         self.diagnosis_submissions = []
+        self.autonomous_done = False
+        self._ttl_stamped_at = None
 
         self.dependency_check(["kubectl", "helm"])
         self.logger.debug("Dependency check passed: kubectl, helm")

@@ -89,6 +89,11 @@ async def submit_diagnosis(req: SubmitRequest):
     grading after the agent exits; returns a neutral acknowledgement."""
     if _conductor is None:
         raise HTTPException(status_code=400, detail="No problem has been started")
+    if getattr(_conductor, "autonomous_done", False):
+        raise HTTPException(
+            status_code=409,
+            detail="submit_done has been called; further diagnosis submissions are rejected.",
+        )
     solution = req.solution if isinstance(req.solution, str) else " ".join(req.solution)
     _conductor.diagnosis_submissions.append(solution)
     logger.info(
@@ -105,6 +110,11 @@ async def submit_mitigation(req: SubmitRequest):
     so that autonomous agents (which never advance the stage machine) can submit."""
     if _conductor is None:
         raise HTTPException(status_code=400, detail="No problem has been started")
+    if getattr(_conductor, "autonomous_done", False):
+        raise HTTPException(
+            status_code=409,
+            detail="submit_done has been called; further mitigation submissions are rejected.",
+        )
     if "Mitigation" in _conductor.results:
         return {"status": "acknowledged", "message": "Mitigation already graded."}
     if not getattr(_conductor.problem, "mitigation_oracle", None):
@@ -117,6 +127,23 @@ async def submit_mitigation(req: SubmitRequest):
         logger.error(f"[submit_mitigation] grading failed: {e}")
         raise HTTPException(status_code=400, detail=f"Grading error: {e}")
     return {"status": "acknowledged", "message": "Mitigation recorded."}
+
+
+@app.post("/submit_done")
+async def submit_done():
+    """Autonomous-mode "done" signal. Stamps TTL at call time, runs the deferred
+    diagnosis judge, and freezes further submit_diagnosis/submit_mitigation
+    calls. Returns rich feedback (judge reasoning, matched candidate,
+    ground-truth expectation) so the agent can use it to memorize an accurate
+    incident record. Idempotent."""
+    if _conductor is None:
+        raise HTTPException(status_code=400, detail="No problem has been started")
+    try:
+        payload = await asyncio.to_thread(_conductor.submit_done)
+    except Exception as e:
+        logger.error(f"[submit_done] failed: {e}")
+        raise HTTPException(status_code=500, detail=f"submit_done error: {e}")
+    return payload
 
 
 @app.post("/cleanup")

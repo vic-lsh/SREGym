@@ -96,6 +96,36 @@ def submit_mitigation(ans: str) -> dict[str, str]:
         return {"status": "N/A", "text": f"[submit_mitigation] failed: {e}"}
 
 
+@mcp.tool(name="submit_done")
+def submit_done() -> dict:
+    """Signal that your investigation is complete (autonomous mode).
+
+    Call this **once**, after you have submitted all diagnoses and exactly one
+    mitigation. On this call the benchmark stops the TTL clock, grades the
+    diagnosis submissions you accumulated, and returns rich feedback — judge
+    reasoning, which candidate matched (if any), and the ground-truth root
+    cause(s). Use this feedback to write an accurate incident record.
+
+    After submit_done returns, further submit_diagnosis and submit_mitigation
+    calls are rejected. Only call store_incident after this.
+
+    Returns:
+        dict containing `ttl`, `ttm`, `diagnosis` (judge verdict + reasoning),
+        `mitigation`, `ground_truth_diagnosis`, and your submissions.
+    """
+    cfg = LanggraphToolConfig()
+    url = cfg.benchmark_submit_url.replace("/submit", "/submit_done")
+    try:
+        response = requests.post(url, json={}, headers={"Content-Type": "application/json"})
+        logger.info(f"[submit_done] status: {response.status_code}")
+        if response.status_code >= 400:
+            return {"status": str(response.status_code), "text": response.text}
+        return response.json()
+    except Exception as e:
+        logger.error(f"[submit_done] failed: {e}")
+        return {"status": "N/A", "text": f"[submit_done] failed: {e}"}
+
+
 @mcp.tool(name="localization")
 async def localization(
     resource_type: str,
