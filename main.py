@@ -84,10 +84,49 @@ AGENT_OUTPUT_FILES = {"gemini_cli": "gemini-cli.txt", "claudecode": "claude-code
 # They accept --summary-dir and --summary-model CLI args.
 AGENT_LT_SUMMARY = {"crucible", "crucible_deepagents", "crucible_simple"}
 
+# Agents that write per-problem JSON artifacts into ``--logs-dir``.
+# Distinct from summary support: ``cli_agent`` needs a result directory for
+# usage_metrics JSON, but does not participate in the shared summary system.
+AGENT_RESULT_JSON = AGENT_LT_SUMMARY | {"cli_agent"}
+
 
 def agent_supports_summary(agent_name: str) -> bool:
     """Return True if the given agent supports the shared summary system."""
     return agent_name in AGENT_OUTPUT_FILES or agent_name in AGENT_LT_SUMMARY
+
+
+def _build_agent_extra_args(
+    *,
+    agent_to_run: str,
+    agent_log_dir: str,
+    agent_base_dir: str,
+    experiment_log_dir: str,
+    enable_summary: bool,
+    inject_summary: bool,
+    summary_model: str | None,
+) -> str:
+    parts: list[str] = []
+
+    # External-summarizer agents persist their raw output into agent_log_dir and
+    # reuse the experiment-level agent directory for the merged long-term summary.
+    if agent_to_run in AGENT_OUTPUT_FILES:
+        parts.append(f"--logs-dir {agent_log_dir}")
+        parts.append(f"--summary-dir {agent_base_dir}")
+    elif agent_to_run in AGENT_RESULT_JSON:
+        parts.append(f"--logs-dir {agent_log_dir}")
+
+    if agent_to_run in AGENT_LT_SUMMARY and enable_summary:
+        effective_summary_model = summary_model or os.environ.get("MODEL_ID", "gpt-4o")
+        kb_dir = os.path.join(experiment_log_dir, "kb")
+        parts.append(f"--summary-dir {kb_dir}")
+        parts.append(f"--summary-model {effective_summary_model}")
+
+    if enable_summary and agent_to_run in AGENT_OUTPUT_FILES:
+        parts.append("--enable-summary")
+    if not inject_summary:
+        parts.append("--no-inject-summary")
+
+    return " ".join(parts)
 
 
 KIND_CLUSTER_PREFIX = _WORKER_INFRA_KIND_CLUSTER_PREFIX
@@ -1309,26 +1348,15 @@ def driver_loop(
                         _registry_path = Path(os.environ.get("SREGYM_AGENT_REGISTRY", _default_registry))
                         agent_registration = get_agent(agent_to_run, path=_registry_path)
                         if agent_registration:
-                            extra_args = ""
-                            # Pass explicit log dir to external-summarizer agents (e.g. gemini_cli)
-                            if agent_to_run in AGENT_OUTPUT_FILES:
-                                extra_args += f" --logs-dir {agent_log_dir} --summary-dir {agent_base_dir}"
-
-                            # Crucible handles summarization internally via --summary-dir
-                            if agent_to_run in AGENT_LT_SUMMARY:
-                                extra_args += f" --logs-dir {agent_log_dir}"
-                            if agent_to_run in AGENT_LT_SUMMARY and enable_summary:
-                                effective_summary_model = summary_model or os.environ.get("MODEL_ID", "gpt-4o")
-                                kb_dir = os.path.join(experiment_log_dir, "kb")
-                                extra_args += (
-                                    f" --summary-dir {kb_dir} --summary-model {effective_summary_model}"
-                                )
-
-                            if enable_summary and agent_to_run in AGENT_OUTPUT_FILES:
-                                extra_args += " --enable-summary"
-                            if not inject_summary:
-                                extra_args += " --no-inject-summary"
-
+                            extra_args = _build_agent_extra_args(
+                                agent_to_run=agent_to_run,
+                                agent_log_dir=agent_log_dir,
+                                agent_base_dir=agent_base_dir,
+                                experiment_log_dir=experiment_log_dir,
+                                enable_summary=enable_summary,
+                                inject_summary=inject_summary,
+                                summary_model=summary_model,
+                            )
                             await LAUNCHER.ensure_started(agent_registration, extra_args=extra_args.strip())
 
                     # Poll until grading completes or agent exits.
