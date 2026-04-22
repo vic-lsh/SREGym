@@ -5,6 +5,7 @@ import logging
 from sregym.generators.workload.wrk2 import Wrk2, Wrk2WorkloadManager
 from sregym.paths import SOCIAL_NETWORK_METADATA, TARGET_MICROSERVICES
 from sregym.service.apps.base import Application
+from sregym.service.app_workspace import resolve_workspace_path
 from sregym.service.apps.helpers import get_frontend_url
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
@@ -22,7 +23,7 @@ class SocialNetwork(Application):
         self.kubectl = KubeCtl()
         self.local_tls_path = TARGET_MICROSERVICES / "socialNetwork/helm-chart/socialnetwork"
 
-        self.payload_script = TARGET_MICROSERVICES / "socialNetwork/wrk2/scripts/social-network/mixed-workload.lua"
+        self.payload_script = resolve_workspace_path("socialNetwork/wrk2/scripts/social-network/mixed-workload.lua")
 
     def load_app_json(self):
         super().load_app_json()

@@ -3,6 +3,7 @@ import logging
 from pathlib import Path
 
 from sregym.paths import TARGET_MICROSERVICES
+from sregym.service.app_workspace import resolve_workspace_path
 
 
 class Application:

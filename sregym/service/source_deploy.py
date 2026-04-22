@@ -15,6 +15,7 @@ from pathlib import Path
 import yaml
 
 from sregym.paths import TARGET_MICROSERVICES
+from sregym.service.app_workspace import resolve_app_source_subdir
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _HOTEL_IMAGE_NAME = "yinfangchen/hotelreservation"
@@ -68,8 +69,10 @@ class _HotelReservationAdapter(_BaseAdapter):
     app_name = "Hotel Reservation"
 
     def __init__(self) -> None:
-        self._source_dir = TARGET_MICROSERVICES / "hotelReservation"
-        self._manifest_dir = self._source_dir / "kubernetes"
+        self._default_source_dir = TARGET_MICROSERVICES / "hotelReservation"
+
+    def _source_dir(self) -> Path:
+        return _resolve_app_source_dir(self.app_name, self._default_source_dir)
 
     def ensure_images_loaded(self, *, cluster_name: str, node_architectures: set[str]) -> None:
         del node_architectures
@@ -77,6 +80,7 @@ class _HotelReservationAdapter(_BaseAdapter):
         image_ref = f"{_HOTEL_IMAGE_NAME}:{tag}"
         if (cluster_name, image_ref) in _BUILT_IMAGES:
             return
+        source_dir = self._source_dir()
         _run_command(
             [
                 "docker",
@@ -84,8 +88,8 @@ class _HotelReservationAdapter(_BaseAdapter):
                 "-t",
                 image_ref,
                 "-f",
-                str(self._source_dir / "Dockerfile"),
-                str(self._source_dir),
+                str(source_dir / "Dockerfile"),
+                str(source_dir),
             ]
         )
         _kind_load_image(cluster_name=cluster_name, image_ref=image_ref)
@@ -102,9 +106,10 @@ class _HotelReservationAdapter(_BaseAdapter):
         tag = source_image_tag(self.app_name, cluster_name)
         temp_dir = Path(tempfile.mkdtemp(prefix="sregym-hotel-src-"))
         try:
+            source_dir = self._source_dir()
             base_dir = temp_dir / "base"
             overlay_dir = temp_dir / "overlay"
-            shutil.copytree(self._manifest_dir, base_dir)
+            shutil.copytree(source_dir / "kubernetes", base_dir)
             _write_kustomization_for_directory(base_dir)
             overlay_dir.mkdir(parents=True, exist_ok=True)
             kustomization = {
@@ -132,16 +137,20 @@ class _SocialNetworkAdapter(_BaseAdapter):
     app_name = "Social Network"
 
     def __init__(self) -> None:
-        self._source_dir = TARGET_MICROSERVICES / "socialNetwork"
-        self._nginx_dir = self._source_dir / "docker" / "openresty-thrift"
-        self._media_dir = self._source_dir / "docker" / "media-frontend"
+        self._default_source_dir = TARGET_MICROSERVICES / "socialNetwork"
+
+    def _source_dir(self) -> Path:
+        return _resolve_app_source_dir(self.app_name, self._default_source_dir)
 
     def ensure_images_loaded(self, *, cluster_name: str, node_architectures: set[str]) -> None:
         tag = source_image_tag(self.app_name, cluster_name)
+        source_dir = self._source_dir()
+        nginx_dir = source_dir / "docker" / "openresty-thrift"
+        media_dir = source_dir / "docker" / "media-frontend"
         media_dockerfile = (
-            self._media_dir / "xenial" / "Dockerfile.arm64"
+            media_dir / "xenial" / "Dockerfile.arm64"
             if _is_arm(node_architectures)
-            else self._media_dir / "xenial" / "Dockerfile"
+            else media_dir / "xenial" / "Dockerfile"
         )
         build_steps = (
             (
@@ -151,7 +160,7 @@ class _SocialNetworkAdapter(_BaseAdapter):
                     "build",
                     "-t",
                     f"{_SOCIAL_APP_IMAGE_NAME}:{tag}",
-                    str(self._source_dir),
+                    str(source_dir),
                 ],
             ),
             (
@@ -162,8 +171,8 @@ class _SocialNetworkAdapter(_BaseAdapter):
                     "-t",
                     f"{_SOCIAL_NGINX_IMAGE_NAME}:{tag}",
                     "-f",
-                    str(self._nginx_dir / "xenial" / "Dockerfile"),
-                    str(self._nginx_dir),
+                    str(nginx_dir / "xenial" / "Dockerfile"),
+                    str(nginx_dir),
                 ],
             ),
             (
@@ -175,7 +184,7 @@ class _SocialNetworkAdapter(_BaseAdapter):
                     f"{_SOCIAL_MEDIA_IMAGE_NAME}:{tag}",
                     "-f",
                     str(media_dockerfile),
-                    str(self._media_dir),
+                    str(media_dir),
                 ],
             ),
         )
@@ -307,3 +316,17 @@ def _sanitize_identifier(value: str) -> str:
     lowered = value.strip().lower().replace(" ", "-")
     collapsed = re.sub(r"[^a-z0-9.-]+", "-", lowered)
     return collapsed.strip("-.") or f"app-{int(time.time())}"
+
+
+def _resolve_app_source_dir(app_name: str, default_dir: Path) -> Path:
+    override = os.getenv("SREGYM_APP_SOURCE_DIR", "").strip()
+    if not override:
+        return default_dir
+    override_dir = Path(override)
+    try:
+        expected_name = resolve_app_source_subdir(_sanitize_identifier(app_name).replace("-", "_"))
+    except ValueError:
+        return default_dir
+    if override_dir.name != expected_name:
+        return default_dir
+    return override_dir
