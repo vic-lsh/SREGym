@@ -58,6 +58,10 @@ from sregym.conductor.conductor import Conductor
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.service.kubeconfig import require_kubeconfig_path
+from sregym.service.app_workspace import (
+    prepare_application_workspace,
+    should_replay_completed_run,
+)
 from sregym.service.source_deploy import ensure_app_supported
 from sregym.worker_infra import (
     KIND_CLUSTER_PREFIX as _WORKER_INFRA_KIND_CLUSTER_PREFIX,
@@ -250,6 +254,51 @@ def is_result_complete(csv_path):
                 return False
     except Exception:
         return False
+
+
+def _experiment_dir_has_prior_results(experiment_log_dir: str) -> bool:
+    runs_root = os.path.join(experiment_log_dir, "problem_runs")
+    if not os.path.isdir(runs_root):
+        return False
+    for csv_path in glob.glob(os.path.join(runs_root, "*", "results_*.csv")):
+        if is_result_complete(csv_path):
+            return True
+    return False
+
+
+def _count_completed_problem_results(experiment_log_dir: str, problem_id: str) -> int:
+    """Count completed result CSVs for one problem under problem_runs/."""
+    runs_root = os.path.join(experiment_log_dir, "problem_runs")
+    if not os.path.isdir(runs_root):
+        return 0
+
+    completed = 0
+    for run_dir in glob.glob(os.path.join(runs_root, "*")):
+        run_name = os.path.basename(run_dir)
+        matches_problem = run_name.endswith(f"_{problem_id}") or f"_{problem_id}_replay" in run_name
+        if not matches_problem:
+            continue
+        for csv_path in glob.glob(os.path.join(run_dir, "results_*.csv")):
+            if is_result_complete(csv_path):
+                completed += 1
+    return completed
+
+
+def _partition_resumed_problems(
+    experiment_log_dir: str,
+    all_problems: list[str],
+    repeat: int,
+) -> tuple[list[str], list[str]]:
+    """Split problems into pending and already-completed buckets for resume mode."""
+    pending_problems: list[str] = []
+    completed_problems: list[str] = []
+    for pid in all_problems:
+        completed_iterations = _count_completed_problem_results(experiment_log_dir, pid)
+        if completed_iterations < repeat:
+            pending_problems.append(pid)
+        else:
+            completed_problems.append(pid)
+    return pending_problems, completed_problems
 
 
 def _read_solved_from_result_csv(csv_path: str) -> bool:
@@ -1151,6 +1200,7 @@ def driver_loop(
     status_dict=None,
     problem_queue=None,
     worker_id=None,
+    replay_completed_run: bool = False,
 ):
     """
     Deploy each problem and wait for HTTP grading via POST /submit.
@@ -1291,11 +1341,15 @@ def driver_loop(
             pid_suffix = f"{seq_idx:05d}_{pid}" if seq_idx is not None else pid
             runs_root = os.path.join(experiment_log_dir, "problem_runs")
             existing_run_dirs = sorted(glob.glob(os.path.join(runs_root, f"*_{pid_suffix}")))
-            if existing_run_dirs:
+            if existing_run_dirs and not replay_completed_run:
                 problem_run_dir = existing_run_dirs[-1]
             else:
                 problem_dir_ts = get_current_datetime_formatted()
                 problem_run_dir = os.path.join(runs_root, f"{problem_dir_ts}_{pid_suffix}")
+                suffix = 1
+                while os.path.exists(problem_run_dir):
+                    problem_run_dir = os.path.join(runs_root, f"{problem_dir_ts}_{pid_suffix}_replay{suffix}")
+                    suffix += 1
             os.makedirs(problem_run_dir, exist_ok=True)
             agent_log_dir = os.path.join(problem_run_dir, "agent")
             os.makedirs(agent_log_dir, exist_ok=True)
@@ -1303,7 +1357,7 @@ def driver_loop(
             # Check for existing results (Resume capability) under the problem run dir.
             completed_iterations = 0
             if agent_to_run and not use_external_harness:
-                existing_files = glob.glob(os.path.join(problem_run_dir, "results_*.csv"))
+                existing_files = [] if replay_completed_run else glob.glob(os.path.join(problem_run_dir, "results_*.csv"))
 
                 for f_path in existing_files:
                     if is_result_complete(f_path):
@@ -1713,6 +1767,7 @@ def _run_driver_and_shutdown(
     status_dict=None,
     problem_queue=None,
     worker_id=None,
+    replay_completed_run: bool = False,
 ):
     """Run the benchmark driver, stash results, then tell the API to exit."""
     try:
@@ -1731,6 +1786,7 @@ def _run_driver_and_shutdown(
             status_dict=status_dict,
             problem_queue=problem_queue,
             worker_id=worker_id,
+            replay_completed_run=replay_completed_run,
         )
         main.results = results
     except Exception as e:
@@ -1789,6 +1845,13 @@ def worker_main(args, worker_id, problem_queue, experiment_log_dir, status_dict)
     os.environ["MCP_SERVER_PORT"] = str(9000 + worker_id)
     _sregym_dir = os.path.dirname(os.path.abspath(__file__))
     os.environ["SREGYM_EXP_ENV"] = os.path.join(_sregym_dir, "exp_env", f"exp_env_{worker_id}")
+    app_workspace_dir = getattr(args, "application_workspace_dir", None)
+    if app_workspace_dir:
+        os.environ["SREGYM_APP_SOURCE_DIR"] = app_workspace_dir
+        os.environ["SREGYM_AGENT_WORKDIR"] = app_workspace_dir
+    else:
+        os.environ.pop("SREGYM_APP_SOURCE_DIR", None)
+        os.environ.pop("SREGYM_AGENT_WORKDIR", None)
 
     # Append worker ID to log file to avoid conflicts
     session_timestamp = get_current_datetime_formatted()
@@ -1903,9 +1966,12 @@ def run_parallel(args):
     if args.experiment_dir:
         experiment_log_dir = os.path.abspath(args.experiment_dir)
         if os.path.exists(experiment_log_dir):
-            # Auto-resume: existing dir with results
-            is_resuming = True
-            logger.info(f"Resuming experiment from: {experiment_log_dir}")
+            # Auto-resume only when the directory already contains benchmark artifacts.
+            is_resuming = _experiment_dir_has_prior_results(experiment_log_dir)
+            if is_resuming:
+                logger.info(f"Resuming experiment from: {experiment_log_dir}")
+            else:
+                logger.info(f"Experiment logs will be stored in: {experiment_log_dir}")
         else:
             os.makedirs(experiment_log_dir, exist_ok=True)
             logger.info(f"Experiment logs will be stored in: {experiment_log_dir}")
@@ -1932,6 +1998,16 @@ def run_parallel(args):
                 dest_lessons = os.path.join(agent_kb_dir, "operational_lessons.md")
                 shutil.copy2(lessons_src, dest_lessons)
                 logger.info(f"Copied operational lessons to {dest_lessons}")
+
+    if getattr(args, "application_workspace", False):
+        args.application_workspace_dir = str(
+            prepare_application_workspace(
+                experiment_dir=experiment_log_dir,
+                app_filter=args.app_filter,
+                resume=is_resuming,
+            )
+        )
+        logger.info(f"Application workspace ready at {args.application_workspace_dir}")
 
     # Set log file for parallel runner (always, even when resuming — the supervisor
     # redirects stdout/stderr to /dev/null for the progress display, so file logging
@@ -2129,29 +2205,39 @@ def run_parallel(args):
         # Build pending list with (seq_idx, pid) tuples for queue-based dispatch
         problems_to_run = [(idx, pid) for idx, pid in enumerate(sequence) if idx >= sequence_start_idx]
     elif is_resuming:
-        agent_to_run = args.agent
-        for pid in all_problems:
-            completed_iterations = 0
-            if agent_to_run:
-                search_pattern = os.path.join(experiment_log_dir, f"*_{pid}_{agent_to_run}_results.csv")
-                existing_files = glob.glob(search_pattern)
-                for f_path in existing_files:
-                    if is_result_complete(f_path):
-                        completed_iterations += 1
-
-            if completed_iterations < args.repeat:
-                problems_to_run.append(pid)
-            else:
-                _safe_status_update(status_dict, pid, {
-                    "status": "Completed (Resumed)",
-                    "start_time": time.time(),
-                    "elapsed": 0.0,
-                    "worker_id": None,
-                })
+        problems_to_run, completed_problem_ids = _partition_resumed_problems(
+            experiment_log_dir,
+            all_problems,
+            args.repeat,
+        )
     else:
         problems_to_run = all_problems
 
     # Do not populate queues upfront. We will schedule them dynamically.
+    replay_completed = should_replay_completed_run(
+        application_workspace_enabled=getattr(args, "application_workspace", False),
+        is_resuming=is_resuming,
+        pending_problems=list(problems_to_run),
+    )
+    if replay_completed:
+        if sequence is not None:
+            problems_to_run = list(enumerate(sequence))
+        else:
+            problems_to_run = list(all_problems)
+        logger.info(
+            "Application workspace resume: prior run already completed all problems; replaying the configured "
+            "problem set against the existing workspace."
+        )
+    elif is_resuming and sequence is None and adaptive_scheduler is None:
+        for pid in completed_problem_ids:
+            _safe_status_update(status_dict, pid, {
+                "status": "Completed (Resumed)",
+                "start_time": time.time(),
+                "elapsed": 0.0,
+                "worker_id": None,
+            })
+    args.replay_completed_run = replay_completed
+
     pending_problems = list(problems_to_run)
     # Sort pending problems to run heaviest first? Or mixed?
     # Heaviest first is usually better for packing, but we have a simple limit.
@@ -2681,6 +2767,10 @@ def main(
 
     os.environ["MODEL_ID"] = args.model
     os.environ["SREGYM_DEPLOY_FROM_SOURCE"] = "1" if getattr(args, "deploy_from_source", False) else "0"
+    app_workspace_dir = getattr(args, "application_workspace_dir", None)
+    if app_workspace_dir:
+        os.environ["SREGYM_APP_SOURCE_DIR"] = app_workspace_dir
+        os.environ["SREGYM_AGENT_WORKDIR"] = app_workspace_dir
     if getattr(args, "judge_model", None):
         os.environ["JUDGE_MODEL_ID"] = args.judge_model
     os.environ["JUDGE_NUM_ROUNDS"] = str(args.judge_rounds)
@@ -2726,6 +2816,7 @@ def main(
             status_dict=status_dict,
             problem_queue=problem_queue,
             worker_id=worker_id,
+            replay_completed_run=getattr(args, "replay_completed_run", False),
         ),
         name="driver",
         daemon=True,
@@ -2892,6 +2983,11 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
         "--deploy-from-source",
         action="store_true",
         help="Build supported applications from local source and load images into each worker kind cluster",
+    )
+    parser.add_argument(
+        "--application-workspace",
+        action="store_true",
+        help="Give the agent a persistent per-experiment copy of the filtered application's source repo",
     )
     parser.add_argument(
         "--app-filter",
@@ -3099,6 +3195,15 @@ def _validate_benchmark_args(parser: argparse.ArgumentParser, args: argparse.Nam
         seed_path = Path(args.seed_summary)
         if not seed_path.is_file():
             parser.error(f"--seed-summary: path does not exist or is not a file: {args.seed_summary}")
+    if args.application_workspace:
+        if not args.app_filter:
+            parser.error("--application-workspace requires --app-filter")
+        if not args.deploy_from_source:
+            parser.error("--application-workspace requires --deploy-from-source")
+        if args.parallel != 1:
+            parser.error("--application-workspace requires --parallel 1")
+        if args.variants:
+            parser.error("--application-workspace and --variants are mutually exclusive")
 
 
 def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
