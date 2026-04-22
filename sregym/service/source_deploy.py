@@ -102,12 +102,15 @@ class _HotelReservationAdapter(_BaseAdapter):
         tag = source_image_tag(self.app_name, cluster_name)
         temp_dir = Path(tempfile.mkdtemp(prefix="sregym-hotel-src-"))
         try:
+            base_dir = temp_dir / "base"
             overlay_dir = temp_dir / "overlay"
+            shutil.copytree(self._manifest_dir, base_dir)
+            _write_kustomization_for_directory(base_dir)
             overlay_dir.mkdir(parents=True, exist_ok=True)
             kustomization = {
                 "apiVersion": "kustomize.config.k8s.io/v1beta1",
                 "kind": "Kustomization",
-                "resources": [str(self._manifest_dir)],
+                "resources": ["../base"],
                 "images": [
                     {
                         "name": _HOTEL_IMAGE_NAME,
@@ -275,6 +278,25 @@ def _is_arm(node_architectures: set[str]) -> bool:
 
 def _kind_load_image(*, cluster_name: str, image_ref: str) -> None:
     _run_command(["kind", "load", "docker-image", image_ref, "--name", cluster_name])
+
+
+def _write_kustomization_for_directory(base_dir: Path) -> None:
+    resources = sorted(
+        str(path.relative_to(base_dir))
+        for path in base_dir.rglob("*")
+        if path.is_file()
+        and path.suffix in {".yaml", ".yml"}
+        and path.name.lower() not in {"kustomization.yaml", "kustomization.yml"}
+    )
+    kustomization = {
+        "apiVersion": "kustomize.config.k8s.io/v1beta1",
+        "kind": "Kustomization",
+        "resources": resources,
+    }
+    (base_dir / "kustomization.yaml").write_text(
+        yaml.safe_dump(kustomization, sort_keys=False),
+        encoding="utf-8",
+    )
 
 
 def _run_command(command: list[str]) -> None:
