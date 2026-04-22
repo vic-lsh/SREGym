@@ -132,6 +132,8 @@ class BaseAgent(ABC):
     def run(self, instruction: str) -> int:
         exp_env_dir = Path(os.getenv("SREGYM_EXP_ENV", "exp_env"))
         exp_env_dir.mkdir(exist_ok=True, parents=True)
+        agent_workdir = Path(os.getenv("SREGYM_AGENT_WORKDIR", str(exp_env_dir)))
+        agent_workdir.mkdir(exist_ok=True, parents=True)
 
         before_ctx = BeforeRunContext(instruction=instruction, agent=self, exp_env_dir=exp_env_dir)
         for interceptor in self.interceptors:
@@ -143,7 +145,7 @@ class BaseAgent(ABC):
         except Exception as e:
             logger.warning(f"Failed to save instruction.txt: {e}")
 
-        rc = self._do_run(before_ctx.instruction, exp_env_dir)
+        rc = self._do_run(before_ctx.instruction, agent_workdir)
 
         after_ctx = AfterRunContext(return_code=rc, agent=self)
         for interceptor in reversed(self.interceptors):

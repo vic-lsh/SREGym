@@ -158,6 +158,22 @@ class TestBaseAgentRun:
         assert received["agent"] is agent
         assert received["exp_env_dir"] == env_dir
 
+    def test_run_prefers_agent_workdir_when_present(self, tmp_path):
+        agent = self._make_agent(tmp_path)
+        env_dir = tmp_path / "env"
+        workdir = tmp_path / "workspace"
+        with patch.dict(
+            os.environ,
+            {
+                "SREGYM_EXP_ENV": str(env_dir),
+                "SREGYM_AGENT_WORKDIR": str(workdir),
+            },
+        ):
+            agent.run("x")
+        assert env_dir.is_dir()
+        assert workdir.is_dir()
+        assert agent._last_exp_env_dir == workdir
+
 
 # ---------------------------------------------------------------------------
 # BaseAgent: installation helpers

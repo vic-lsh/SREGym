@@ -5,6 +5,7 @@ from sregym.generators.workload.wrk2 import Wrk2, Wrk2WorkloadManager
 from sregym.observer.trace_api import TraceAPI
 from sregym.paths import FAULT_SCRIPTS, HOTEL_RES_METADATA, TARGET_MICROSERVICES
 from sregym.service.apps.base import Application
+from sregym.service.app_workspace import resolve_workspace_path
 from sregym.service.apps.helpers import get_frontend_url
 from sregym.service.kubectl import KubeCtl
 from sregym.service.source_deploy import plan_for_app, source_deploy_enabled
@@ -26,7 +27,7 @@ class HotelReservation(Application):
         self.load_app_json()
 
         self.payload_script = (
-            TARGET_MICROSERVICES / "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
+            resolve_workspace_path("hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua")
         )
 
     def load_app_json(self):

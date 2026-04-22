@@ -3,6 +3,7 @@ import logging
 import os
 
 from sregym.paths import TARGET_MICROSERVICES
+from sregym.service.app_workspace import resolve_workspace_path
 
 
 class Application:
@@ -35,10 +36,10 @@ class Application:
             chart_path = self.helm_configs.get("chart_path")
 
             if chart_path and not self.helm_configs.get("remote_chart", False):
-                self.helm_configs["chart_path"] = str(TARGET_MICROSERVICES / chart_path)
+                self.helm_configs["chart_path"] = str(resolve_workspace_path(chart_path))
 
         if "K8S Deploy Path" in metadata:
-            self.k8s_deploy_path = TARGET_MICROSERVICES / metadata["K8S Deploy Path"]
+            self.k8s_deploy_path = resolve_workspace_path(metadata["K8S Deploy Path"])
 
     def get_app_json(self) -> dict:
         """Get application metadata in JSON format.

@@ -111,6 +111,7 @@ def build_instruction(
     app_name = app_info.get("app_name", "unknown")
     namespace = app_info.get("namespace", "default")
     descriptions = app_info.get("descriptions", "")
+    app_source_dir = app_info.get("app_source_dir")
 
     if planned_stages is None:
         has_mitigation = True
@@ -169,6 +170,11 @@ Important:
 - You can query metrics and traces through the available observability tools
 - The conductor API is available at {base_url}
 """
+    if app_source_dir:
+        instruction += (
+            f"- The full application source tree is available in your working directory at {app_source_dir}\n"
+            "- You may inspect, edit, and commit changes there. Those source changes are what future deployments use.\n"
+        )
 
     logger.info(f"Built instruction:\n{instruction}")
     return instruction
