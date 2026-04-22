@@ -59,6 +59,7 @@ from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.service.kubeconfig import require_kubeconfig_path
 from sregym.service.app_workspace import (
+    application_workspace_seed_override,
     prepare_application_workspace,
     should_replay_completed_run,
 )
@@ -2005,6 +2006,7 @@ def run_parallel(args):
                 experiment_dir=experiment_log_dir,
                 app_filter=args.app_filter,
                 resume=is_resuming,
+                seed_from=application_workspace_seed_override(),
             )
         )
         logger.info(f"Application workspace ready at {args.application_workspace_dir}")

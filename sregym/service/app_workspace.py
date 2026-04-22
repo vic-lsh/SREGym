@@ -17,6 +17,7 @@ APP_SOURCE_SUBDIRS = {
 _INITIAL_COMMIT_MESSAGE = "Initial application workspace snapshot"
 _WORKSPACE_ENV_VAR = "SREGYM_APP_SOURCE_DIR"
 _AGENT_WORKDIR_ENV_VAR = "SREGYM_AGENT_WORKDIR"
+_WORKSPACE_SEED_ENV_VAR = "SREGYM_APP_WORKSPACE_SEED_DIR"
 
 
 def _target_microservices_root() -> Path:
@@ -36,6 +37,13 @@ def application_source_override() -> Path | None:
 
 def agent_workdir_env_var() -> str:
     return _AGENT_WORKDIR_ENV_VAR
+
+
+def application_workspace_seed_override() -> Path | None:
+    raw = os.getenv(_WORKSPACE_SEED_ENV_VAR, "").strip()
+    if not raw:
+        return None
+    return Path(raw)
 
 
 def should_replay_completed_run(
@@ -59,6 +67,7 @@ def prepare_application_workspace(
     experiment_dir: str | Path,
     app_filter: str,
     resume: bool,
+    seed_from: str | Path | None = None,
 ) -> Path:
     workspace_dir = application_workspace_dir(experiment_dir)
     if resume:
@@ -68,6 +77,13 @@ def prepare_application_workspace(
 
     if workspace_dir.exists():
         shutil.rmtree(workspace_dir)
+
+    if seed_from is not None:
+        seed_dir = Path(seed_from)
+        if not seed_dir.is_dir():
+            raise FileNotFoundError(f"Seeded application workspace does not exist: {seed_dir}")
+        shutil.copytree(seed_dir, workspace_dir)
+        return workspace_dir
 
     source_dir = _target_microservices_root() / resolve_app_source_subdir(app_filter)
     if not source_dir.is_dir():
