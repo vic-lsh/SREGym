@@ -7,6 +7,7 @@ from sregym.conductor.problems.ad_service_high_cpu import AdServiceHighCpu
 from sregym.conductor.problems.ad_service_manual_gc import AdServiceManualGc
 from sregym.conductor.problems.assign_non_existent_node import AssignNonExistentNode
 from sregym.conductor.problems.auth_miss_mongodb import MongoDBAuthMissing
+from sregym.conductor.problems.base import Problem
 from sregym.conductor.problems.capacity_decrease_rpc_retry_storm import CapacityDecreaseRPCRetryStorm
 from sregym.conductor.problems.cart_service_failure import CartServiceFailure
 from sregym.conductor.problems.configmap_drift import ConfigMapDrift
@@ -73,7 +74,25 @@ from sregym.conductor.problems.workload_imbalance import WorkloadImbalance
 from sregym.conductor.problems.wrong_bin_usage import WrongBinUsage
 from sregym.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from sregym.conductor.problems.wrong_service_selector import WrongServiceSelector
+from sregym.service.apps.app_names import AppName, canonical_app_names
 from sregym.service.kubectl import KubeCtl
+
+
+def _set_problem_target_apps(factory, *target_apps: str | AppName):
+    canonical_targets = canonical_app_names(target_apps)
+    if isinstance(factory, type) and issubclass(factory, Problem):
+        factory.TARGET_APPS = canonical_targets
+    setattr(factory, "__target_apps__", canonical_targets)
+    return factory
+
+
+def _get_problem_target_apps(factory) -> frozenset[str]:
+    explicit_targets = getattr(factory, "__target_apps__", None)
+    if explicit_targets is not None:
+        return canonical_app_names(explicit_targets)
+    if isinstance(factory, type) and issubclass(factory, Problem):
+        return canonical_app_names(factory.target_apps())
+    return frozenset()
 
 
 # fmt: off
@@ -356,6 +375,8 @@ class ProblemRegistry:
         }
 # fmt: on
 
+        self._assign_manual_problem_targets()
+
         # Auto-generate variants from variant specs.
         # Generated IDs use __v_ separator so they never collide with manual entries.
         generated = generate_all_variants(get_all_variant_specs())
@@ -367,6 +388,165 @@ class ProblemRegistry:
         # kubeconfigs are created later, so avoid eager initialization here.
         self.kubectl = None
         self.non_emulated_cluster_problems = []
+
+    def _assign_problem_targets(self, problem_ids: tuple[str, ...], *target_apps: AppName) -> None:
+        for problem_id in problem_ids:
+            self.PROBLEM_REGISTRY[problem_id] = _set_problem_target_apps(
+                self.PROBLEM_REGISTRY[problem_id],
+                *target_apps,
+            )
+
+    def _assign_manual_problem_targets(self) -> None:
+        self._assign_problem_targets(
+            (
+                "incorrect_image",
+                "incorrect_port_assignment",
+                "missing_env_variable_astronomy_shop",
+                "valkey_auth_disruption",
+                "valkey_memory_disruption",
+                "duplicate_pvc_mounts_astronomy_shop",
+                "env_variable_shadowing_astronomy_shop",
+                "liveness_probe_misconfiguration_astronomy_shop",
+                "liveness_probe_too_aggressive_astronomy_shop",
+                "missing_service_astronomy_shop",
+                "rbac_misconfiguration",
+                "readiness_probe_misconfiguration_astronomy_shop",
+                "service_dns_resolution_failure_astronomy_shop",
+                "sidecar_port_conflict_astronomy_shop",
+                "service_port_conflict_astronomy_shop",
+                "stale_coredns_config_astronomy_shop",
+                "wrong_dns_policy_astronomy_shop",
+                "wrong_service_selector_astronomy_shop",
+                "astronomy_shop_ad_service_failure",
+                "astronomy_shop_ad_service_high_cpu",
+                "astronomy_shop_ad_service_manual_gc",
+                "astronomy_shop_cart_service_failure",
+                "astronomy_shop_ad_service_image_slow_load",
+                "astronomy_shop_payment_service_failure",
+                "astronomy_shop_payment_service_unreachable",
+                "astronomy_shop_product_catalog_service_failure",
+                "astronomy_shop_recommendation_service_cache_failure",
+                "kafka_queue_problems",
+                "loadgenerator_flood_homepage",
+                "missing_env_and_port_misconfig_astronomy_shop",
+                "valkey_auth_and_memory_disruption_astronomy_shop",
+                "missing_service_and_dns_failure_astronomy_shop",
+                "missing_payment_and_wrong_dns_policy_astronomy_shop",
+                "payment_failure_and_unreachable_astronomy_shop",
+                "stale_coredns_and_missing_env_astronomy_shop",
+                "rbac_and_env_shadowing_astronomy_shop",
+                "loadgen_flood_and_workload_imbalance_astronomy_shop",
+                "service_dns_and_liveness_too_aggressive_astronomy_shop",
+                "kubelet_crash",
+                "workload_imbalance",
+            ),
+            AppName.ASTRONOMY_SHOP,
+        )
+        self._assign_problem_targets(
+            (
+                "faulty_image_correlated",
+                "update_incompatible_correlated",
+                "misconfig_app_hotel_res",
+                "revoke_auth_mongodb-1",
+                "revoke_auth_mongodb-2",
+                "storage_user_unregistered-1",
+                "storage_user_unregistered-2",
+                "configmap_drift_hotel_reservation",
+                "duplicate_pvc_mounts_hotel_reservation",
+                "liveness_probe_misconfiguration_hotel_reservation",
+                "liveness_probe_too_aggressive_hotel_reservation",
+                "missing_configmap_hotel_reservation",
+                "missing_service_hotel_reservation",
+                "namespace_memory_limit",
+                "pvc_claim_mismatch",
+                "readiness_probe_misconfiguration_hotel_reservation",
+                "resource_request_too_large",
+                "resource_request_too_small",
+                "rolling_update_misconfigured_hotel_reservation",
+                "sidecar_port_conflict_hotel_reservation",
+                "service_port_conflict_hotel_reservation",
+                "wrong_bin_usage",
+                "wrong_dns_policy_hotel_reservation",
+                "wrong_service_selector_hotel_reservation",
+                "kafka_queue_problems_hotel_reservation",
+                "latent_sector_error",
+                "silent_data_corruption",
+                "read_error",
+                "ingress_misroute",
+                "network_policy_block",
+                "revoke_auth_mongodb_and_configmap_drift_hotel_res",
+                "revoke_auth_mongodb_and_misconfig_app_hotel_res",
+                "missing_service_and_wrong_selector_hotel_res",
+                "missing_search_and_wrong_dns_policy_hotel_res",
+                "liveness_probe_and_wrong_bin_hotel_res",
+                "resource_too_small_and_probe_misconfig_hotel_res",
+                "revoke_auth_geo_and_storage_user_rate_hotel_res",
+                "service_port_conflict_and_resource_request_hotel_res",
+                "pvc_claim_mismatch_and_pv_affinity_hotel_res",
+            ),
+            AppName.HOTEL_RESERVATION,
+        )
+        self._assign_problem_targets(
+            (
+                "assign_to_non_existent_node",
+                "auth_miss_mongodb",
+                "duplicate_pvc_mounts_social_network",
+                "k8s_target_port-misconfig",
+                "liveness_probe_misconfiguration_social_network",
+                "liveness_probe_too_aggressive_social_network",
+                "missing_configmap_social_network",
+                "missing_service_social_network",
+                "pod_anti_affinity_deadlock",
+                "persistent_volume_affinity_violation",
+                "readiness_probe_misconfiguration_social_network",
+                "rolling_update_misconfigured_social_network",
+                "scale_pod_zero_social_net",
+                "service_dns_resolution_failure_social_network",
+                "sidecar_port_conflict_social_network",
+                "service_port_conflict_social_network",
+                "stale_coredns_config_social_network",
+                "taint_no_toleration_social_network",
+                "wrong_dns_policy_social_network",
+                "wrong_service_selector_social_network",
+                "k8s_target_port_and_auth_miss_mongodb_social_net",
+                "duplicate_pvc_and_anti_affinity_social_network",
+                "selector_and_target_port_social_network",
+                "missing_user_service_and_wrong_dns_policy_social_network",
+            ),
+            AppName.SOCIAL_NETWORK,
+        )
+        self._assign_problem_targets(
+            (
+                "capacity_decrease_rpc_retry_storm",
+                "gc_capacity_degradation",
+                "load_spike_rpc_retry_storm",
+            ),
+            AppName.BLUEPRINT_HOTEL_RESERVATION,
+        )
+        self._assign_problem_targets(
+            (
+                "operator_overload_replicas",
+                "operator_non_existent_storage",
+                "operator_invalid_affinity_toleration",
+                "operator_security_context_fault",
+                "operator_wrong_update_strategy_fault",
+                "operator_storage_and_toleration_fleetcast",
+            ),
+            AppName.FLEET_CAST,
+        )
+        self._assign_problem_targets(
+            (
+                "trainticket_f17_nested_sql_select_clause_error",
+                "trainticket_f22_sql_column_name_mismatch_error",
+            ),
+            AppName.TRAIN_TICKET,
+        )
+        self._assign_problem_targets(
+            ("social_net_hotel_res_astro_shop_concurrent_failures",),
+            AppName.SOCIAL_NETWORK,
+            AppName.HOTEL_RESERVATION,
+            AppName.ASTRONOMY_SHOP,
+        )
 
     def _ensure_kubectl(self):
         if self.kubectl is None:
@@ -385,6 +565,12 @@ class ProblemRegistry:
 
     def get_problem(self, problem_id: str):
         return self.PROBLEM_REGISTRY.get(problem_id)
+
+    def get_problem_target_apps(self, problem_id: str) -> frozenset[str]:
+        factory = self.get_problem(problem_id)
+        if factory is None:
+            return frozenset()
+        return _get_problem_target_apps(factory)
 
     def get_problem_ids(self, task_type: str = None, all: bool = False, tasklist_path: str = None):
         if task_type:

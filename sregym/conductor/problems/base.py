@@ -1,9 +1,14 @@
 """Problem base class"""
 
 from abc import ABC, abstractmethod
+from typing import ClassVar
+
+from sregym.service.apps.app_names import AppName, canonical_app_names
 
 
 class Problem(ABC):
+    TARGET_APPS: ClassVar[frozenset[str | AppName]] = frozenset()
+
     def __init__(self, app, namespace: str):
         self.app = app
         self.namespace = namespace
@@ -36,3 +41,7 @@ class Problem(ABC):
         the environment is handed out.
         """
         return None
+
+    @classmethod
+    def target_apps(cls) -> frozenset[str]:
+        return canonical_app_names(cls.TARGET_APPS)

@@ -1,6 +1,7 @@
 import json
 
 from sregym.paths import *
+from sregym.service.apps.app_names import AppName
 from sregym.service.apps.astronomy_shop import AstronomyShop
 from sregym.service.apps.fleet_cast import FleetCast
 from sregym.service.apps.flight_ticket import FlightTicket
@@ -15,23 +16,23 @@ from sregym.service.helm import Helm
 class AppRegistry:
     def __init__(self):
         self.APP_REGISTRY = {
-            "Astronomy Shop": AstronomyShop,
+            AppName.ASTRONOMY_SHOP.value: AstronomyShop,
             # "Flight Ticket": FlightTicket,
-            "Hotel Reservation": HotelReservation,
-            "Social Network": SocialNetwork,
+            AppName.HOTEL_RESERVATION.value: HotelReservation,
+            AppName.SOCIAL_NETWORK.value: SocialNetwork,
             # "Train Ticket": TrainTicket
-            "Fleet Cast": FleetCast,
-            "Blueprint Hotel Reservation": BlueprintHotelReservation
+            AppName.FLEET_CAST.value: FleetCast,
+            AppName.BLUEPRINT_HOTEL_RESERVATION.value: BlueprintHotelReservation
         }
 
         self.APP_PATH = {
-            "Astronomy Shop": ASTRONOMY_SHOP_METADATA,
+            AppName.ASTRONOMY_SHOP.value: ASTRONOMY_SHOP_METADATA,
             # "Flight Ticket": FLIGHT_TICKET_METADATA,
-            "Hotel Reservation": HOTEL_RES_METADATA,
-            "Social Network": SOCIAL_NETWORK_METADATA,
+            AppName.HOTEL_RESERVATION.value: HOTEL_RES_METADATA,
+            AppName.SOCIAL_NETWORK.value: SOCIAL_NETWORK_METADATA,
             # "Train Ticket": TRAIN_TICKET_METADATA
-            "Fleet Cast": FLEET_CAST_METADATA,
-            "Blueprint Hotel Reservation": BLUEPRINT_HOTEL_RES_METADATA
+            AppName.FLEET_CAST.value: FLEET_CAST_METADATA,
+            AppName.BLUEPRINT_HOTEL_RESERVATION.value: BLUEPRINT_HOTEL_RES_METADATA
         }
 
     def get_app_instance(self, app_name: str):

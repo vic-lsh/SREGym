@@ -57,6 +57,7 @@ from sregym.agent_registry import get_agent, list_agents
 from sregym.conductor.conductor import Conductor
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
+from sregym.service.apps.app_names import CLI_APP_NAME_ALIASES, canonical_app_names, resolve_cli_app_name
 from sregym.service.kubeconfig import require_kubeconfig_path
 from sregym.service.app_workspace import (
     application_workspace_seed_override,
@@ -140,13 +141,6 @@ KIND_CLUSTER_PREFIX = _WORKER_INFRA_KIND_CLUSTER_PREFIX
 LIVE_CLUSTER_PREFIX = "sregym-live"
 WORKER_META_KEY_PREFIX = "__worker_meta__"
 LIVE_COMMANDS = {"deploy", "undeploy", "serve-k8s-proxy"}
-CLI_APP_NAME_ALIASES = {
-    "astronomy_shop": "Astronomy Shop",
-    "hotel_reservation": "Hotel Reservation",
-    "social_network": "Social Network",
-    "fleet_cast": "Fleet Cast",
-    "blueprint_hotel_reservation": "Blueprint Hotel Reservation",
-}
 
 # Exceptions raised when the multiprocessing Manager's IPC pipe is broken.
 # When this happens, status_dict proxy operations fail — but that should not
@@ -643,18 +637,7 @@ def _load_shared_live_cluster_state(deployments_root: str | None = None) -> Shar
 
 
 def _resolve_cli_app_name(app_name: str) -> str:
-    normalized = app_name.strip()
-    alias_key = normalized.lower().replace("-", "_").replace(" ", "_")
-    if alias_key in CLI_APP_NAME_ALIASES:
-        return CLI_APP_NAME_ALIASES[alias_key]
-
-    for display_name in CLI_APP_NAME_ALIASES.values():
-        if normalized.lower() == display_name.lower():
-            return display_name
-
-    raise ValueError(
-        f"Unknown app '{app_name}'. Valid app names: {sorted(CLI_APP_NAME_ALIASES)}"
-    )
+    return resolve_cli_app_name(app_name)
 
 
 def _filter_problem_ids_by_app(problem_source, problem_ids: list[str], app_filter: str) -> list[str]:
@@ -665,6 +648,11 @@ def _filter_problem_ids_by_app(problem_source, problem_ids: list[str], app_filte
 
 def _problem_targets_app(problem_source, problem_id: str, expected_app_name: str) -> bool:
     """Infer a problem's target app without constructing live problem instances."""
+    if hasattr(problem_source, "get_problem_target_apps"):
+        target_apps = canonical_app_names(problem_source.get_problem_target_apps(problem_id))
+        if target_apps:
+            return target_apps == frozenset({expected_app_name})
+
     alias_token = expected_app_name.lower().replace(" ", "_").replace("-", "_")
     if alias_token in problem_id:
         return True
@@ -713,10 +701,7 @@ def _infer_problem_app_name(factory) -> str | None:
 
 
 def _normalize_problem_app_name(app_name: str) -> str:
-    try:
-        return _resolve_cli_app_name(app_name)
-    except ValueError:
-        return app_name
+    return next(iter(canonical_app_names([app_name])))
 
 
 def _cluster_name_for_live_deployment(deployment_name: str) -> str:

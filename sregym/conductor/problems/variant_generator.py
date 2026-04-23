@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from itertools import product
 from typing import Any, Callable
 
+from sregym.service.apps.app_names import canonical_app_names
+
 
 def _stable_hash(name: str) -> int:
     """Deterministic hash that is stable across Python invocations.
@@ -88,7 +90,12 @@ def generate_variants(spec: VariantSpec) -> dict[str, Callable]:
         captured = dict(params)
         if spec.derived_params:
             captured.update(spec.derived_params(params))
-        variants[variant_id] = lambda p=captured: spec.problem_class(**p)
+        factory = lambda p=captured: spec.problem_class(**p)
+        if "app_name" in captured:
+            setattr(factory, "__target_apps__", canonical_app_names([captured["app_name"]]))
+        elif hasattr(spec.problem_class, "target_apps"):
+            setattr(factory, "__target_apps__", canonical_app_names(spec.problem_class.target_apps()))
+        variants[variant_id] = factory
 
     return variants
 
