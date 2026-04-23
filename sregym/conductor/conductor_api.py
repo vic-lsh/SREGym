@@ -133,9 +133,8 @@ async def submit_mitigation(req: SubmitRequest):
 async def submit_done():
     """Autonomous-mode "done" signal. Stamps TTL at call time, runs the deferred
     diagnosis judge, and freezes further submit_diagnosis/submit_mitigation
-    calls. Returns rich feedback (judge reasoning, matched candidate,
-    ground-truth expectation) so the agent can use it to memorize an accurate
-    incident record. Idempotent."""
+    calls. Returns either a neutral completion payload or rich grading
+    feedback depending on ``SREGYM_SUBMIT_DONE_RETURNS_FEEDBACK``. Idempotent."""
     if _conductor is None:
         raise HTTPException(status_code=400, detail="No problem has been started")
     try:

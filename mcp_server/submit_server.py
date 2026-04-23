@@ -102,16 +102,18 @@ def submit_done() -> dict:
 
     Call this **once**, after you have submitted all diagnoses and exactly one
     mitigation. On this call the benchmark stops the TTL clock, grades the
-    diagnosis submissions you accumulated, and returns rich feedback — judge
-    reasoning, which candidate matched (if any), and the ground-truth root
-    cause(s). Use this feedback to write an accurate incident record.
+    diagnosis submissions you accumulated, and returns either a neutral
+    completion payload or rich grading feedback depending on
+    ``SREGYM_SUBMIT_DONE_RETURNS_FEEDBACK``.
 
     After submit_done returns, further submit_diagnosis and submit_mitigation
     calls are rejected. Only call store_incident after this.
 
     Returns:
-        dict containing `ttl`, `ttm`, `diagnosis` (judge verdict + reasoning),
-        `mitigation`, `ground_truth_diagnosis`, and your submissions.
+        dict containing at minimum `status`, `ttl`, `ttm`, and
+        `num_diagnosis_submissions`. When feedback is enabled it also includes
+        `diagnosis`, `mitigation`, `ground_truth_diagnosis`, and
+        `diagnosis_submissions`.
     """
     cfg = LanggraphToolConfig()
     url = cfg.benchmark_submit_url.replace("/submit", "/submit_done")

@@ -215,6 +215,11 @@ def get_current_datetime_formatted():
     return formatted_datetime
 
 
+def _iteration_run_log_path(problem_run_dir: str, start_date_time: str) -> str:
+    """Return the per-iteration run log path inside a problem run directory."""
+    return os.path.join(problem_run_dir, f"run_{start_date_time}.log")
+
+
 def get_latest_log_dir():
     """Finds the most recently modified directory in the logs/ folder."""
     logs_root = os.path.abspath("logs")
@@ -1384,31 +1389,9 @@ def driver_loop(
                         f"⏯️  Resuming problem '{label}': {completed_iterations}/{repeat} iterations already completed."
                     )
 
-            # Prepare for logging redirection if in parallel mode
-            redirect_ctx = (
-                open(os.path.join(problem_run_dir, "run.log"), "w") if status_dict is not None else None
-            )
             original_stdout = sys.stdout
             original_stderr = sys.stderr
-
-            if status_dict is not None:
-                sys.stdout = redirect_ctx
-                sys.stderr = redirect_ctx
-
-                # Redirect logging handler to the file so logs don't go to the original stderr (which might be console or worker log)
-                root_logger = logging.getLogger("all")
-                for handler in root_logger.handlers:
-                    if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
-                        handler.setStream(redirect_ctx)
-
-                # Update status to starting
-                _safe_status_update(status_dict, seq_key, {
-                    "status": "Deploying App",
-                    "pid": pid,
-                    "start_time": time.time(),
-                    "elapsed": 0.0,
-                    "worker_id": worker_id,
-                })
+            redirect_ctx = None
 
             # Whether the *latest* iteration of this problem was a full success
             # (diagnosis AND mitigation). Surfaced into status_dict on Completed
@@ -1418,6 +1401,36 @@ def driver_loop(
             try:
                 for iteration in range(completed_iterations, repeat):
                     iteration_start_time = get_current_datetime_formatted()
+
+                    if status_dict is not None:
+                        if redirect_ctx:
+                            sys.stdout = original_stdout
+                            sys.stderr = original_stderr
+                            root_logger = logging.getLogger("all")
+                            for handler in root_logger.handlers:
+                                if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+                                    handler.setStream(original_stderr)
+                            redirect_ctx.close()
+
+                        redirect_ctx = open(_iteration_run_log_path(problem_run_dir, iteration_start_time), "w")
+                        sys.stdout = redirect_ctx
+                        sys.stderr = redirect_ctx
+
+                        # Redirect logging handler to the file so logs don't go to the original stderr (which might be console or worker log)
+                        root_logger = logging.getLogger("all")
+                        for handler in root_logger.handlers:
+                            if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+                                handler.setStream(redirect_ctx)
+
+                        # Update status to starting
+                        _safe_status_update(status_dict, seq_key, {
+                            "status": "Deploying App",
+                            "pid": pid,
+                            "start_time": time.time(),
+                            "elapsed": 0.0,
+                            "worker_id": worker_id,
+                        })
+
                     console.log(f"\n🔍 Starting problem: {pid} (Run {iteration + 1}/{repeat})")
 
                     conductor.problem_id = pid
@@ -1663,6 +1676,18 @@ def driver_loop(
                             except Exception as e:
                                 console.log(f"⚠️ External summarization failed to launch: {e}")
 
+                    if redirect_ctx:
+                        sys.stdout = original_stdout
+                        sys.stderr = original_stderr
+
+                        root_logger = logging.getLogger("all")
+                        for handler in root_logger.handlers:
+                            if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+                                handler.setStream(original_stderr)
+
+                        redirect_ctx.close()
+                        redirect_ctx = None
+
             except Exception as e:
                 console.log(f"❌ Error running problem {pid}: {e}")
                 logger.error(f"Error running problem {pid}:", exc_info=True)
@@ -1705,17 +1730,17 @@ def driver_loop(
                         "worker_id": worker_id,
                         "solved": iteration_solved,
                     })
-                    sys.stdout = original_stdout
-                    sys.stderr = original_stderr
+                sys.stdout = original_stdout
+                sys.stderr = original_stderr
 
-                    # Restore logging handler
-                    root_logger = logging.getLogger("all")
-                    for handler in root_logger.handlers:
-                        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
-                            handler.setStream(original_stderr)
+                # Restore logging handler
+                root_logger = logging.getLogger("all")
+                for handler in root_logger.handlers:
+                    if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+                        handler.setStream(original_stderr)
 
-                    if redirect_ctx:
-                        redirect_ctx.close()
+                if redirect_ctx:
+                    redirect_ctx.close()
 
         # Stop K8s API proxy when all problems are done
         if not use_external_harness:
@@ -3202,8 +3227,6 @@ def _validate_benchmark_args(parser: argparse.ArgumentParser, args: argparse.Nam
             parser.error("--application-workspace requires --app-filter")
         if not args.deploy_from_source:
             parser.error("--application-workspace requires --deploy-from-source")
-        if args.parallel != 1:
-            parser.error("--application-workspace requires --parallel 1")
         if args.variants:
             parser.error("--application-workspace and --variants are mutually exclusive")
 

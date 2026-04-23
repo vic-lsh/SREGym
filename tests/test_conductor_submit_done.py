@@ -1,8 +1,8 @@
 """Tests for the autonomous-mode `submit_done` flow.
 
 `submit_done` (new) freezes TTL at call time, runs the deferred diagnosis judge,
-returns rich feedback (judge reasoning + ground-truth expectation), and rejects
-any further `submit_diagnosis` / `submit_mitigation` calls.
+returns either a neutral payload or rich feedback depending on environment,
+and rejects any further `submit_diagnosis` / `submit_mitigation` calls.
 """
 
 from __future__ import annotations
@@ -60,6 +60,7 @@ class TestSubmitDoneEndpoint:
         c = _make_conductor()
         c.diagnosis_submissions.append("jaeger pending due to RWO PVC + anti-affinity")
         monkeypatch.setattr(conductor_api, "_conductor", c)
+        monkeypatch.delenv("SREGYM_SUBMIT_DONE_RETURNS_FEEDBACK", raising=False)
 
         resp = TestClient(app).post("/submit_done")
         assert resp.status_code == 200
@@ -67,12 +68,26 @@ class TestSubmitDoneEndpoint:
 
         assert body["status"] == "done"
         assert body["ttl"] is not None and body["ttl"] >= 10.0
+        assert body["num_diagnosis_submissions"] == 1
+        assert "diagnosis" not in body
+        assert "mitigation" not in body
+        assert "ground_truth_diagnosis" not in body
+        assert c.autonomous_done is True
+        c.problem.diagnosis_oracle.evaluate.assert_called_once()
+
+    def test_returns_rich_feedback_when_enabled(self, monkeypatch):
+        c = _make_conductor()
+        c.diagnosis_submissions.append("jaeger pending due to RWO PVC + anti-affinity")
+        monkeypatch.setattr(conductor_api, "_conductor", c)
+        monkeypatch.setenv("SREGYM_SUBMIT_DONE_RETURNS_FEEDBACK", "1")
+
+        resp = TestClient(app).post("/submit_done")
+        assert resp.status_code == 200
+        body = resp.json()
+
         assert body["diagnosis"]["success"] is True
         assert "reasoning" in body["diagnosis"]
         assert body["ground_truth_diagnosis"] == ["jaeger: replicas=2 + RWO PVC deadlock"]
-        assert body["num_diagnosis_submissions"] == 1
-        assert c.autonomous_done is True
-        c.problem.diagnosis_oracle.evaluate.assert_called_once()
 
     def test_is_idempotent(self, monkeypatch):
         c = _make_conductor()
@@ -90,6 +105,7 @@ class TestSubmitDoneEndpoint:
         c = _make_conductor(with_mitigation=True)
         c.diagnosis_submissions.append("x")
         monkeypatch.setattr(conductor_api, "_conductor", c)
+        monkeypatch.setenv("SREGYM_SUBMIT_DONE_RETURNS_FEEDBACK", "1")
         body = TestClient(app).post("/submit_done").json()
         assert body["mitigation"]["success"] is True
         assert body["ttm"] == 5.0
@@ -98,10 +114,11 @@ class TestSubmitDoneEndpoint:
         c = _make_conductor()
         # No diagnosis_submissions collected.
         monkeypatch.setattr(conductor_api, "_conductor", c)
+        monkeypatch.delenv("SREGYM_SUBMIT_DONE_RETURNS_FEEDBACK", raising=False)
         body = TestClient(app).post("/submit_done").json()
         assert body["status"] == "done"
         assert body["num_diagnosis_submissions"] == 0
-        assert body["diagnosis"] is None
+        assert "diagnosis" not in body
         # No evaluation attempted.
         c.problem.diagnosis_oracle.evaluate.assert_not_called()
 
@@ -140,6 +157,7 @@ class TestConductorSubmitDoneMethod:
         payload = c.submit_done()
         # TTL should reflect time at submit_done entry, not after the slow judge.
         assert payload["ttl"] == pytest.approx(t_call, abs=0.15)
+        assert "diagnosis" not in payload
 
     def test_second_call_short_circuits(self):
         c = _make_conductor()

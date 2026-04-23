@@ -413,9 +413,9 @@ class Conductor:
     def submit_done(self) -> dict:
         """Autonomous-mode "done" signal: stamp TTL, run the deferred diagnosis
         judge, and freeze further submissions. Idempotent — a second call returns
-        the cached result. Returns rich feedback (judge reasoning, matched
-        candidate, ground-truth expectation) so the agent can use it to produce
-        an accurate incident-memory entry.
+        the cached result. Response shape is controlled by
+        ``SREGYM_SUBMIT_DONE_RETURNS_FEEDBACK``: when enabled it returns rich
+        grading feedback, otherwise it returns a neutral completion payload.
         """
         if self.autonomous_done:
             self.logger.info("submit_done called again; returning cached payload.")
@@ -442,9 +442,24 @@ class Conductor:
         return self._build_done_payload()
 
     def _build_done_payload(self) -> dict:
-        """Assemble the rich feedback payload returned by submit_done."""
+        """Assemble the payload returned by submit_done."""
         diagnosis = self.results.get("Diagnosis")
         mitigation = self.results.get("Mitigation")
+        payload = {
+            "status": "done",
+            "ttl": self.results.get("TTL"),
+            "ttm": self.results.get("TTM"),
+            "num_diagnosis_submissions": len(self.diagnosis_submissions),
+        }
+
+        returns_feedback = os.getenv("SREGYM_SUBMIT_DONE_RETURNS_FEEDBACK", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if not returns_feedback:
+            return payload
 
         ground_truth = None
         oracle = getattr(self.problem, "diagnosis_oracle", None)
@@ -454,16 +469,15 @@ class Conductor:
             except Exception:
                 ground_truth = None
 
-        return {
-            "status": "done",
-            "ttl": self.results.get("TTL"),
-            "ttm": self.results.get("TTM"),
-            "diagnosis": diagnosis,
-            "mitigation": mitigation,
-            "ground_truth_diagnosis": ground_truth,
-            "num_diagnosis_submissions": len(self.diagnosis_submissions),
-            "diagnosis_submissions": list(self.diagnosis_submissions),
-        }
+        payload.update(
+            {
+                "diagnosis": diagnosis,
+                "mitigation": mitigation,
+                "ground_truth_diagnosis": ground_truth,
+                "diagnosis_submissions": list(self.diagnosis_submissions),
+            }
+        )
+        return payload
 
     def force_cleanup(self):
         """Public entry used by the POST /cleanup handler, the driver's crash
