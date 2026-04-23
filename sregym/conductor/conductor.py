@@ -351,8 +351,16 @@ class Conductor:
         except Exception as e:
             self.logger.warning(f"Failed to stop NoiseManager: {e}")
 
-        if self.problem:
-            self.problem.recover_fault()
+        prev_skip_recovery_readiness = os.environ.get("SREGYM_SKIP_RECOVERY_READINESS")
+        os.environ["SREGYM_SKIP_RECOVERY_READINESS"] = "1"
+        try:
+            if self.problem:
+                self.problem.recover_fault()
+        finally:
+            if prev_skip_recovery_readiness is None:
+                os.environ.pop("SREGYM_SKIP_RECOVERY_READINESS", None)
+            else:
+                os.environ["SREGYM_SKIP_RECOVERY_READINESS"] = prev_skip_recovery_readiness
 
         self.logger.info("[STAGE] Undeploy app")
         self.undeploy_app()

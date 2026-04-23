@@ -2,6 +2,7 @@
 
 import copy
 import json
+import os
 import time
 from pathlib import Path
 
@@ -211,7 +212,8 @@ class VirtualizationFaultInjector(FaultInjector):
             self.kubectl.exec_command(f"kubectl apply -f {orig_path} -n {self.namespace}")
             print(f"[{service}] Restored original claimName.")
 
-        self.kubectl.wait_for_ready(self.namespace)
+        if os.getenv("SREGYM_SKIP_RECOVERY_READINESS", "").strip() != "1":
+            self.kubectl.wait_for_ready(self.namespace)
 
     # --- V.6 - Storage provisioner outage (cluster-scoped) ---
     # TODO: This fault does not work because the PVCs are bound before fault injection
@@ -1583,7 +1585,8 @@ class VirtualizationFaultInjector(FaultInjector):
             apply_result = self.kubectl.exec_command(apply_command)
             print(f"Apply result for {service}: {apply_result}")
 
-            self.kubectl.wait_for_ready(self.namespace)
+            if os.getenv("SREGYM_SKIP_RECOVERY_READINESS", "").strip() != "1":
+                self.kubectl.wait_for_ready(self.namespace)
 
             print(f"Recovered from persistent volume affinity violation fault for service: {service}")
 
