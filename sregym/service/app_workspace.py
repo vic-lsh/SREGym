@@ -1,7 +1,8 @@
-"""Persistent per-experiment application workspaces for agents."""
+"""Application workspaces for agents."""
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import subprocess
@@ -12,6 +13,7 @@ from sregym.paths import TARGET_MICROSERVICES
 APP_SOURCE_SUBDIRS = {
     "hotel_reservation": "hotelReservation",
     "social_network": "socialNetwork",
+    "train_ticket": "train-ticket",
 }
 
 _INITIAL_COMMIT_MESSAGE = "Initial application workspace snapshot"
@@ -75,27 +77,44 @@ def prepare_application_workspace(
             raise FileNotFoundError(f"Application workspace missing for resumed experiment: {workspace_dir}")
         return workspace_dir
 
-    if workspace_dir.exists():
-        shutil.rmtree(workspace_dir)
-
-    if seed_from is not None:
-        seed_dir = Path(seed_from)
-        if not seed_dir.is_dir():
-            raise FileNotFoundError(f"Seeded application workspace does not exist: {seed_dir}")
-        shutil.copytree(seed_dir, workspace_dir)
-        return workspace_dir
-
-    source_dir = _target_microservices_root() / resolve_app_source_subdir(app_filter)
-    if not source_dir.is_dir():
-        raise FileNotFoundError(f"Application source directory does not exist: {source_dir}")
-
-    shutil.copytree(
-        source_dir,
-        workspace_dir,
-        ignore=shutil.ignore_patterns(".git", ".gitmodules"),
+    return _prepare_workspace_copy(
+        workspace_dir=workspace_dir,
+        app_filter=app_filter,
+        seed_from=seed_from,
     )
-    _initialize_git_repository(workspace_dir)
-    return workspace_dir
+
+
+def prepare_ephemeral_application_workspace(
+    *,
+    exp_env_dir: str | Path,
+    app_filter: str,
+    seed_from: str | Path | None = None,
+) -> Path:
+    source_subdir = resolve_app_source_subdir(app_filter)
+    workspace_dir = Path(exp_env_dir) / source_subdir
+    return _prepare_workspace_copy(
+        workspace_dir=workspace_dir,
+        app_filter=app_filter,
+        seed_from=seed_from,
+    )
+
+
+@contextlib.contextmanager
+def ephemeral_application_workspace(
+    *,
+    exp_env_dir: str | Path,
+    app_filter: str,
+    seed_from: str | Path | None = None,
+):
+    workspace_dir = prepare_ephemeral_application_workspace(
+        exp_env_dir=exp_env_dir,
+        app_filter=app_filter,
+        seed_from=seed_from,
+    )
+    try:
+        yield workspace_dir
+    finally:
+        shutil.rmtree(workspace_dir, ignore_errors=True)
 
 
 def resolve_app_relative_path(app_filter: str, relative_path: str | Path) -> Path:
@@ -117,6 +136,35 @@ def resolve_workspace_path(relative_path: str | Path) -> Path:
     if workspace_dir is not None and rel_path.parts and rel_path.parts[0] == workspace_dir.name:
         return workspace_dir / Path(*rel_path.parts[1:])
     return _target_microservices_root() / rel_path
+
+
+def _prepare_workspace_copy(
+    *,
+    workspace_dir: Path,
+    app_filter: str,
+    seed_from: str | Path | None = None,
+) -> Path:
+    if workspace_dir.exists():
+        shutil.rmtree(workspace_dir)
+
+    if seed_from is not None:
+        seed_dir = Path(seed_from)
+        if not seed_dir.is_dir():
+            raise FileNotFoundError(f"Seeded application workspace does not exist: {seed_dir}")
+        shutil.copytree(seed_dir, workspace_dir)
+        return workspace_dir
+
+    source_dir = _target_microservices_root() / resolve_app_source_subdir(app_filter)
+    if not source_dir.is_dir():
+        raise FileNotFoundError(f"Application source directory does not exist: {source_dir}")
+
+    shutil.copytree(
+        source_dir,
+        workspace_dir,
+        ignore=shutil.ignore_patterns(".git", ".gitmodules"),
+    )
+    _initialize_git_repository(workspace_dir)
+    return workspace_dir
 
 
 def _initialize_git_repository(repo_dir: Path) -> None:

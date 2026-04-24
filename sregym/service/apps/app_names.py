@@ -17,6 +17,7 @@ CLI_APP_NAME_ALIASES: dict[str, AppName] = {
     "astronomy_shop": AppName.ASTRONOMY_SHOP,
     "hotel_reservation": AppName.HOTEL_RESERVATION,
     "social_network": AppName.SOCIAL_NETWORK,
+    "train_ticket": AppName.TRAIN_TICKET,
     "fleet_cast": AppName.FLEET_CAST,
     "blueprint_hotel_reservation": AppName.BLUEPRINT_HOTEL_RESERVATION,
 }

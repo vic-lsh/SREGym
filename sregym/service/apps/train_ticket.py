@@ -10,6 +10,7 @@ from sregym.paths import TARGET_MICROSERVICES, TRAIN_TICKET_METADATA
 from sregym.service.apps.base import Application
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
+from sregym.service.source_deploy import plan_for_app, source_deploy_enabled
 
 
 class TrainTicket(Application):
@@ -38,7 +39,16 @@ class TrainTicket(Application):
             self.kubectl.create_namespace_if_not_exist(self.namespace)
             self.configure_dockerhub_pull_secret()
 
-        Helm.install(**self.helm_configs)
+        helm_configs = dict(self.helm_configs)
+        extra_args = list(helm_configs.get("extra_args", []))
+
+        if source_deploy_enabled():
+            with plan_for_app(self) as plan:
+                extra_args.extend(plan.helm_extra_args)
+                helm_configs["extra_args"] = extra_args
+                Helm.install(**helm_configs)
+        else:
+            Helm.install(**self.helm_configs)
         # Use the app namespace (worker-suffixed in parallel mode) instead of the fixed base namespace.
         self.kubectl.wait_for_job_completion(job_name="train-ticket-deploy", namespace=self.namespace, timeout=1800)
 

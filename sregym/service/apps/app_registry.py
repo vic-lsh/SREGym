@@ -8,9 +8,8 @@ from sregym.service.apps.flight_ticket import FlightTicket
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.apps.blueprint_hotel_reservation import BlueprintHotelReservation
+from sregym.service.apps.train_ticket import TrainTicket
 from sregym.service.helm import Helm
-
-# from sregym.service.apps.train_ticket import TrainTicket
 
 
 class AppRegistry:
@@ -20,9 +19,9 @@ class AppRegistry:
             # "Flight Ticket": FlightTicket,
             AppName.HOTEL_RESERVATION.value: HotelReservation,
             AppName.SOCIAL_NETWORK.value: SocialNetwork,
-            # "Train Ticket": TrainTicket
+            AppName.TRAIN_TICKET.value: TrainTicket,
             AppName.FLEET_CAST.value: FleetCast,
-            AppName.BLUEPRINT_HOTEL_RESERVATION.value: BlueprintHotelReservation
+            AppName.BLUEPRINT_HOTEL_RESERVATION.value: BlueprintHotelReservation,
         }
 
         self.APP_PATH = {
@@ -30,9 +29,9 @@ class AppRegistry:
             # "Flight Ticket": FLIGHT_TICKET_METADATA,
             AppName.HOTEL_RESERVATION.value: HOTEL_RES_METADATA,
             AppName.SOCIAL_NETWORK.value: SOCIAL_NETWORK_METADATA,
-            # "Train Ticket": TRAIN_TICKET_METADATA
+            AppName.TRAIN_TICKET.value: TRAIN_TICKET_METADATA,
             AppName.FLEET_CAST.value: FLEET_CAST_METADATA,
-            AppName.BLUEPRINT_HOTEL_RESERVATION.value: BLUEPRINT_HOTEL_RES_METADATA
+            AppName.BLUEPRINT_HOTEL_RESERVATION.value: BLUEPRINT_HOTEL_RES_METADATA,
         }
 
     def get_app_instance(self, app_name: str):
