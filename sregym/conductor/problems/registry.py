@@ -109,6 +109,8 @@ from sregym.conductor.problems.workload_imbalance import WorkloadImbalance
 from sregym.conductor.problems.wrong_bin_usage import WrongBinUsage
 from sregym.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from sregym.conductor.problems.wrong_service_selector import WrongServiceSelector
+from sregym.conductor.problems.variant_generator import filter_variant_ids_by_spec, generate_all_variants
+from sregym.conductor.problems.variant_specs import get_all_variant_specs
 from sregym.service.kubectl import KubeCtl
 
 
@@ -343,6 +345,13 @@ class ProblemRegistry:
             "operator_wrong_operator_image": K8SOperatorWrongOperatorImage,
         }
 # fmt: on
+        # Auto-generate variants from variant specs.
+        # Generated IDs use __v_ separator so they never collide with manual entries.
+        generated = generate_all_variants(get_all_variant_specs())
+        for vid, factory in generated.items():
+            if vid not in self.PROBLEM_REGISTRY:
+                self.PROBLEM_REGISTRY[vid] = factory
+
         self.kubectl = KubeCtl()
         self.non_emulated_cluster_problems = ["node_clock_drift_hotel_reservation"]
 
@@ -370,13 +379,26 @@ class ProblemRegistry:
         tasklist_path = file_dir / "tasklist.yml"
 
         if not tasklist_path.exists():
-            # if tasklist.yml does not exist, run all the problems
-            return list(self.PROBLEM_REGISTRY)
+            # Generated variants are intentionally opt-in. Without a task
+            # list, preserve upstream's default of running concrete problems.
+            return [problem_id for problem_id in self.PROBLEM_REGISTRY if "__v_" not in problem_id]
 
         with open(tasklist_path) as f:
             tasklist = yaml.safe_load(f)
         return list(tasklist["all"]["problems"])
 
+
+    def get_variant_ids(self, spec_names: list[str] | None = None) -> list[str]:
+        """Return auto-generated variant problem IDs (those containing '__v_').
+
+        If ``spec_names`` is given, restrict the result to variants whose
+        spec base_name appears in the list. Unknown names raise ValueError.
+        """
+        all_ids = [pid for pid in self.PROBLEM_REGISTRY if "__v_" in pid]
+        if spec_names is None:
+            return all_ids
+        known = {spec.base_name for spec in get_all_variant_specs()}
+        return filter_variant_ids_by_spec(all_ids, spec_names, known)
 
     def get_problem_count(self, task_type: str = None):
         if task_type:

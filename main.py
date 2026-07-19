@@ -142,6 +142,8 @@ def _configure_model_environment(args) -> tuple[str, str]:
 
     os.environ["AGENT_MODEL_ID"] = agent_model
     os.environ["JUDGE_MODEL_ID"] = judge_model
+    os.environ["JUDGE_NUM_ROUNDS"] = str(getattr(args, "judge_rounds", 3))
+    os.environ["JUDGE_VOTING_TEMPERATURE"] = str(getattr(args, "judge_voting_temperature", 0.7))
     if reasoning_effort:
         os.environ["AGENT_REASONING_EFFORT"] = reasoning_effort
     else:
@@ -202,7 +204,12 @@ def driver_loop(
     """
 
     async def driver():
-        base_dir = Path("results") / get_current_datetime_formatted()
+        configured_results_dir = os.environ.get("SREGYM_RESULTS_DIR")
+        base_dir = (
+            Path(configured_results_dir)
+            if configured_results_dir
+            else Path("results") / get_current_datetime_formatted()
+        )
         base_dir.mkdir(parents=True, exist_ok=True)
         global _driver_base_dir
         _driver_base_dir = base_dir
@@ -571,10 +578,10 @@ def main(args):
 
     if args.noise:
         logger.info("Noise injection enabled.")
-    os.environ["API_HOSTNAME"] = "0.0.0.0"
-    os.environ["API_PORT"] = "8000"
-    os.environ["MCP_SERVER_PORT"] = "9954"
-    os.environ["MCP_SERVER_URL"] = "http://127.0.0.1:9954"
+    os.environ.setdefault("API_HOSTNAME", "0.0.0.0")
+    os.environ.setdefault("API_PORT", "8000")
+    os.environ.setdefault("MCP_SERVER_PORT", "9954")
+    os.environ.setdefault("MCP_SERVER_URL", f"http://127.0.0.1:{os.environ['MCP_SERVER_PORT']}")
 
     logger.info(
         f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}, "
@@ -713,6 +720,8 @@ if __name__ == "__main__":
         default=None,
         help="Model for the LLM-as-a-judge evaluator (defaults to --model if not set)",
     )
+    parser.add_argument("--judge-rounds", type=int, default=3, help="Independent checklist-judge rounds")
+    parser.add_argument("--judge-voting-temperature", type=float, default=0.7)
     parser.add_argument(
         "--reasoning-effort",
         choices=("none", "minimal", "low", "medium", "high", "xhigh", "max"),
@@ -750,11 +759,63 @@ if __name__ == "__main__":
         default=None,
         help="Resume from a previous results CSV file. Problems already in the CSV will be skipped.",
     )
+    parser.add_argument("--parallel", type=int, default=1, help="Run benchmark tasks across isolated worker clusters")
+    parser.add_argument("--experiment-dir", type=str, default=None, help="Parallel-run directory; reuse it to resume")
+    parser.add_argument("--tasklist", type=str, default=None, help="Run problem IDs from a task-list YAML file")
+    parser.add_argument("--problem-spec", action="append", default=None, help="Filter selected problem IDs by prefix")
+    parser.add_argument("--variants", action="store_true", help="Run generated problem variants")
+    parser.add_argument("--variant-count", type=int, default=None, help="Maximum generated variants to run")
+    parser.add_argument("--variant-offset", type=int, default=0, help="Deterministic variant-stream offset")
+    parser.add_argument("--variant-seed", type=int, default=42, help="Deterministic variant-stream seed")
+    parser.add_argument(
+        "--variant-order",
+        choices=("shuffled", "round-robin", "grouped", "adaptive"),
+        default="shuffled",
+        help="Generated variant scheduling policy",
+    )
+    parser.add_argument("--variant-max-per-class", type=int, default=None)
+    parser.add_argument("--variant-adaptive-consec-solves", type=int, default=3)
+    parser.add_argument(
+        "--variant-spec", action="append", default=None, help="Restrict generated variants by base name"
+    )
+    parser.add_argument("--enable-summary", action="store_true", help="Maintain cross-run operational memory")
+    parser.add_argument(
+        "--no-inject-summary", action="store_true", help="Update memory without injecting it into agents"
+    )
+    parser.add_argument("--summary-model", type=str, default=None, help="Model used to update operational memory")
+    parser.add_argument("--seed-summary", type=str, default=None, help="Initial operational-memory Markdown file")
+    parser.add_argument("--sequence-len", type=int, default=0, help="Sample a deterministic problem sequence")
+    parser.add_argument("--sequence-seed", type=int, default=42)
+    parser.add_argument("--worker-child", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     if args.n_attempts is not None and args.n_attempts < 1:
         parser.error("--n-attempts must be a positive integer")
     if args.use_external_harness and args.suite:
         parser.error("--use-external-harness cannot be used with --suite; use --problem instead")
+    if args.parallel < 1:
+        parser.error("--parallel must be at least 1")
+    if args.variant_count is not None and args.variant_count < 1:
+        parser.error("--variant-count must be at least 1")
+    if args.variant_offset < 0:
+        parser.error("--variant-offset must not be negative")
+    if args.judge_rounds < 1:
+        parser.error("--judge-rounds must be at least 1")
+    if args.sequence_len < 0:
+        parser.error("--sequence-len must not be negative")
+    if args.seed_summary and not Path(args.seed_summary).is_file():
+        parser.error("--seed-summary must name an existing file")
 
+    if not args.worker_child and (
+        args.parallel > 1
+        or args.variants
+        or args.tasklist
+        or args.experiment_dir
+        or args.problem_spec
+        or args.enable_summary
+        or args.sequence_len
+    ):
+        from sregym.parallel_runner import run_parallel
+
+        raise SystemExit(run_parallel(args))
     main(args)

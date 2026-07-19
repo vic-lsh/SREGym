@@ -10,15 +10,19 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class K8STargetPortMisconfig(Problem):
-    def __init__(self, faulty_service="user-service"):
-        super().__init__(app=SocialNetwork())
+    def __init__(self, faulty_service="user-service", bad_port: int = 9999, correct_port: int = 9090):
+        self.app = SocialNetwork()
+        self.namespace = self.app.namespace
+        super().__init__(app=self.app, namespace=self.namespace)
         self.faulty_service = faulty_service
+        self.bad_port = bad_port
+        self.correct_port = correct_port
         self.kubectl = KubeCtl()
         self.root_cause = self.build_structured_root_cause(
             component=f"service/{self.faulty_service}",
             namespace=self.namespace,
             description=(
-                "The Service targetPort is misconfigured from 9090 to 9999, so cluster requests reach no listening "
+                f"The Service targetPort is misconfigured from {self.correct_port} to {self.bad_port}, so cluster requests reach no listening "
                 "process inside backend pods and callers observe connection failures and upstream timeouts."
             ),
         )

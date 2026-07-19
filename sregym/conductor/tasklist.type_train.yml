@@ -1,0 +1,189 @@
+all:
+  problems:
+    # --- config_image ---
+    faulty_image_correlated:
+      - diagnosis
+      - mitigation
+    update_incompatible_correlated:
+      - diagnosis
+      - mitigation
+    incorrect_image:
+      - diagnosis
+      - mitigation
+    misconfig_app_hotel_res:
+      - diagnosis
+      - mitigation
+    missing_env_variable_astronomy_shop:
+      - diagnosis
+      - mitigation
+    configmap_drift_hotel_reservation:
+      - diagnosis
+      - mitigation
+    env_variable_shadowing_astronomy_shop:
+      - diagnosis
+      - mitigation
+    missing_configmap_hotel_reservation:
+      - diagnosis
+      - mitigation
+    missing_configmap_social_network:
+      - diagnosis
+      - mitigation
+    rolling_update_misconfigured_hotel_reservation:
+      - diagnosis
+      - mitigation
+    rolling_update_misconfigured_social_network:
+      - diagnosis
+      - mitigation
+    wrong_bin_usage:
+      - diagnosis
+      - mitigation
+    # --- network ---
+    incorrect_port_assignment:
+      - diagnosis
+      - mitigation
+    k8s_target_port-misconfig:
+      - diagnosis
+      - mitigation
+    missing_service_astronomy_shop:
+      - diagnosis
+      - mitigation
+    missing_service_hotel_reservation:
+      - diagnosis
+      - mitigation
+    missing_service_social_network:
+      - diagnosis
+      - mitigation
+    service_dns_resolution_failure_astronomy_shop:
+      - diagnosis
+      - mitigation
+    service_dns_resolution_failure_social_network:
+      - diagnosis
+      - mitigation
+    sidecar_port_conflict_astronomy_shop:
+      - diagnosis
+      - mitigation
+    sidecar_port_conflict_hotel_reservation:
+      - diagnosis
+      - mitigation
+    sidecar_port_conflict_social_network:
+      - diagnosis
+      - mitigation
+    stale_coredns_config_astronomy_shop:
+      - diagnosis
+      - mitigation
+    stale_coredns_config_social_network:
+      - diagnosis
+      - mitigation
+    wrong_dns_policy_astronomy_shop:
+      - diagnosis
+      - mitigation
+    wrong_dns_policy_hotel_reservation:
+      - diagnosis
+      - mitigation
+    wrong_dns_policy_social_network:
+      - diagnosis
+      - mitigation
+    wrong_service_selector_astronomy_shop:
+      - diagnosis
+      - mitigation
+    wrong_service_selector_hotel_reservation:
+      - diagnosis
+      - mitigation
+    wrong_service_selector_social_network:
+      - diagnosis
+      - mitigation
+    ingress_misroute:
+      - diagnosis
+      - mitigation
+    network_policy_block:
+      - diagnosis
+      - mitigation
+    rbac_misconfiguration:
+      - diagnosis
+      - mitigation
+    # --- probes ---
+    liveness_probe_misconfiguration_astronomy_shop:
+      - diagnosis
+      - mitigation
+    liveness_probe_misconfiguration_hotel_reservation:
+      - diagnosis
+      - mitigation
+    liveness_probe_misconfiguration_social_network:
+      - diagnosis
+      - mitigation
+    liveness_probe_too_aggressive_astronomy_shop:
+      - diagnosis
+      - mitigation
+    liveness_probe_too_aggressive_hotel_reservation:
+      - diagnosis
+      - mitigation
+    liveness_probe_too_aggressive_social_network:
+      - diagnosis
+      - mitigation
+    readiness_probe_misconfiguration_astronomy_shop:
+      - diagnosis
+      - mitigation
+    readiness_probe_misconfiguration_hotel_reservation:
+      - diagnosis
+      - mitigation
+    readiness_probe_misconfiguration_social_network:
+      - diagnosis
+      - mitigation
+    # --- resource_storage ---
+    revoke_auth_mongodb-1:
+      - diagnosis
+      - mitigation
+    revoke_auth_mongodb-2:
+      - diagnosis
+      - mitigation
+    storage_user_unregistered-1:
+      - diagnosis
+      - mitigation
+    storage_user_unregistered-2:
+      - diagnosis
+      - mitigation
+    valkey_auth_disruption:
+      - diagnosis
+      - mitigation
+    valkey_memory_disruption:
+      - diagnosis
+      - mitigation
+    assign_to_non_existent_node:
+      - diagnosis
+      - mitigation
+    auth_miss_mongodb:
+      - diagnosis
+      - mitigation
+    duplicate_pvc_mounts_astronomy_shop:
+      - diagnosis
+      - mitigation
+    duplicate_pvc_mounts_hotel_reservation:
+      - diagnosis
+      - mitigation
+    duplicate_pvc_mounts_social_network:
+      - diagnosis
+      - mitigation
+    namespace_memory_limit:
+      - diagnosis
+      - mitigation
+    pod_anti_affinity_deadlock:
+      - diagnosis
+      - mitigation
+    persistent_volume_affinity_violation:
+      - diagnosis
+      - mitigation
+    pvc_claim_mismatch:
+      - diagnosis
+      - mitigation
+    resource_request_too_large:
+      - diagnosis
+      - mitigation
+    resource_request_too_small:
+      - diagnosis
+      - mitigation
+    scale_pod_zero_social_net:
+      - diagnosis
+      - mitigation
+    taint_no_toleration_social_network:
+      - diagnosis
+      - mitigation

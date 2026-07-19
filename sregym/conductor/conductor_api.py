@@ -14,6 +14,7 @@ from starlette.routing import Mount
 from uvicorn import Config, Server
 
 from logger import console
+from sregym.conductor.constants import MAX_DIAGNOSIS_CANDIDATES
 
 _conductor = None
 
@@ -21,11 +22,11 @@ submit_mcp = FastMCP("Submit MCP Server")
 
 
 @submit_mcp.tool(name="submit")
-async def submit_via_conductor(ans: str) -> dict[str, str]:
+async def submit_via_conductor(ans: str | list[str]) -> dict[str, str]:
     """Submit task result to benchmark
 
     Args:
-        ans (str): task result that the agent submits
+        ans: A single task result or a bounded list of candidate diagnoses.
 
     Returns:
         dict[str]: acknowledgment of submission status
@@ -38,6 +39,10 @@ async def submit_via_conductor(ans: str) -> dict[str, str]:
                 "text": "All stages have been completed and graded. No further submissions are needed.",
             }
         return {"status": "error", "text": f"Cannot submit at stage: {stage!r}"}
+
+    validation_error = _submission_validation_error(ans, _conductor.submission_stage)
+    if validation_error:
+        return {"status": "error", "text": validation_error}
 
     max_wait = 60
     for attempt in range(max_wait):
@@ -108,7 +113,20 @@ def set_conductor(c):
 
 
 class SubmitRequest(BaseModel):
-    solution: str
+    solution: str | list[str]
+
+
+def _submission_validation_error(solution: str | list[str], stage: str) -> str | None:
+    """Return a user-facing validation error for a submitted answer."""
+    if not isinstance(solution, list):
+        return None
+    if stage != "diagnosis":
+        return "Candidate lists are only supported during diagnosis."
+    if not solution:
+        return "Submission list must not be empty."
+    if len(solution) > MAX_DIAGNOSIS_CANDIDATES:
+        return f"Submission list has {len(solution)} candidates; maximum allowed is {MAX_DIAGNOSIS_CANDIDATES}."
+    return None
 
 
 @app.post("/submit")
@@ -124,6 +142,10 @@ async def submit_solution(req: SubmitRequest):
             }
         logger.error(f"Cannot submit at stage: {stage!r}")
         raise HTTPException(status_code=400, detail=f"Cannot submit at stage: {stage!r}")
+
+    validation_error = _submission_validation_error(req.solution, _conductor.submission_stage)
+    if validation_error:
+        raise HTTPException(status_code=400, detail=validation_error)
 
     # The conductor evaluates submissions asynchronously. If a previous stage
     # is still being evaluated, waiting_for_agent will be False and submit()

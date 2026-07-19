@@ -118,6 +118,40 @@ Use `--judge-model` to override the judge model separately (defaults to `--model
 uv run main.py --agent stratus --model gpt-5 --judge-model anthropic/claude-sonnet-4-6-20250627
 ```
 
+#### Fork experiment extensions
+
+This fork keeps the upstream runner as the single-problem execution path and adds
+an experiment supervisor for isolated parallel workers, generated variants,
+resumable experiment directories, deterministic sequences, and cross-run
+operational memory.
+
+Run repeated attempts using upstream's `--n-attempts` option:
+
+```bash
+uv run main.py --suite sregym-lite --agent codex --n-attempts 3
+```
+
+Run the suite on four isolated Kind worker clusters. Reusing the same experiment
+directory resumes successful tasks recorded in `parallel_results.csv`:
+
+```bash
+uv run main.py --suite sregym-lite --agent codex --parallel 4 \
+  --experiment-dir results/lite-parallel
+```
+
+Generated variants support shuffled, round-robin, grouped, and adaptive
+scheduling. `--variant-spec` can be repeated to restrict the base problem types:
+
+```bash
+uv run main.py --agent codex --parallel 4 --variants --variant-count 100 \
+  --variant-order adaptive --variant-spec missing_env_variable
+```
+
+Use `--enable-summary` to maintain and inject a bounded operational-memory file
+between tasks. `--sequence-len` and `--sequence-seed` sample a reproducible task
+sequence, while `--tasklist` accepts a YAML task list. Run `uv run main.py --help`
+for all supervisor and judge-voting options.
+
 #### Container Isolation
 
 Agents always run in isolated Docker containers, preventing access to SREGym internals like problem definitions and grading logic. The image is built automatically on first run.

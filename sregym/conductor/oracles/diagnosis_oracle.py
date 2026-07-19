@@ -1,3 +1,4 @@
+import ast
 import logging
 from logging import getLogger
 from typing import Any
@@ -29,17 +30,26 @@ class DiagnosisOracle(Oracle):
         self.checkpoint = self.expect()
 
     def compare_truth(self, expectation, reality):
+        """Compare ground truth with one or more submitted diagnoses.
+
+        Extra candidates do not count against an otherwise correct diagnosis;
+        this keeps the original exact-match behavior for scalar submissions
+        while allowing bounded candidate lists.
+        """
         if isinstance(expectation, str) and isinstance(reality, str):
-            return expectation == reality  # both string, just compare the string
-        elif isinstance(expectation, list) and isinstance(reality, list):
-            if len(expectation) != len(set(reality)):
-                return False  # TODO: support fp and fn
-            return all(e in set(reality) for e in expectation)
-        else:
-            logger.warning(
-                f"Expectation and reality are not both string or list, can not compare. Expectation: {expectation}, Reality: {reality}"
-            )
-            return False
+            return expectation == reality
+        if isinstance(expectation, str) and isinstance(reality, list):
+            return expectation in reality
+        if isinstance(expectation, list) and isinstance(reality, str):
+            return len(expectation) == 1 and expectation[0] == reality
+        if isinstance(expectation, list) and isinstance(reality, list):
+            return set(expectation).issubset(set(reality))
+
+        logger.warning(
+            "Expectation and reality are not str/list, can not compare. "
+            f"Expectation: {expectation!r}, Reality: {reality!r}"
+        )
+        return False
 
     def expect(self):
         raise NotImplementedError("This function should be implemented by the subclass.")
@@ -117,27 +127,20 @@ class DiagnosisOracle(Oracle):
             return self.checkpoint == new_expectation
 
     def safe_parse_solution(self, solution):
-        # Normalize solution to list of strings
+        """Normalize an API list or a legacy list-literal string."""
+        if isinstance(solution, list):
+            return [str(item) for item in solution]
         if isinstance(solution, str):
-            # Check if it's a comma-separated list
-            # strip char before [
-            if "[" in solution and "]" in solution:
-                solution = solution.split("[")[1]
-                # strip char after ]
-                solution = solution.split("]")[0]
-                if "," in solution:
-                    # split by comma, strip space and quote
-                    solution = [s.strip().strip("\"'") for s in solution.split(",")]
-                else:
-                    solution = [solution.strip().strip("\"'")]
-            else:
-                solution = [solution.strip().strip("\"'")]
-        elif isinstance(solution, list):
-            # Ensure all items are strings
-            solution = [str(item) for item in solution]
-        else:
-            return None
-        return solution
+            stripped = solution.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                try:
+                    parsed = ast.literal_eval(stripped)
+                except (SyntaxError, ValueError):
+                    parsed = None
+                if isinstance(parsed, list):
+                    return [str(item) for item in parsed]
+            return [stripped.strip("\"'")]
+        return None
 
     def evaluate(self, solution) -> dict[str, Any]:
         # verify the stability of the environment

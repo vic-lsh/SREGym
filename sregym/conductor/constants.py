@@ -1,5 +1,10 @@
 from enum import StrEnum
 
+# Maximum number of candidate diagnoses an agent may submit in a single
+# /submit call. Each candidate is evaluated independently by the LLM judge,
+# so this caps worst-case judge cost (N × num_rounds calls).
+MAX_DIAGNOSIS_CANDIDATES = 5
+
 
 class StartProblemResult(StrEnum):
     SUCCESS = "success"

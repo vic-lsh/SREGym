@@ -1,0 +1,223 @@
+all:
+  problems:
+    # Both Diagnosis AND Mitigation Failed
+    trainticket_f17_nested_sql_select_clause_error:
+    - diagnosis
+    - mitigation
+
+    trainticket_f22_sql_column_name_mismatch_error:
+    - diagnosis
+    - mitigation
+
+    wrong_service_selector_astronomy_shop:
+    - diagnosis
+    - mitigation
+
+    namespace_memory_limit:
+    - diagnosis
+    - mitigation
+
+    missing_configmap_hotel_reservation:
+    - diagnosis
+    - mitigation
+
+    stale_coredns_config_astronomy_shop:
+    - diagnosis
+    - mitigation
+
+    valkey_auth_disruption:
+    - diagnosis
+    - mitigation
+
+    service_dns_resolution_failure_social_network:
+    - diagnosis
+    - mitigation
+
+    wrong_service_selector_social_network:
+    - diagnosis
+    - mitigation
+
+    incorrect_image:
+    - diagnosis
+    - mitigation
+
+    # Diagnosis Succeeded, Mitigation Failed
+    missing_service_hotel_reservation:
+    - diagnosis
+    - mitigation
+
+    readiness_probe_misconfiguration_social_network:
+    - diagnosis
+    - mitigation
+
+    readiness_probe_misconfiguration_astronomy_shop:
+    - diagnosis
+    - mitigation
+
+    sidecar_port_conflict_social_network:
+    - diagnosis
+    - mitigation
+
+    readiness_probe_misconfiguration_hotel_reservation:
+    - diagnosis
+    - mitigation
+
+    incorrect_port_assignment:
+    - diagnosis
+    - mitigation
+
+    # Very Slow (TTM > 5min, eventually succeeded)
+    storage_user_unregistered-1:
+    - diagnosis
+    - mitigation
+
+    resource_request_too_small:
+    - diagnosis
+    - mitigation
+
+    load_spike_rpc_retry_storm:
+    - diagnosis
+    - mitigation
+
+    rbac_misconfiguration:
+    - diagnosis
+    - mitigation
+
+    service_dns_resolution_failure_astronomy_shop:
+    - diagnosis
+    - mitigation
+
+    revoke_auth_mongodb-1:
+    - diagnosis
+    - mitigation
+
+    env_variable_shadowing_astronomy_shop:
+    - diagnosis
+    - mitigation
+
+    wrong_dns_policy_hotel_reservation:
+    - diagnosis
+    - mitigation
+
+    configmap_drift_hotel_reservation:
+    - diagnosis
+    - mitigation
+
+    rolling_update_misconfigured_hotel_reservation:
+    - diagnosis
+    - mitigation
+
+    pod_anti_affinity_deadlock:
+    - diagnosis
+    - mitigation
+
+    rolling_update_misconfigured_social_network:
+    - diagnosis
+    - mitigation
+
+    # Timed Out / No Results
+    revoke_auth_mongodb-2:
+    - diagnosis
+    - mitigation
+
+    liveness_probe_too_aggressive_social_network:
+    - diagnosis
+    - mitigation
+
+    stale_coredns_config_social_network:
+    - diagnosis
+    - mitigation
+
+    wrong_service_selector_hotel_reservation:
+    - diagnosis
+    - mitigation
+
+    loadgenerator_flood_homepage:
+    - diagnosis
+    - mitigation
+
+    network_policy_block:
+    - diagnosis
+    - mitigation
+
+    kubelet_crash:
+    - diagnosis
+    - mitigation
+
+    cumulative_admission_webhook_timeout_hotel_reservation:
+    - diagnosis
+    - mitigation
+
+    workload_imbalance:
+    - diagnosis
+    - mitigation
+
+    # Environment/Setup Errors
+    wrong_dns_policy_astronomy_shop:
+    - diagnosis
+    - mitigation
+
+    astronomy_shop_ad_service_manual_gc:
+    - diagnosis
+    - mitigation
+
+    kafka_queue_problems:
+    - diagnosis
+    - mitigation
+
+    ingress_misroute:
+    - diagnosis
+    - mitigation
+
+    # Diag-Only Runs: Diagnosis Failed
+    storage_user_unregistered-2:
+    - diagnosis
+    - mitigation
+
+    valkey_memory_disruption:
+    - diagnosis
+    - mitigation
+
+    gc_capacity_degradation:
+    - diagnosis
+    - mitigation
+
+    k8s_target_port-misconfig:
+    - diagnosis
+    - mitigation
+
+    persistent_volume_affinity_violation:
+    - diagnosis
+    - mitigation
+
+    astronomy_shop_ad_service_failure:
+    - diagnosis
+    - mitigation
+
+    astronomy_shop_ad_service_high_cpu:
+    - diagnosis
+    - mitigation
+
+    astronomy_shop_cart_service_failure:
+    - diagnosis
+    - mitigation
+
+    astronomy_shop_ad_service_image_slow_load:
+    - diagnosis
+    - mitigation
+
+    astronomy_shop_payment_service_failure:
+    - diagnosis
+    - mitigation
+
+    astronomy_shop_payment_service_unreachable:
+    - diagnosis
+    - mitigation
+
+    astronomy_shop_product_catalog_service_failure:
+    - diagnosis
+    - mitigation
+
+    kafka_poison_pill_hol_block:
+    - diagnosis
+    - mitigation

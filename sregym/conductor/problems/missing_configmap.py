@@ -2,6 +2,7 @@ from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsA
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
+from sregym.service.apps.astronomy_shop import AstronomyShop
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.kubectl import KubeCtl
@@ -17,6 +18,8 @@ class MissingConfigMap(Problem):
             app = SocialNetwork()
         elif self.app_name == "hotel_reservation":
             app = HotelReservation()
+        elif self.app_name == "astronomy_shop":
+            app = AstronomyShop()
         else:
             raise ValueError(f"Unsupported app name: {app_name}")
 
