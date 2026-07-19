@@ -3,17 +3,13 @@
 from __future__ import annotations
 
 import csv
-import queue
-import threading
 from pathlib import Path
 
 from sregym.parallel_runner import (
-    RunResult,
     RunTask,
     _args_for_tests,
     _child_command,
     _read_solved,
-    _worker,
     build_static_plan,
     select_problem_ids,
 )
@@ -99,30 +95,3 @@ def test_read_solved_uses_upstream_flattened_stage_results(tmp_path: Path):
         writer.writeheader()
         writer.writerow({"Diagnosis.success": "True", "Mitigation.success": "true"})
     assert _read_solved(tmp_path / "results") is True
-
-
-def test_worker_waits_for_supervisor_ack_before_next_task(tmp_path, monkeypatch):
-    tasks = queue.Queue()
-    results = queue.Queue()
-    acknowledgement = queue.Queue()
-    stop = threading.Event()
-    task = RunTask(0, "target_port")
-    tasks.put(task)
-    tasks.put(None)
-    monkeypatch.setattr("sregym.parallel_runner.create_worker_cluster", lambda *args: ("cluster", "kubeconfig"))
-    monkeypatch.setattr("sregym.parallel_runner.delete_worker_cluster", lambda *args: None)
-    monkeypatch.setattr(
-        "sregym.parallel_runner._run_child",
-        lambda *args: RunResult(task, 0, 0, 1.0, str(tmp_path), True),
-    )
-
-    worker = threading.Thread(
-        target=_worker,
-        args=(_args_for_tests(), 0, tmp_path, tasks, results, acknowledgement, stop),
-    )
-    worker.start()
-    assert results.get(timeout=2).task == task
-    assert worker.is_alive()
-    acknowledgement.put(None)
-    worker.join(timeout=2)
-    assert not worker.is_alive()

@@ -122,8 +122,7 @@ uv run main.py --agent stratus --model gpt-5 --judge-model anthropic/claude-sonn
 
 This fork keeps the upstream runner as the single-problem execution path and adds
 an experiment supervisor for isolated parallel workers, generated variants,
-resumable experiment directories, deterministic sequences, and cross-run
-operational memory.
+resumable experiment directories, and deterministic sequences.
 
 Run repeated attempts using upstream's `--n-attempts` option:
 
@@ -147,10 +146,9 @@ uv run main.py --agent codex --parallel 4 --variants --variant-count 100 \
   --variant-order adaptive --variant-spec missing_env_variable
 ```
 
-Use `--enable-summary` to maintain and inject a bounded operational-memory file
-between tasks. `--sequence-len` and `--sequence-seed` sample a reproducible task
-sequence, while `--tasklist` accepts a YAML task list. Run `uv run main.py --help`
-for all supervisor and judge-voting options.
+`--sequence-len` and `--sequence-seed` sample a reproducible task sequence,
+while `--tasklist` accepts a YAML task list. Run `uv run main.py --help` for all
+supervisor and judge-voting options.
 
 #### Container Isolation
 

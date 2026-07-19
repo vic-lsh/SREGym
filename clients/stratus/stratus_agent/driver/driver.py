@@ -28,7 +28,6 @@ init_logger()
 
 import logging  # noqa: E402
 
-from clients.harness.memory import inject_operational_memory  # noqa: E402
 from clients.harness.problem_id import resolve_problem_id  # noqa: E402
 from clients.stratus.configs.langgraph_tool_configs import LanggraphToolConfig  # noqa: E402
 from clients.stratus.stratus_agent.diagnosis_agent import (  # noqa: E402
@@ -353,13 +352,11 @@ async def diagnosis_task_main():
     first_run_initial_messages = [
         SystemMessage(diagnosis_agent_prompts["system"]),
         HumanMessage(
-            inject_operational_memory(
-                diagnosis_agent_prompts["user"].format(
-                    max_step=diagnosis_agent_max_step,
-                    app_name=app_name,
-                    app_description=app_description,
-                    app_namespace=app_namespace,
-                )
+            diagnosis_agent_prompts["user"].format(
+                max_step=diagnosis_agent_max_step,
+                app_name=app_name,
+                app_description=app_description,
+                app_namespace=app_namespace,
             )
         ),
     ]
@@ -400,13 +397,11 @@ async def diagnosis_with_localization_task_main():
     first_run_initial_messages = [
         SystemMessage(diagnosis_agent_prompts["system"]),
         HumanMessage(
-            inject_operational_memory(
-                diagnosis_agent_prompts["user"].format(
-                    max_step=diagnosis_agent_max_step,
-                    app_name=app_name,
-                    app_description=app_description,
-                    app_namespace=app_namespace,
-                )
+            diagnosis_agent_prompts["user"].format(
+                max_step=diagnosis_agent_max_step,
+                app_name=app_name,
+                app_description=app_description,
+                app_namespace=app_namespace,
             )
         ),
     ]
@@ -477,14 +472,12 @@ async def mitigation_task_main(diagnosis_summary):
     first_run_initial_messages = [
         SystemMessage(mitigation_agent_prompts["system"]),
         HumanMessage(
-            inject_operational_memory(
-                mitigation_agent_prompts["user"].format(
-                    max_step=mitigation_agent_max_step,
-                    faults_info=diagnosis_summary,
-                    app_name=app_name,
-                    app_description=app_description,
-                    app_namespace=app_namespace,
-                )
+            mitigation_agent_prompts["user"].format(
+                max_step=mitigation_agent_max_step,
+                faults_info=diagnosis_summary,
+                app_name=app_name,
+                app_description=app_description,
+                app_namespace=app_namespace,
             )
         ),
     ]
@@ -627,19 +620,17 @@ async def mitigation_task_main(diagnosis_summary):
                 retry_run_initial_messages = [
                     SystemMessage(mitigation_agent_prompts["system"]),
                     HumanMessage(
-                        inject_operational_memory(
-                            mitigation_agent_prompts["user"].format(
-                                max_step=mitigation_agent_max_step,
-                                faults_info=diagnosis_summary,
-                                app_name=app_name,
-                                app_description=app_description,
-                                app_namespace=app_namespace,
-                            )
-                            + "\n\n"
-                            + mitigation_agent_prompts["retry_user"].format(
-                                last_result=str(oracle_results),
-                                reflection=last_run_summary,
-                            )
+                        mitigation_agent_prompts["user"].format(
+                            max_step=mitigation_agent_max_step,
+                            faults_info=diagnosis_summary,
+                            app_name=app_name,
+                            app_description=app_description,
+                            app_namespace=app_namespace,
+                        )
+                        + "\n\n"
+                        + mitigation_agent_prompts["retry_user"].format(
+                            last_result=str(oracle_results),
+                            reflection=last_run_summary,
                         )
                     ),
                 ]

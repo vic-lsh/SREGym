@@ -12,7 +12,6 @@ import csv
 import os
 import queue
 import random
-import shutil
 import subprocess
 import sys
 import threading
@@ -220,9 +219,6 @@ def _run_child(args: Any, task: RunTask, worker_id: int, root: Path, kubeconfig:
             "SREGYM_RESULTS_DIR": str((task_dir / "results").resolve()),
         }
     )
-    memory_path = root / "long_term_summary.md"
-    if args.enable_summary and not args.no_inject_summary and memory_path.exists():
-        env["SREGYM_SUMMARY_FILE"] = str(memory_path)
     started = time.monotonic()
     try:
         with log_path.open("w", encoding="utf-8") as log_stream:
@@ -261,7 +257,6 @@ def _worker(
     root: Path,
     tasks: queue.Queue[RunTask | None],
     results: queue.Queue[RunResult | tuple[str, int, str]],
-    acknowledgement: queue.Queue[None],
     stop: threading.Event,
 ) -> None:
     cluster_name = ""
@@ -272,7 +267,6 @@ def _worker(
             if task is None:
                 break
             results.put(_run_child(args, task, worker_id, root, kubeconfig))
-            acknowledgement.get()
     except Exception as exc:
         results.put(("worker_error", worker_id, str(exc)))
     finally:
@@ -320,45 +314,6 @@ def _result_row(result: RunResult) -> dict[str, Any]:
     }
 
 
-def _update_operational_memory(root: Path, result: RunResult, args: Any) -> None:
-    if not args.enable_summary:
-        return
-    log_path = Path(result.result_dir) / "worker.log"
-    if not log_path.exists():
-        return
-    memory_path = root / "long_term_summary.md"
-    current = memory_path.read_text(encoding="utf-8") if memory_path.exists() else ""
-    trajectory = log_path.read_text(encoding="utf-8", errors="replace")[-100000:]
-    model = args.summary_model or args.judge_model or args.model
-
-    from llm_backend.get_llm_backend import LiteLLMBackend
-
-    backend = LiteLLMBackend(
-        model_name=model,
-        api_base=os.environ.get("JUDGE_API_BASE") or os.environ.get("AGENT_API_BASE"),
-        api_key=os.environ.get("JUDGE_API_KEY") or os.environ.get("AGENT_API_KEY"),
-        temperature=0.0,
-    )
-    prompt = f"""Maintain a concise operational memory for repeated SRE benchmark runs.
-
-Current memory:
-{current or "(empty)"}
-
-Latest run: {result.task.problem_id}; solved={result.solved}
-Trajectory and benchmark output:
-{trajectory}
-
-Return only the updated Markdown memory. Preserve useful symptoms, diagnostic
-signals, root causes, and mitigations; remove unsupported speculation and
-merge duplicates.
-"""
-    response = backend.inference(prompt, system_prompt="You maintain evidence-based SRE operational memory.")
-    updated = str(response.content).strip()
-    temporary = memory_path.with_suffix(".tmp")
-    temporary.write_text(updated, encoding="utf-8")
-    temporary.replace(memory_path)
-
-
 def _experiment_root(args: Any) -> Path:
     if args.experiment_dir:
         return Path(args.experiment_dir).resolve()
@@ -389,9 +344,6 @@ def _adaptive_scheduler(args: Any, completed: list[dict[str, str]]) -> AdaptiveS
 def run_parallel(args: Any) -> int:
     root = _experiment_root(args)
     root.mkdir(parents=True, exist_ok=True)
-    memory_path = root / "long_term_summary.md"
-    if args.seed_summary and not memory_path.exists():
-        shutil.copy2(args.seed_summary, memory_path)
     manifest_path = root / "parallel_results.csv"
     manifest = _load_manifest(manifest_path)
     completed_keys = {
@@ -400,12 +352,11 @@ def run_parallel(args: Any) -> int:
 
     task_queue: queue.Queue[RunTask | None] = queue.Queue()
     result_queue: queue.Queue[RunResult | tuple[str, int, str]] = queue.Queue()
-    acknowledgements: list[queue.Queue[None]] = [queue.Queue() for _ in range(args.parallel)]
     stop = threading.Event()
     workers = [
         threading.Thread(
             target=_worker,
-            args=(args, worker_id, root, task_queue, result_queue, acknowledgements[worker_id], stop),
+            args=(args, worker_id, root, task_queue, result_queue, stop),
             name=f"sregym-worker-{worker_id}",
             daemon=True,
         )
@@ -461,11 +412,6 @@ def run_parallel(args: Any) -> int:
             failures += int(outcome.returncode != 0)
             manifest.append(_result_row(outcome))
             _write_manifest(manifest_path, manifest)
-            try:
-                _update_operational_memory(root, outcome, args)
-            except Exception as exc:
-                console.print(f"[yellow]Operational-memory update failed: {exc}[/yellow]")
-            acknowledgements[outcome.worker_id].put(None)
             progress.advance(progress_task)
             progress.update(
                 progress_task,
@@ -480,8 +426,6 @@ def run_parallel(args: Any) -> int:
                     pending += 1
     finally:
         progress.stop()
-        for acknowledgement in acknowledgements:
-            acknowledgement.put(None)
         for _ in workers:
             task_queue.put(None)
         for worker in workers:
@@ -513,10 +457,6 @@ def _args_for_tests(**overrides: Any) -> SimpleNamespace:
         "sequence_seed": 42,
         "judge_rounds": 3,
         "judge_voting_temperature": 0.7,
-        "enable_summary": False,
-        "no_inject_summary": False,
-        "summary_model": None,
-        "seed_summary": None,
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)

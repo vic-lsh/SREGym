@@ -188,9 +188,6 @@ Important:
 - The conductor API is available at {get_api_base_url()}
 """
 
-    from clients.harness.memory import inject_operational_memory
-
-    instruction = inject_operational_memory(instruction)
     logger.info(f"Built instruction:\n{instruction}")
     return instruction
 

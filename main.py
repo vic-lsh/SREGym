@@ -778,12 +778,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--variant-spec", action="append", default=None, help="Restrict generated variants by base name"
     )
-    parser.add_argument("--enable-summary", action="store_true", help="Maintain cross-run operational memory")
-    parser.add_argument(
-        "--no-inject-summary", action="store_true", help="Update memory without injecting it into agents"
-    )
-    parser.add_argument("--summary-model", type=str, default=None, help="Model used to update operational memory")
-    parser.add_argument("--seed-summary", type=str, default=None, help="Initial operational-memory Markdown file")
     parser.add_argument("--sequence-len", type=int, default=0, help="Sample a deterministic problem sequence")
     parser.add_argument("--sequence-seed", type=int, default=42)
     parser.add_argument("--worker-child", action="store_true", help=argparse.SUPPRESS)
@@ -803,16 +797,12 @@ if __name__ == "__main__":
         parser.error("--judge-rounds must be at least 1")
     if args.sequence_len < 0:
         parser.error("--sequence-len must not be negative")
-    if args.seed_summary and not Path(args.seed_summary).is_file():
-        parser.error("--seed-summary must name an existing file")
-
     if not args.worker_child and (
         args.parallel > 1
         or args.variants
         or args.tasklist
         or args.experiment_dir
         or args.problem_spec
-        or args.enable_summary
         or args.sequence_len
     ):
         from sregym.parallel_runner import run_parallel
