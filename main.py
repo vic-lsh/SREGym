@@ -63,6 +63,7 @@ AGENT_OUTPUT_FILES = {"gemini_cli": "gemini-cli.txt", "claudecode": "claude-code
 # Agents with a built-in long-term summary system (no external summarizer subprocess needed).
 # They accept --summary-dir and --summary-model CLI args.
 AGENT_LT_SUMMARY = {"crucible", "crucible_deepagents", "crucible_simple"}
+AGENT_RESULT_JSON = AGENT_LT_SUMMARY | {"cli_agent", "sdo_codex"}
 
 
 def agent_supports_summary(agent_name: str) -> bool:
@@ -540,7 +541,7 @@ def driver_loop(
                                 extra_args += f" --logs-dir {agent_log_dir} --summary-dir {agent_base_dir}"
 
                             # Crucible handles summarization internally via --summary-dir
-                            if agent_to_run in AGENT_LT_SUMMARY:
+                            if agent_to_run in AGENT_RESULT_JSON:
                                 extra_args += f" --logs-dir {agent_log_dir}"
                             if agent_to_run in AGENT_LT_SUMMARY and enable_summary:
                                 effective_summary_model = summary_model or os.environ.get("MODEL_ID", "gpt-4o")
