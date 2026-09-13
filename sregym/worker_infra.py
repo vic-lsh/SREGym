@@ -212,7 +212,7 @@ def install_calico(cluster_name: str, kubeconfig_path: str) -> None:
         for mirror, target in _CALICO_IMAGE_MIRRORS:
             _run(["docker", "pull", "--platform", target_platform, mirror])
             _run(["docker", "tag", mirror, target])
-        ensure_kind_platform_images(cluster_name, [target for _, target in _CALICO_IMAGE_MIRRORS], target_platform)
+        ensure_kind_images(cluster_name, [target for _, target in _CALICO_IMAGE_MIRRORS])
         _run(["kubectl", "--kubeconfig", kubeconfig_path, "create", "-f", manifest_path])
     finally:
         with suppress(OSError):

@@ -90,3 +90,23 @@ def test_network_policy_preflight_uses_worker_kubeconfig(monkeypatch):
 def test_container_platform_tracks_host_architecture(machine, expected, monkeypatch):
     monkeypatch.setattr(worker_infra.platform, "machine", lambda: machine)
     assert worker_infra.container_platform() == expected
+
+
+def test_install_calico_loads_locally_selected_images(tmp_path, monkeypatch):
+    commands = []
+    loaded = []
+
+    def fake_run(command):
+        commands.append(command)
+        if command[:2] == ["curl", "-fsSL"]:
+            Path(command[-1]).write_text("kind: ConfigMap\n", encoding="utf-8")
+
+    monkeypatch.setattr(worker_infra, "_CALICO_URL", "https://example.test/calico.yaml")
+    monkeypatch.setattr(worker_infra, "_run", fake_run)
+    monkeypatch.setattr(worker_infra, "ensure_kind_images", lambda cluster, images: loaded.append((cluster, images)))
+    monkeypatch.setattr(worker_infra, "container_platform", lambda: "linux/amd64")
+
+    worker_infra.install_calico("cluster", str(tmp_path / "kubeconfig"))
+
+    assert loaded == [("cluster", [target for _, target in worker_infra._CALICO_IMAGE_MIRRORS])]
+    assert all("--platform" in command for command in commands if command[:2] == ["docker", "pull"])
