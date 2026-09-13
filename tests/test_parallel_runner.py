@@ -12,6 +12,7 @@ from sregym.parallel_runner import (
     RunTask,
     _args_for_tests,
     _child_command,
+    _manifest_row_is_complete,
     _read_solved,
     _worker,
     build_static_plan,
@@ -121,6 +122,16 @@ def test_read_solved_uses_upstream_flattened_stage_results(tmp_path: Path):
         writer.writeheader()
         writer.writerow({"Diagnosis.success": "True", "Mitigation.success": "true"})
     assert _read_solved(tmp_path / "results") is True
+
+
+def test_manifest_completion_requires_result_artifact(tmp_path: Path):
+    result_dir = tmp_path / "run"
+    result_dir.mkdir()
+    row = {"returncode": "0", "result_dir": str(result_dir)}
+
+    assert _manifest_row_is_complete(row) is False
+    (result_dir / "attempt_results.csv").write_text("problem_id\nexample\n", encoding="utf-8")
+    assert _manifest_row_is_complete(row) is True
 
 
 def test_worker_waits_for_supervisor_ack_before_next_task(tmp_path, monkeypatch):

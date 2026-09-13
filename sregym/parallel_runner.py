@@ -214,6 +214,13 @@ def _read_solved(result_dir: Path) -> bool:
     return diagnosis and (mitigation_value is None or _truthy(mitigation_value))
 
 
+def _manifest_row_is_complete(row: dict[str, str]) -> bool:
+    if int(row.get("returncode", "1")) != 0:
+        return False
+    result_dir = Path(row.get("result_dir", ""))
+    return result_dir.is_dir() and any(result_dir.rglob("*_results.csv"))
+
+
 def _run_child(
     args: Any,
     task: RunTask,
@@ -426,7 +433,7 @@ def run_parallel(args: Any) -> int:
     manifest_path = root / "parallel_results.csv"
     manifest = _load_manifest(manifest_path)
     completed_keys = {
-        (int(row["sequence"]), row["problem_id"]) for row in manifest if int(row.get("returncode", "1")) == 0
+        (int(row["sequence"]), row["problem_id"]) for row in manifest if _manifest_row_is_complete(row)
     }
 
     task_queue: queue.Queue[RunTask | None] = queue.Queue()
