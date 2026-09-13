@@ -614,7 +614,14 @@ def main(args):
         install_script=agent_reg.install_script if agent_reg else None,
     )
 
-    conductor_config = ConductorConfig(deploy_loki=not args.use_external_harness, enable_noise=args.noise)
+    agent_defer_cleanup = bool(agent_reg and agent_reg.defer_cleanup)
+    if agent_defer_cleanup:
+        os.environ["SREGYM_DEFER_CLEANUP"] = "1"
+    conductor_config = ConductorConfig(
+        deploy_loki=not args.use_external_harness,
+        enable_noise=args.noise,
+        defer_cleanup=agent_defer_cleanup,
+    )
     conductor = Conductor(config=conductor_config)
 
     suite = getattr(args, "suite", None)

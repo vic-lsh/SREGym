@@ -180,6 +180,21 @@ async def get_status():
     return {"stage": stage}
 
 
+@app.post("/cleanup")
+async def post_cleanup():
+    if _conductor is None:
+        raise HTTPException(status_code=400, detail="No problem has been started")
+    if _conductor.submission_stage == "done":
+        return {"status": "noop", "stage": "done"}
+    if _conductor.submission_stage != "awaiting_cleanup":
+        raise HTTPException(
+            status_code=409,
+            detail=f"cleanup requires awaiting_cleanup, got {_conductor.submission_stage!r}",
+        )
+    await asyncio.to_thread(_conductor.force_cleanup)
+    return {"status": "ok", "stage": _conductor.submission_stage}
+
+
 @app.get("/get_app")
 async def get_app():
     if _conductor is None:

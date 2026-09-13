@@ -16,6 +16,8 @@ class AgentRegistration:
     install_script: str | None = None
     agent_version: str | None = None
     container_isolation: bool = True
+    wait_for_natural_exit: bool | None = None
+    defer_cleanup: bool | None = None
 
 
 def _ensure_file(path: Path):
@@ -36,6 +38,8 @@ def list_agents(path: Path = DEFAULT_REG_PATH) -> dict[str, AgentRegistration]:
             install_script=a.get("install_script"),
             agent_version=a.get("agent_version"),
             container_isolation=a.get("container_isolation", True),
+            wait_for_natural_exit=a.get("wait_for_natural_exit"),
+            defer_cleanup=a.get("defer_cleanup"),
         )
     return out
 

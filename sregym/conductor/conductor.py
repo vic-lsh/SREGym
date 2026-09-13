@@ -2,8 +2,10 @@ import asyncio
 import concurrent.futures
 import json
 import logging
+import os
 import shlex
 import shutil
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,6 +41,7 @@ class ConductorConfig:
 
     deploy_loki: bool = True
     enable_noise: bool = False
+    defer_cleanup: bool = False
 
 
 class Conductor:
@@ -79,6 +82,8 @@ class Conductor:
         self.submission_stage = None
         self.results = {}
         self._submit_future = None  # Future for the executor running _submit_evaluate_and_advance
+        self._cleanup_lock = threading.Lock()
+        self._cleanup_timer: threading.Timer | None = None
 
         self.tasklist = None
         self.logger = logging.getLogger("all.sregym.conductor")
@@ -307,8 +312,12 @@ class Conductor:
                 except Exception as e:
                     self.logger.warning(f"Failed to set NoiseManager stage: {e}")
         else:
-            # No more stages; finish the problem
-            self._finish_problem()
+            if self.config.defer_cleanup:
+                self.submission_stage = "awaiting_cleanup"
+                self.logger.info("[STAGE] Awaiting cleanup signal from agent")
+                self._start_cleanup_watchdog()
+            else:
+                self._finish_problem()
 
     def _cleanup_sync(self):
         """
@@ -369,15 +378,37 @@ class Conductor:
         resets the stage to ``"setup"``, so the deploy-retry path still cleans up
         each failed attempt.
         """
-        if self.submission_stage in ("done", "tearing_down"):
-            self.logger.info(
-                f"[STAGE] _finish_problem already ran/running (submission_stage={self.submission_stage!r}); skipping"
-            )
-            return
-        self.logger.info("[STAGE] Done, starting teardown")
-        self.submission_stage = "tearing_down"
-        self._cleanup_sync()
-        self.logger.info("[STAGE] Teardown complete")
+        with self._cleanup_lock:
+            if self.submission_stage in ("done", "tearing_down"):
+                self.logger.info(
+                    f"[STAGE] _finish_problem already ran/running (submission_stage={self.submission_stage!r}); skipping"
+                )
+                return
+            self._cancel_cleanup_watchdog()
+            self.logger.info("[STAGE] Done, starting teardown")
+            self.submission_stage = "tearing_down"
+            self._cleanup_sync()
+            self.logger.info("[STAGE] Teardown complete")
+
+    def force_cleanup(self) -> None:
+        """Run deferred teardown exactly once."""
+        self._finish_problem()
+
+    def _start_cleanup_watchdog(self) -> None:
+        raw_timeout = os.getenv("SREGYM_CLEANUP_DEFER_TIMEOUT_SECONDS", "600")
+        try:
+            timeout = float(raw_timeout)
+        except ValueError:
+            timeout = 600.0
+        self._cancel_cleanup_watchdog()
+        self._cleanup_timer = threading.Timer(timeout, self.force_cleanup)
+        self._cleanup_timer.daemon = True
+        self._cleanup_timer.start()
+
+    def _cancel_cleanup_watchdog(self) -> None:
+        if self._cleanup_timer is not None:
+            self._cleanup_timer.cancel()
+            self._cleanup_timer = None
 
     async def start_problem(self) -> StartProblemResult:
         """
