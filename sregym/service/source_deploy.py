@@ -309,6 +309,9 @@ def _write_kustomization_for_directory(base_dir: Path) -> None:
 
 
 def _run_command(command: list[str]) -> None:
+    builder = os.getenv("SREGYM_DOCKER_BUILDER", "").strip()
+    if builder and command[:2] == ["docker", "build"]:
+        command = ["docker", "buildx", "build", "--builder", builder, "--load", *command[2:]]
     subprocess.run(command, check=True)
 
 
