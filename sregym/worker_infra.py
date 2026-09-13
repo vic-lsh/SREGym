@@ -65,9 +65,9 @@ def _node_image_ref(image: str) -> str:
     return f"docker.io/library/{image}"
 
 
-def _node_digest(node: str, image: str) -> str:
+def _node_digests(node: str, image: str) -> set[str]:
     result = _run(["docker", "exec", node, "crictl", "inspecti", _node_image_ref(image)])
-    return _digest_from_output(result.stdout)
+    return set(re.findall(r"sha256:[0-9a-f]{64}", result.stdout))
 
 
 def ensure_kind_images(cluster_name: str, images: list[str]) -> dict[str, dict[str, str]]:
@@ -78,10 +78,10 @@ def ensure_kind_images(cluster_name: str, images: list[str]) -> dict[str, dict[s
     for node in _kind_nodes(cluster_name):
         node_evidence: dict[str, str] = {}
         for image, digest in expected.items():
-            observed = _node_digest(node, image)
-            if observed != digest:
-                raise RuntimeError(f"{node} image {image} digest mismatch: expected {digest}, observed {observed}")
-            node_evidence[image] = observed
+            observed = _node_digests(node, image)
+            if digest not in observed:
+                raise RuntimeError(f"{node} image {image} digest mismatch: expected {digest}, observed {sorted(observed)}")
+            node_evidence[image] = digest
         evidence[node] = node_evidence
     return evidence
 
@@ -126,10 +126,10 @@ def ensure_kind_platform_images(
     for node in _kind_nodes(cluster_name):
         node_evidence: dict[str, str] = {}
         for image, digest in expected.items():
-            observed = _node_digest(node, image)
-            if observed != digest:
-                raise RuntimeError(f"{node} image {image} digest mismatch: expected {digest}, observed {observed}")
-            node_evidence[image] = observed
+            observed = _node_digests(node, image)
+            if digest not in observed:
+                raise RuntimeError(f"{node} image {image} digest mismatch: expected {digest}, observed {sorted(observed)}")
+            node_evidence[image] = digest
         evidence[node] = node_evidence
     return evidence
 

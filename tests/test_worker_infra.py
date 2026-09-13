@@ -31,6 +31,20 @@ def test_required_images_validates_json_shape(monkeypatch):
         worker_infra._required_images()
 
 
+def test_node_digests_include_imported_repo_digest(monkeypatch):
+    output = '{"status":{"id":"sha256:' + "1" * 64 + '","repoDigests":["image@sha256:' + "2" * 64 + '"]}}'
+    monkeypatch.setattr(
+        worker_infra,
+        "_run",
+        lambda command: type("Result", (), {"stdout": output})(),
+    )
+
+    assert worker_infra._node_digests("node", "image:tag") == {
+        "sha256:" + "1" * 64,
+        "sha256:" + "2" * 64,
+    }
+
+
 def test_existing_cluster_reuse_requires_stable_kubeconfig(tmp_path):
     missing = tmp_path / "missing-kubeconfig"
     reusable, reason = worker_infra.existing_cluster_is_reusable("sregym-w0", str(missing))
