@@ -34,6 +34,9 @@ class RunArtifacts:
         agent: str,
         attempt: int,
     ) -> "RunArtifacts":
+        final_parent = results_root / agent / problem_id
+        while (final_parent / f"run_{attempt}").exists():
+            attempt += 1
         artifact_id = f"anon_{secrets.token_hex(16)}"
         active_dir = staging_root / agent / artifact_id
         staging_root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -46,7 +49,7 @@ class RunArtifacts:
             attempt,
             staging_root,
             active_dir,
-            results_root / agent / problem_id / f"run_{attempt}",
+            final_parent / f"run_{attempt}",
         )
 
     def finalize_and_publish(

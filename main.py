@@ -462,7 +462,7 @@ def driver_loop(
 
                 snapshot = {
                     "problem_id": pid,
-                    "attempt": attempt,
+                    "attempt": run.attempt,
                 }
                 for stage, outcome in conductor.results.items():
                     if isinstance(outcome, dict):
