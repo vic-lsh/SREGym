@@ -20,12 +20,16 @@ _REUSE_KUBECONFIG_DIR = os.path.expanduser("~/.cache/sregym/kubeconfigs")
 _REUSE_BOOL_TRUE = {"1", "true", "yes", "on"}
 _CALICO_URL = "https://raw.githubusercontent.com/projectcalico/calico/v3.27.4/manifests/calico.yaml"
 _CALICO_SHA256 = ""
-_CALICO_PLATFORM = "linux/arm64"
 _CALICO_IMAGE_MIRRORS = [
     ("docker.io/calico/cni:v3.27.4", "calico/cni:v3.27.4"),
     ("docker.io/calico/node:v3.27.4", "calico/node:v3.27.4"),
     ("docker.io/calico/kube-controllers:v3.27.4", "calico/kube-controllers:v3.27.4"),
 ]
+
+
+def container_platform() -> str:
+    arch = platform.machine().lower()
+    return "linux/arm64" if ("arm" in arch or "aarch" in arch) else "linux/amd64"
 
 logger = logging.getLogger(__name__)
 
@@ -204,10 +208,11 @@ def install_calico(cluster_name: str, kubeconfig_path: str) -> None:
         manifest_bytes = Path(manifest_path).read_bytes()
         if _CALICO_SHA256 and hashlib.sha256(manifest_bytes).hexdigest() != _CALICO_SHA256:
             raise RuntimeError("downloaded Calico manifest digest mismatch")
+        target_platform = container_platform()
         for mirror, target in _CALICO_IMAGE_MIRRORS:
-            _run(["docker", "pull", "--platform", _CALICO_PLATFORM, mirror])
+            _run(["docker", "pull", "--platform", target_platform, mirror])
             _run(["docker", "tag", mirror, target])
-        ensure_kind_platform_images(cluster_name, [target for _, target in _CALICO_IMAGE_MIRRORS], _CALICO_PLATFORM)
+        ensure_kind_platform_images(cluster_name, [target for _, target in _CALICO_IMAGE_MIRRORS], target_platform)
         _run(["kubectl", "--kubeconfig", kubeconfig_path, "create", "-f", manifest_path])
     finally:
         with suppress(OSError):

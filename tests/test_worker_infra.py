@@ -55,3 +55,12 @@ def test_network_policy_preflight_uses_worker_kubeconfig(monkeypatch):
     )
 
     assert commands == [["kubectl", "--kubeconfig", "/tmp/worker-0.kubeconfig", "get", "nodes"]]
+
+
+@pytest.mark.parametrize(
+    ("machine", "expected"),
+    [("x86_64", "linux/amd64"), ("aarch64", "linux/arm64")],
+)
+def test_container_platform_tracks_host_architecture(machine, expected, monkeypatch):
+    monkeypatch.setattr(worker_infra.platform, "machine", lambda: machine)
+    assert worker_infra.container_platform() == expected
