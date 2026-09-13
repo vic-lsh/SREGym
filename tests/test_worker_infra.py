@@ -52,6 +52,18 @@ def test_existing_cluster_reuse_requires_stable_kubeconfig(tmp_path):
     assert "no stable kubeconfig" in reason
 
 
+def test_stable_kubeconfig_is_namespaced_by_cluster_prefix(tmp_path, monkeypatch):
+    monkeypatch.setattr(worker_infra, "_REUSE_KUBECONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr(worker_infra, "KIND_CLUSTER_PREFIX", "reuse-a-w")
+    first = worker_infra.stable_kubeconfig_path(0)
+    monkeypatch.setattr(worker_infra, "KIND_CLUSTER_PREFIX", "reuse-b-w")
+    second = worker_infra.stable_kubeconfig_path(0)
+
+    assert first != second
+    assert first.endswith("reuse-a-w0.kubeconfig")
+    assert second.endswith("reuse-b-w0.kubeconfig")
+
+
 def test_delete_worker_cluster_preserves_reused_cluster(monkeypatch):
     monkeypatch.setenv("SREGYM_REUSE_CLUSTER", "1")
     monkeypatch.setattr(worker_infra.subprocess, "run", lambda *args, **kwargs: pytest.fail("unexpected delete"))

@@ -280,7 +280,7 @@ def create_kind_cluster(cluster_name: str, kubeconfig_path: str) -> tuple[str, s
 
 def stable_kubeconfig_path(worker_id: int) -> str:
     os.makedirs(_REUSE_KUBECONFIG_DIR, exist_ok=True)
-    return os.path.join(_REUSE_KUBECONFIG_DIR, f"worker_{worker_id}.kubeconfig")
+    return os.path.join(_REUSE_KUBECONFIG_DIR, f"{KIND_CLUSTER_PREFIX}{worker_id}.kubeconfig")
 
 
 def existing_cluster_is_reusable(cluster_name: str, kubeconfig_path: str) -> tuple[bool, str]:
