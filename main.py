@@ -598,11 +598,7 @@ def main(args):
         run_judge_preflight_check()
 
     # Only build/check agent container image if the agent requires it
-    agent_reg = (
-        get_agent(args.agent, path=_agent_registry_path())
-        if args.agent
-        else None
-    )
+    agent_reg = get_agent(args.agent, path=_agent_registry_path()) if args.agent else None
     if not agent_reg or agent_reg.container_isolation:
         LAUNCHER.enable_container_isolation(force_build=args.force_build)
 
@@ -621,6 +617,7 @@ def main(args):
         deploy_loki=not args.use_external_harness,
         enable_noise=args.noise,
         defer_cleanup=agent_defer_cleanup,
+        preserve_infrastructure=os.getenv("SREGYM_PRESERVE_INFRASTRUCTURE", "").lower() in {"1", "true", "yes"},
     )
     conductor = Conductor(config=conductor_config)
 

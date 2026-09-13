@@ -33,6 +33,7 @@ from sregym.service.mcp_server import MCPServer
 from sregym.service.source_deploy import source_deploy_enabled, unsupported_reason
 from sregym.service.telemetry.loki import Loki
 from sregym.service.telemetry.prometheus import Prometheus
+from sregym.warm_infrastructure import marker_is_ready
 
 
 @dataclass
@@ -42,6 +43,7 @@ class ConductorConfig:
     deploy_loki: bool = True
     enable_noise: bool = False
     defer_cleanup: bool = False
+    preserve_infrastructure: bool = False
 
 
 class Conductor:
@@ -813,14 +815,59 @@ class Conductor:
         # Load or capture baseline state BEFORE any infrastructure deployment.
         # This captures the bare cluster state so reconciliation can clean up
         # everything added during a problem run (including infrastructure drift).
+        warm_infrastructure = self.config.preserve_infrastructure and self._warm_infrastructure_ready()
         if not self._baseline_captured:
-            if self.cluster_state.load_baseline_state(CLUSTER_BASELINE_STATE_FILE):
+            if warm_infrastructure and self.cluster_state.load_baseline_state(CLUSTER_BASELINE_STATE_FILE):
                 self.logger.info("[DEPLOY] Loaded persisted cluster baseline state")
             else:
-                self.logger.info("[DEPLOY] No persisted baseline state found, capturing and saving...")
+                self.logger.info("[DEPLOY] Capturing current cluster baseline state...")
                 self.cluster_state.save_baseline_state(CLUSTER_BASELINE_STATE_FILE)
             self._baseline_captured = True
 
+        if warm_infrastructure:
+            self.logger.info("[DEPLOY] Reusing preserved benchmark infrastructure")
+        else:
+            self._deploy_shared_infrastructure(problem)
+            if self.config.preserve_infrastructure:
+                self.kubectl.exec_command(
+                    "kubectl create configmap sregym-warm-infrastructure -n default "
+                    "--from-literal=ready=true --dry-run=client -o yaml | kubectl apply -f -"
+                )
+                self.cluster_state.save_baseline_state(CLUSTER_BASELINE_STATE_FILE)
+                self.logger.info("[DEPLOY] Preserved shared infrastructure as the cleanup baseline")
+
+        self.logger.info("[DEPLOY] Deploying and starting workload")
+
+        # train-ticket pods need jaeger at startup; create ExternalName before deploy.
+        # Other apps get it after deploy to avoid Helm ownership conflicts.
+        is_train_ticket = problem.app.__class__.__name__ == "TrainTicket"
+
+        # Composite apps span multiple namespaces; fall back to the single
+        # `namespace` attribute for regular apps.
+        app_namespaces = getattr(problem.app, "namespaces", None) or [problem.app.namespace]
+
+        if is_train_ticket:
+            for ns in app_namespaces:
+                self.kubectl.exec_command(
+                    f"kubectl create namespace {ns} --dry-run=client -o yaml | kubectl apply -f -"
+                )
+                self.jaeger.create_external_name_service(ns)
+
+        problem.app.deploy()
+        self.logger.info(f"[ENV] Deploy application: {problem.app.name}")
+
+        if not is_train_ticket:
+            for ns in app_namespaces:
+                self.jaeger.create_external_name_service(ns)
+
+        problem.app.start_workload()
+        self.logger.info("[ENV] Start workload")
+
+    def _warm_infrastructure_ready(self) -> bool:
+        result = self.kubectl.exec_command("kubectl get configmap sregym-warm-infrastructure -n default -o name")
+        return marker_is_ready(result)
+
+    def _deploy_shared_infrastructure(self, problem):
         self.logger.info("[DEPLOY] Setting up metrics-server…")
         self.kubectl.exec_command(
             "kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/"
@@ -869,32 +916,6 @@ class Conductor:
         self.mcp_server.deploy()
 
         self.logger.info("[ENV] Set up necessary components: metrics-server, Khaos, OpenEBS, Prometheus, Jaeger, Loki")
-
-        # train-ticket pods need jaeger at startup; create ExternalName before deploy.
-        # Other apps get it after deploy to avoid Helm ownership conflicts.
-        is_train_ticket = problem.app.__class__.__name__ == "TrainTicket"
-
-        # Composite apps span multiple namespaces; fall back to the single
-        # `namespace` attribute for regular apps.
-        app_namespaces = getattr(problem.app, "namespaces", None) or [problem.app.namespace]
-
-        if is_train_ticket:
-            for ns in app_namespaces:
-                self.kubectl.exec_command(
-                    f"kubectl create namespace {ns} --dry-run=client -o yaml | kubectl apply -f -"
-                )
-                self.jaeger.create_external_name_service(ns)
-
-        self.logger.info("[DEPLOY] Deploying and starting workload")
-        problem.app.deploy()
-        self.logger.info(f"[ENV] Deploy application: {problem.app.name}")
-
-        if not is_train_ticket:
-            for ns in app_namespaces:
-                self.jaeger.create_external_name_service(ns)
-
-        problem.app.start_workload()
-        self.logger.info("[ENV] Start workload")
 
     def undeploy_app(self):
         """Teardown problem.app and, if no other apps running, OpenEBS/Prometheus."""
