@@ -41,6 +41,10 @@ _driver_results: list[dict] = []
 _driver_base_dir: Path | None = None
 
 
+def _agent_registry_path() -> Path:
+    return Path(os.environ.get("SREGYM_AGENT_REGISTRY", Path(__file__).with_name("agents.yaml")))
+
+
 def run_preflight_check(
     agent_name: str,
     container_runner: ContainerRunner | None = None,
@@ -218,7 +222,7 @@ def driver_loop(
 
         # Verify agent exists in registry (skip if using external harness)
         if not use_external_harness:
-            available_agents = list_agents(path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml").keys()
+            available_agents = list_agents(path=_agent_registry_path()).keys()
             if agent_to_run not in available_agents:
                 console.log(f"⚠️ Agent '{agent_to_run}' not found in registry. Available agents: {available_agents}")
                 sys.exit(1)
@@ -392,7 +396,7 @@ def driver_loop(
                 with _artifact_environment(run):
                     reg = get_agent(
                         agent_to_run,
-                        path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml",
+                        path=_agent_registry_path(),
                     )
                     if reg:
                         agent_proc = await LAUNCHER.ensure_started(reg)
@@ -595,7 +599,7 @@ def main(args):
 
     # Only build/check agent container image if the agent requires it
     agent_reg = (
-        get_agent(args.agent, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
+        get_agent(args.agent, path=_agent_registry_path())
         if args.agent
         else None
     )
