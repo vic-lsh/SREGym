@@ -218,7 +218,14 @@ def _manifest_row_is_complete(row: dict[str, str]) -> bool:
     if int(row.get("returncode", "1")) != 0:
         return False
     result_dir = Path(row.get("result_dir", ""))
-    return result_dir.is_dir() and any(result_dir.rglob("*_results.csv"))
+    if not result_dir.is_dir():
+        return False
+    for result_csv in result_dir.rglob("*_results.csv"):
+        with result_csv.open(newline="", encoding="utf-8") as stream:
+            reader = csv.DictReader(stream)
+            if reader.fieldnames and "Diagnosis.success" in reader.fieldnames:
+                return True
+    return False
 
 
 def _run_child(

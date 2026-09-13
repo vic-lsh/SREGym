@@ -130,7 +130,10 @@ def test_manifest_completion_requires_result_artifact(tmp_path: Path):
     row = {"returncode": "0", "result_dir": str(result_dir)}
 
     assert _manifest_row_is_complete(row) is False
-    (result_dir / "attempt_results.csv").write_text("problem_id\nexample\n", encoding="utf-8")
+    (result_dir / "attempt_results.csv").write_text(
+        "problem_id,Diagnosis.success\nexample,false\n",
+        encoding="utf-8",
+    )
     assert _manifest_row_is_complete(row) is True
 
 
