@@ -15,7 +15,7 @@ from pathlib import Path
 
 import yaml
 
-KIND_CLUSTER_PREFIX = "sregym-w"
+KIND_CLUSTER_PREFIX = os.getenv("SREGYM_KIND_CLUSTER_PREFIX", "sregym-w")
 _REUSE_KUBECONFIG_DIR = os.path.expanduser("~/.cache/sregym/kubeconfigs")
 _REUSE_BOOL_TRUE = {"1", "true", "yes", "on"}
 _CALICO_URL = "https://raw.githubusercontent.com/projectcalico/calico/v3.27.4/manifests/calico.yaml"
