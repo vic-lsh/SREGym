@@ -90,6 +90,28 @@ def test_child_command_uses_upstream_single_problem_cli():
     assert command[command.index("--judge-model") + 1] == "gpt-5-mini"
 
 
+def test_child_command_preserves_source_workspace_mode():
+    args = _args_for_tests(
+        deploy_from_source=True,
+        app_filter="hotel_reservation",
+        application_workspace=True,
+    )
+    args.agent = "sdo_codex"
+    args.model = "haiku"
+    args.agent_timeout = 90
+    args.judge_model = "judge"
+    args.reasoning_effort = None
+    args.noise = False
+    args.force_build = False
+    args.use_external_harness = False
+
+    command = _child_command(args, RunTask(0, "missing_configmap_hotel_reservation"))
+
+    assert "--deploy-from-source" in command
+    assert command[command.index("--app-filter") + 1] == "hotel_reservation"
+    assert "--application-workspace" in command
+
+
 def test_read_solved_uses_upstream_flattened_stage_results(tmp_path: Path):
     result_dir = tmp_path / "results" / "agent" / "problem"
     result_dir.mkdir(parents=True)

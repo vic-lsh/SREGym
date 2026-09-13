@@ -9,3 +9,4 @@ MAX_DIAGNOSIS_CANDIDATES = 5
 class StartProblemResult(StrEnum):
     SUCCESS = "success"
     SKIPPED_KHAOS_REQUIRED = "skipped_khaos_required"
+    SKIPPED_SOURCE_DEPLOY_UNSUPPORTED = "skipped_source_deploy_unsupported"

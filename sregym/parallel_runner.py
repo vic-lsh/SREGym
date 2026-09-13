@@ -37,6 +37,12 @@ from sregym.conductor.problems.variant_generator import (
     generate_variant_stream_grouped,
 )
 from sregym.conductor.problems.variant_specs import get_all_variant_specs
+from sregym.service.app_workspace import (
+    agent_workdir_env_var,
+    application_workspace_dir,
+    application_workspace_seed_override,
+    prepare_application_workspace,
+)
 from sregym.worker_infra import create_worker_cluster, delete_worker_cluster
 
 
@@ -182,6 +188,12 @@ def _child_command(args: Any, task: RunTask) -> list[str]:
         command.append("--force-build")
     if args.use_external_harness:
         command.append("--use-external-harness")
+    if args.deploy_from_source:
+        command.append("--deploy-from-source")
+    if args.app_filter:
+        command.extend(["--app-filter", args.app_filter])
+    if args.application_workspace:
+        command.append("--application-workspace")
     return command
 
 
@@ -202,7 +214,14 @@ def _read_solved(result_dir: Path) -> bool:
     return diagnosis and (mitigation_value is None or _truthy(mitigation_value))
 
 
-def _run_child(args: Any, task: RunTask, worker_id: int, root: Path, kubeconfig: str) -> RunResult:
+def _run_child(
+    args: Any,
+    task: RunTask,
+    worker_id: int,
+    root: Path,
+    kubeconfig: str,
+    cluster_name: str,
+) -> RunResult:
     task_dir = root / "runs" / f"{task.sequence:06d}_{task.problem_id}" / f"worker_{worker_id}"
     task_dir.mkdir(parents=True, exist_ok=True)
     log_path = task_dir / "worker.log"
@@ -218,8 +237,13 @@ def _run_child(args: Any, task: RunTask, worker_id: int, root: Path, kubeconfig:
             "MCP_SERVER_PORT": str(mcp_port),
             "MCP_SERVER_URL": f"http://127.0.0.1:{mcp_port}",
             "SREGYM_RESULTS_DIR": str((task_dir / "results").resolve()),
+            "SREGYM_KIND_CLUSTER_NAME": cluster_name,
         }
     )
+    if args.application_workspace:
+        workspace = application_workspace_dir(root).resolve()
+        env["SREGYM_APP_SOURCE_DIR"] = str(workspace)
+        env[agent_workdir_env_var()] = str(workspace)
     memory_path = root / "long_term_summary.md"
     if args.enable_summary and not args.no_inject_summary and memory_path.exists():
         env["SREGYM_SUMMARY_FILE"] = str(memory_path)
@@ -271,7 +295,7 @@ def _worker(
             task = tasks.get()
             if task is None:
                 break
-            results.put(_run_child(args, task, worker_id, root, kubeconfig))
+            results.put(_run_child(args, task, worker_id, root, kubeconfig, cluster_name))
             acknowledgement.get()
     except Exception as exc:
         results.put(("worker_error", worker_id, str(exc)))
@@ -389,6 +413,13 @@ def _adaptive_scheduler(args: Any, completed: list[dict[str, str]]) -> AdaptiveS
 def run_parallel(args: Any) -> int:
     root = _experiment_root(args)
     root.mkdir(parents=True, exist_ok=True)
+    if args.application_workspace:
+        prepare_application_workspace(
+            experiment_dir=root,
+            app_filter=args.app_filter,
+            resume=application_workspace_dir(root).is_dir(),
+            seed_from=application_workspace_seed_override(),
+        )
     memory_path = root / "long_term_summary.md"
     if args.seed_summary and not memory_path.exists():
         shutil.copy2(args.seed_summary, memory_path)
@@ -517,6 +548,9 @@ def _args_for_tests(**overrides: Any) -> SimpleNamespace:
         "no_inject_summary": False,
         "summary_model": None,
         "seed_summary": None,
+        "deploy_from_source": False,
+        "app_filter": None,
+        "application_workspace": False,
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)

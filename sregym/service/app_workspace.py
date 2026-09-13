@@ -114,8 +114,11 @@ def resolve_app_relative_path(app_filter: str, relative_path: str | Path) -> Pat
 def resolve_workspace_path(relative_path: str | Path) -> Path:
     workspace_dir = application_source_override()
     rel_path = Path(relative_path)
-    if workspace_dir is not None and rel_path.parts and rel_path.parts[0] == workspace_dir.name:
-        return workspace_dir / Path(*rel_path.parts[1:])
+    if workspace_dir is not None:
+        source_roots = set(APP_SOURCE_SUBDIRS.values())
+        if rel_path.parts and rel_path.parts[0] in source_roots:
+            rel_path = Path(*rel_path.parts[1:])
+        return workspace_dir / rel_path
     return _target_microservices_root() / rel_path
 
 

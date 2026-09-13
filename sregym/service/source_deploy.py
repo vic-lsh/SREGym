@@ -322,11 +322,8 @@ def _resolve_app_source_dir(app_name: str, default_dir: Path) -> Path:
     override = os.getenv("SREGYM_APP_SOURCE_DIR", "").strip()
     if not override:
         return default_dir
-    override_dir = Path(override)
     try:
-        expected_name = resolve_app_source_subdir(_sanitize_identifier(app_name).replace("-", "_"))
+        resolve_app_source_subdir(_sanitize_identifier(app_name).replace("-", "_"))
     except ValueError:
         return default_dir
-    if override_dir.name != expected_name:
-        return default_dir
-    return override_dir
+    return Path(override)

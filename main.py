@@ -575,6 +575,7 @@ def main(args):
     init_logger()
 
     agent_model, judge_model = _configure_model_environment(args)
+    os.environ["SREGYM_DEPLOY_FROM_SOURCE"] = "1" if args.deploy_from_source else "0"
 
     if args.noise:
         logger.info("Noise injection enabled.")
@@ -760,6 +761,9 @@ if __name__ == "__main__":
         help="Resume from a previous results CSV file. Problems already in the CSV will be skipped.",
     )
     parser.add_argument("--parallel", type=int, default=1, help="Run benchmark tasks across isolated worker clusters")
+    parser.add_argument("--deploy-from-source", action="store_true")
+    parser.add_argument("--app-filter", type=str, default=None)
+    parser.add_argument("--application-workspace", action="store_true")
     parser.add_argument("--experiment-dir", type=str, default=None, help="Parallel-run directory; reuse it to resume")
     parser.add_argument("--tasklist", type=str, default=None, help="Run problem IDs from a task-list YAML file")
     parser.add_argument("--problem-spec", action="append", default=None, help="Filter selected problem IDs by prefix")
@@ -805,6 +809,8 @@ if __name__ == "__main__":
         parser.error("--sequence-len must not be negative")
     if args.seed_summary and not Path(args.seed_summary).is_file():
         parser.error("--seed-summary must name an existing file")
+    if args.application_workspace and (not args.deploy_from_source or not args.app_filter):
+        parser.error("--application-workspace requires --deploy-from-source and --app-filter")
 
     if not args.worker_child and (
         args.parallel > 1

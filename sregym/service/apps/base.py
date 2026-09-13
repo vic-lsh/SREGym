@@ -2,7 +2,6 @@ import json
 import logging
 from pathlib import Path
 
-from sregym.paths import TARGET_MICROSERVICES
 from sregym.service.app_workspace import resolve_workspace_path
 
 
@@ -43,12 +42,12 @@ class Application:
 
             if chart_path and not self.helm_configs.get("remote_chart", False):
                 self.helm_configs["chart_path"] = str(
-                    self._validated_path(TARGET_MICROSERVICES / chart_path, "Helm chart_path")
+                    self._validated_path(resolve_workspace_path(chart_path), "Helm chart_path")
                 )
 
         if "K8S Deploy Path" in metadata:
             self.k8s_deploy_path = self._validated_path(
-                TARGET_MICROSERVICES / metadata["K8S Deploy Path"], "K8S deploy path"
+                resolve_workspace_path(metadata["K8S Deploy Path"]), "K8S deploy path"
             )
 
     def get_app_json(self) -> dict:

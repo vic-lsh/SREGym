@@ -2,9 +2,9 @@ import logging
 import time
 
 from sregym.generators.workload.wrk2 import Wrk2, Wrk2WorkloadManager
-from sregym.paths import FAULT_SCRIPTS, HOTEL_RES_METADATA, TARGET_MICROSERVICES
-from sregym.service.apps.base import Application
+from sregym.paths import FAULT_SCRIPTS, HOTEL_RES_METADATA
 from sregym.service.app_workspace import resolve_workspace_path
+from sregym.service.apps.base import Application
 from sregym.service.apps.helpers import get_frontend_url
 from sregym.service.kubectl import KubeCtl
 from sregym.service.source_deploy import plan_for_app, source_deploy_enabled
@@ -127,7 +127,11 @@ class HotelReservation(Application):
         self.logger.info(f"Deploying Kubernetes configurations in namespace: {self.namespace}")
         self.create_namespace()
         self.create_configmaps()
-        self.kubectl.apply_configs(self.namespace, self.k8s_deploy_path)
+        if source_deploy_enabled():
+            with plan_for_app(self) as plan:
+                self.kubectl.exec_command(f"kubectl apply -k {plan.manifest_path} -n {self.namespace}")
+        else:
+            self.kubectl.apply_configs(self.namespace, self.k8s_deploy_path)
         if self.mount_failure_scripts:
             self.populate_failure_configmaps()
             self._patch_mongo_failure_script_mounts()
