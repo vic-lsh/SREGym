@@ -81,9 +81,11 @@ class KubernetesAPIProxy:
             self.api_port = int(os.environ.get("KUBERNETES_SERVICE_PORT", "443"))
         else:
             # Running outside the cluster — load from kubeconfig
-            # Always load from the default kubeconfig path, ignoring KUBECONFIG env var
-            # This prevents circular dependency if KUBECONFIG points to our proxy
-            default_kubeconfig = os.path.expanduser("~/.kube/config")
+            # Prefer the supervisor-provided base config so KUBECONFIG may later
+            # point at this proxy without creating a circular dependency.
+            default_kubeconfig = os.environ.get("SREGYM_BASE_KUBECONFIG") or os.environ.get(
+                "KUBECONFIG", os.path.expanduser("~/.kube/config")
+            )
             config.load_kube_config(config_file=default_kubeconfig)
             self.api_host, self.api_port, self.ca_cert, self.client_cert, self.client_key = self._load_cluster_config(
                 kubeconfig_path=default_kubeconfig
