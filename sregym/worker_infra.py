@@ -8,7 +8,6 @@ import platform
 import re
 import shutil
 import subprocess
-import tarfile
 import tempfile
 from contextlib import suppress
 from pathlib import Path
@@ -87,21 +86,32 @@ def ensure_kind_images(cluster_name: str, images: list[str]) -> dict[str, dict[s
 
 
 def platform_image_archive(image: str, platform_name: str) -> tuple[str, str]:
+    del platform_name  # The preceding pull selected the host platform.
     with tempfile.NamedTemporaryFile(prefix="sregym-image-", suffix=".tar", delete=False) as handle:
         archive = handle.name
-    _run(["docker", "buildx", "imagetools", "create", "--platform", platform_name, "--output", archive, image])
-    with tarfile.open(archive, "r") as stream:
-        index_member = stream.extractfile("index.json")
-        if index_member is None:
-            raise RuntimeError(f"platform image archive for {image} has no index.json")
-        index = json.loads(index_member.read().decode("utf-8"))
-    manifests = index.get("manifests")
-    if not isinstance(manifests, list) or len(manifests) != 1:
-        raise RuntimeError(f"platform image archive for {image} must contain one selected manifest")
-    digest = manifests[0].get("digest")
-    if not isinstance(digest, str) or not digest:
-        raise RuntimeError(f"platform image archive for {image} has no selected manifest digest")
-    return archive, digest
+    _run(["docker", "save", "--output", archive, image])
+    return archive, _image_digest(image)
+
+
+def _import_image_archive(node: str, archive: str) -> None:
+    with open(archive, "rb") as stream:
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                "-i",
+                node,
+                "ctr",
+                "--namespace=k8s.io",
+                "images",
+                "import",
+                "--digests",
+                "--snapshotter=overlayfs",
+                "-",
+            ],
+            stdin=stream,
+            check=True,
+        )
 
 
 def ensure_kind_platform_images(
@@ -116,7 +126,8 @@ def ensure_kind_platform_images(
             archive, digest = platform_image_archive(image, platform_name)
             archives.append(archive)
             expected[image] = digest
-            _run(["kind", "load", "image-archive", "--name", cluster_name, archive])
+            for node in _kind_nodes(cluster_name):
+                _import_image_archive(node, archive)
     finally:
         for archive in archives:
             with suppress(OSError):
@@ -212,7 +223,11 @@ def install_calico(cluster_name: str, kubeconfig_path: str) -> None:
         for mirror, target in _CALICO_IMAGE_MIRRORS:
             _run(["docker", "pull", "--platform", target_platform, mirror])
             _run(["docker", "tag", mirror, target])
-        ensure_kind_images(cluster_name, [target for _, target in _CALICO_IMAGE_MIRRORS])
+        ensure_kind_platform_images(
+            cluster_name,
+            [target for _, target in _CALICO_IMAGE_MIRRORS],
+            target_platform,
+        )
         _run(["kubectl", "--kubeconfig", kubeconfig_path, "create", "-f", manifest_path])
     finally:
         with suppress(OSError):
