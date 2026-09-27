@@ -618,6 +618,7 @@ def main(args):
         enable_noise=args.noise,
         defer_cleanup=agent_defer_cleanup,
         preserve_infrastructure=os.getenv("SREGYM_PRESERVE_INFRASTRUCTURE", "").lower() in {"1", "true", "yes"},
+        defer_fault_injection=bool(agent_reg and agent_reg.defer_fault_injection),
     )
     conductor = Conductor(config=conductor_config)
 

@@ -10,3 +10,7 @@ class StartProblemResult(StrEnum):
     SUCCESS = "success"
     SKIPPED_KHAOS_REQUIRED = "skipped_khaos_required"
     SKIPPED_SOURCE_DEPLOY_UNSUPPORTED = "skipped_source_deploy_unsupported"
+
+
+# Stage in which a deployed problem waits for the agent to request fault injection.
+AWAITING_FAULT_INJECTION = "awaiting_fault_injection"

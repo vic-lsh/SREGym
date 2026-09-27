@@ -12,7 +12,7 @@ from pathlib import Path
 
 import yaml
 
-from sregym.conductor.constants import StartProblemResult
+from sregym.conductor.constants import AWAITING_FAULT_INJECTION, StartProblemResult
 from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.oracles.diagnosis_oracle import DiagnosisOracle
 from sregym.conductor.problems.registry import ProblemRegistry
@@ -44,6 +44,9 @@ class ConductorConfig:
     enable_noise: bool = False
     defer_cleanup: bool = False
     preserve_infrastructure: bool = False
+    # Opt-in: deploy the app, then wait for the agent to request injection via
+    # POST /inject_fault (e.g. after it has installed its own monitoring).
+    defer_fault_injection: bool = False
 
 
 class Conductor:
@@ -228,6 +231,7 @@ class Conductor:
         """Inject fault and prepare diagnosis checkpoint if available."""
         problem = self.current_problem
         problem.inject_fault()
+        self.results["fault_injected_at"] = time.time()
         self.logger.info("[ENV] Injected fault")
         self.fault_injected = True
 
@@ -488,10 +492,7 @@ class Conductor:
             except Exception as e:
                 self.logger.warning(f"Failed to update NoiseManager context: {e}")
 
-        # After deployment, advance to the first stage
-        self._advance_to_next_stage(start_index=0)
-
-        self.execution_start_time = time.time()  # Reset: measure agent time only
+        self._begin_agent_stages()
 
         if self.submission_stage and self.submission_stage != "done":
             self.logger.info(f"✅ Deployment complete. Ready for submission. Current stage is: {self.submission_stage}")
@@ -500,6 +501,28 @@ class Conductor:
                 "✅ Deployment complete. No stages configured; problem will complete without agent submission."
             )
         return StartProblemResult.SUCCESS
+
+    def _begin_agent_stages(self):
+        """Inject the fault and open the first stage, unless injection is deferred to the agent."""
+        if self.config.defer_fault_injection and self.stage_sequence:
+            self.waiting_for_agent = False
+            self._deployment_ready_at = time.time()
+            self.submission_stage = AWAITING_FAULT_INJECTION
+            self.logger.info("[STAGE] Deployment ready; awaiting agent request to inject the fault")
+            return
+        # After deployment, advance to the first stage
+        self._advance_to_next_stage(start_index=0)
+        self.execution_start_time = time.time()  # Reset: measure agent time only
+
+    def inject_deferred_fault(self):
+        """Inject a deferred fault on the agent's request and start the incident clock."""
+        if self.submission_stage != AWAITING_FAULT_INJECTION or self.fault_injected:
+            raise RuntimeError(f"fault injection requires {AWAITING_FAULT_INJECTION!r}, got {self.submission_stage!r}")
+        self._advance_to_next_stage(start_index=0)
+        self.execution_start_time = time.time()  # Same TTM origin as an undeferred problem
+        ready_at = getattr(self, "_deployment_ready_at", None)
+        if ready_at is not None:
+            self.results["fault_injection_deferred_seconds"] = self.results["fault_injected_at"] - ready_at
 
     def _submit_evaluate_and_advance(self, sol, current_stage):
         """
@@ -549,7 +572,7 @@ class Conductor:
             except Exception as e:
                 self.logger.warning(f"Failed to restart noise manager: {e}")
 
-    async def submit(self, solution: str | None) -> dict:
+    async def submit(self, solution: str | None, received_at: float | None = None) -> dict:
         """
         Called by CLI or HTTP /submit.  Kicks off evaluation in the
         background and returns immediately.
@@ -588,6 +611,8 @@ class Conductor:
         # Mark that we're no longer waiting so duplicate submits are rejected
         self.waiting_for_agent = False
         self._evaluating = True
+        # When the agent sent this answer, before any API-side retry or oracle time.
+        self.results[f"{current_stage['name']}_submitted_at"] = received_at if received_at is not None else time.time()
 
         # Run evaluation and stage advancement in an executor thread so the HTTP
         # response returns immediately.  Store the future so start_problem() can

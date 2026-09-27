@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import threading
+import time
 
 import pyfiglet
 from fastapi import FastAPI, HTTPException
@@ -14,7 +15,7 @@ from starlette.routing import Mount
 from uvicorn import Config, Server
 
 from logger import console
-from sregym.conductor.constants import MAX_DIAGNOSIS_CANDIDATES
+from sregym.conductor.constants import AWAITING_FAULT_INJECTION, MAX_DIAGNOSIS_CANDIDATES
 
 _conductor = None
 
@@ -143,6 +144,7 @@ async def submit_solution(req: SubmitRequest):
         logger.error(f"Cannot submit at stage: {stage!r}")
         raise HTTPException(status_code=400, detail=f"Cannot submit at stage: {stage!r}")
 
+    received_at = time.time()
     validation_error = _submission_validation_error(req.solution, _conductor.submission_stage)
     if validation_error:
         raise HTTPException(status_code=400, detail=validation_error)
@@ -153,7 +155,7 @@ async def submit_solution(req: SubmitRequest):
     max_wait = 60
     for attempt in range(max_wait):
         try:
-            await _conductor.submit(req.solution)
+            await _conductor.submit(req.solution, received_at=received_at)
             return {"status": "200", "message": "Submission received"}
         except RuntimeError:
             if attempt < max_wait - 1:
@@ -178,6 +180,20 @@ async def get_status():
     stage = _conductor.submission_stage
     logger.debug(f"API returns Current stage: {stage}")
     return {"stage": stage}
+
+
+@app.post("/inject_fault")
+async def inject_fault():
+    """Inject a deferred fault once the agent reports it is ready to observe it."""
+    if _conductor is None:
+        raise HTTPException(status_code=400, detail="No problem has been started")
+    if _conductor.submission_stage != AWAITING_FAULT_INJECTION:
+        raise HTTPException(
+            status_code=409,
+            detail=f"fault injection requires {AWAITING_FAULT_INJECTION}, got {_conductor.submission_stage!r}",
+        )
+    await asyncio.to_thread(_conductor.inject_deferred_fault)
+    return {"status": "ok", "stage": _conductor.submission_stage}
 
 
 @app.post("/cleanup")

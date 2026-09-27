@@ -18,6 +18,7 @@ class AgentRegistration:
     container_isolation: bool = True
     wait_for_natural_exit: bool | None = None
     defer_cleanup: bool | None = None
+    defer_fault_injection: bool | None = None
 
 
 def _ensure_file(path: Path):
@@ -40,6 +41,7 @@ def list_agents(path: Path = DEFAULT_REG_PATH) -> dict[str, AgentRegistration]:
             container_isolation=a.get("container_isolation", True),
             wait_for_natural_exit=a.get("wait_for_natural_exit"),
             defer_cleanup=a.get("defer_cleanup"),
+            defer_fault_injection=a.get("defer_fault_injection"),
         )
     return out
 
