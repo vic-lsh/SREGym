@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import re
 import shutil
@@ -36,6 +37,12 @@ _SOCIAL_MICROSERVICE_CHARTS = (
     "user-timeline-service",
 )
 _BUILT_IMAGES: set[tuple[str, str]] = set()
+# Opt-in (SREGYM_SOURCE_BUILD_CACHE): images carry the digest of their build
+# context, and an unchanged context reuses the local image instead of rebuilding.
+_SOURCE_DIGEST_LABEL = "sregym.source-digest"
+# Repository metadata that changes between runs without changing the app:
+# git history and SDO's operational memory.
+_DIGEST_EXCLUDED_TOP_LEVEL = frozenset({".git", ".sdo", ".sdo-runtime"})
 
 
 class SourceDeployUnsupportedError(RuntimeError):
@@ -81,7 +88,8 @@ class _HotelReservationAdapter(_BaseAdapter):
         if (cluster_name, image_ref) in _BUILT_IMAGES:
             return
         source_dir = self._source_dir()
-        _run_command(
+        _build_image(
+            image_ref,
             [
                 "docker",
                 "build",
@@ -90,7 +98,8 @@ class _HotelReservationAdapter(_BaseAdapter):
                 "-f",
                 str(source_dir / "Dockerfile"),
                 str(source_dir),
-            ]
+            ],
+            context_dir=source_dir,
         )
         _kind_load_image(cluster_name=cluster_name, image_ref=image_ref)
         _BUILT_IMAGES.add((cluster_name, image_ref))
@@ -162,6 +171,7 @@ class _SocialNetworkAdapter(_BaseAdapter):
                     f"{_SOCIAL_APP_IMAGE_NAME}:{tag}",
                     str(source_dir),
                 ],
+                source_dir,
             ),
             (
                 f"{_SOCIAL_NGINX_IMAGE_NAME}:{tag}",
@@ -174,6 +184,7 @@ class _SocialNetworkAdapter(_BaseAdapter):
                     str(nginx_dir / "xenial" / "Dockerfile"),
                     str(nginx_dir),
                 ],
+                nginx_dir,
             ),
             (
                 f"{_SOCIAL_MEDIA_IMAGE_NAME}:{tag}",
@@ -186,12 +197,13 @@ class _SocialNetworkAdapter(_BaseAdapter):
                     str(media_dockerfile),
                     str(media_dir),
                 ],
+                media_dir,
             ),
         )
-        for image_ref, command in build_steps:
+        for image_ref, command, context_dir in build_steps:
             if (cluster_name, image_ref) in _BUILT_IMAGES:
                 continue
-            _run_command(command)
+            _build_image(image_ref, command, context_dir=context_dir)
             _kind_load_image(cluster_name=cluster_name, image_ref=image_ref)
             _BUILT_IMAGES.add((cluster_name, image_ref))
 
@@ -242,6 +254,62 @@ _UNSUPPORTED_APPS: dict[str, str] = {
 
 def source_deploy_enabled() -> bool:
     return os.getenv("SREGYM_DEPLOY_FROM_SOURCE", "").strip().lower() in _TRUE_VALUES
+
+
+def source_build_cache_enabled() -> bool:
+    return os.getenv("SREGYM_SOURCE_BUILD_CACHE", "").strip().lower() in _TRUE_VALUES
+
+
+def source_context_digest(context_dir: Path) -> str:
+    """SHA-256 over the build context's paths, modes, and contents.
+
+    Git history and ``.sdo`` operational memory at the context root are
+    excluded: they change on every run without changing the application.
+    """
+    digest = hashlib.sha256()
+    root = Path(context_dir)
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if relative.parts[0] in _DIGEST_EXCLUDED_TOP_LEVEL:
+            continue
+        name = relative.as_posix().encode()
+        if path.is_symlink():
+            digest.update(b"L\0" + name + b"\0" + os.readlink(path).encode() + b"\0")
+        elif path.is_file():
+            executable = b"x" if os.access(path, os.X_OK) else b"-"
+            digest.update(b"F\0" + name + b"\0" + executable + b"\0")
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1 << 20), b""):
+                    digest.update(chunk)
+            digest.update(b"\0")
+        elif path.is_dir():
+            digest.update(b"D\0" + name + b"\0")
+    return digest.hexdigest()
+
+
+def _local_image_digest_label(image_ref: str) -> str | None:
+    template = '{{ index .Config.Labels "' + _SOURCE_DIGEST_LABEL + '" }}'
+    result = subprocess.run(
+        ["docker", "image", "inspect", "--format", template, image_ref],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def _build_image(image_ref: str, command: list[str], *, context_dir: Path) -> None:
+    """Build ``image_ref``, or reuse the local image when its build context is unchanged."""
+    if not source_build_cache_enabled():
+        _run_command(command)
+        return
+    context_digest = source_context_digest(context_dir)
+    if _local_image_digest_label(image_ref) == context_digest:
+        print(f"Reusing {image_ref}: build context {context_digest[:12]} is unchanged")
+        return
+    _run_command([*command[:2], "--label", f"{_SOURCE_DIGEST_LABEL}={context_digest}", *command[2:]])
 
 
 def source_image_tag(app_name: str, cluster_name: str) -> str:
