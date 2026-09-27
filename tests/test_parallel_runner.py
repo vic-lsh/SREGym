@@ -162,3 +162,64 @@ def test_worker_waits_for_supervisor_ack_before_next_task(tmp_path, monkeypatch)
     acknowledgement.put(None)
     worker.join(timeout=2)
     assert not worker.is_alive()
+
+
+def test_worker_id_offset_selects_cluster_and_host_ports(tmp_path, monkeypatch):
+    """Concurrent single-worker runs on different clusters must not share a cluster or a host port."""
+
+    import subprocess
+
+    from sregym.parallel_runner import _run_child
+
+    monkeypatch.setenv("SREGYM_WORKER_ID_OFFSET", "2")
+    clusters = []
+    monkeypatch.setattr(
+        "sregym.parallel_runner.create_worker_cluster",
+        lambda worker_id, root: clusters.append(worker_id) or ("luna-w2", "kubeconfig"),
+    )
+    monkeypatch.setattr("sregym.parallel_runner.delete_worker_cluster", lambda *args: None)
+    seen = []
+    monkeypatch.setattr(
+        "sregym.parallel_runner._run_child",
+        lambda args, task, worker_id, root, kubeconfig, cluster_name: seen.append((worker_id, cluster_name))
+        or RunResult(task, worker_id, 0, 1.0, str(tmp_path), True),
+    )
+    tasks = queue.Queue()
+    tasks.put(RunTask(0, "target_port"))
+    tasks.put(None)
+    acknowledgement = queue.Queue()
+    acknowledgement.put(None)
+    _worker(_args_for_tests(), 0, tmp_path, tasks, queue.Queue(), acknowledgement, threading.Event())
+    assert clusters == [2]
+    assert seen == [(0, "luna-w2")]
+
+    envs = []
+    monkeypatch.setattr("sregym.parallel_runner._child_command", lambda args, task: ["true"])
+    monkeypatch.setattr(
+        "sregym.parallel_runner.subprocess.run",
+        lambda *args, env, **kwargs: envs.append(env) or subprocess.CompletedProcess(args, 1),
+    )
+    result = _run_child(_args_for_tests(), RunTask(0, "target_port"), 0, tmp_path, "kubeconfig", "luna-w2")
+
+    assert envs[0]["SREGYM_WORKER_ID"] == "2"
+    assert envs[0]["API_PORT"] == "8002"
+    assert envs[0]["MCP_SERVER_PORT"] == "9956"
+    # The local results layout is unchanged.
+    assert result.result_dir.endswith("worker_0")
+
+
+def test_without_offset_worker_ids_and_ports_are_unchanged(tmp_path, monkeypatch):
+    import subprocess
+
+    from sregym.parallel_runner import _run_child
+
+    monkeypatch.delenv("SREGYM_WORKER_ID_OFFSET", raising=False)
+    envs = []
+    monkeypatch.setattr("sregym.parallel_runner._child_command", lambda args, task: ["true"])
+    monkeypatch.setattr(
+        "sregym.parallel_runner.subprocess.run",
+        lambda *args, env, **kwargs: envs.append(env) or subprocess.CompletedProcess(args, 1),
+    )
+    _run_child(_args_for_tests(), RunTask(0, "target_port"), 1, tmp_path, "kubeconfig", "sregym-w1")
+
+    assert (envs[0]["SREGYM_WORKER_ID"], envs[0]["API_PORT"], envs[0]["MCP_SERVER_PORT"]) == ("1", "8001", "9955")

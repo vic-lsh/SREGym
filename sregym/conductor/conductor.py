@@ -22,11 +22,11 @@ from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.generators.noise.manager import get_noise_manager
 from sregym.observer.jaeger import Jaeger
 from sregym.observer.otel_collector import OtelCollector
-from sregym.paths import CLUSTER_BASELINE_STATE_FILE
+from sregym.paths import cluster_baseline_state_file
 from sregym.service.apps.app_registry import AppRegistry
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.dm_flakey_manager import DmFlakeyManager
-from sregym.service.k8s_proxy import KubernetesAPIProxy
+from sregym.service.k8s_proxy import KubernetesAPIProxy, agent_proxy_port, verify_agent_kubeconfig
 from sregym.service.khaos import KhaosController
 from sregym.service.kubectl import KubeCtl
 from sregym.service.mcp_server import MCPServer
@@ -94,7 +94,7 @@ class Conductor:
         # Kubernetes API proxy to hide chaos engineering namespaces and load generators from agents
         self.k8s_proxy = KubernetesAPIProxy(
             hidden_namespaces={"chaos-mesh", "khaos"},
-            listen_port=16443,
+            listen_port=agent_proxy_port(),
         )
         self._agent_kubeconfig_path: str | None = None
 
@@ -142,6 +142,18 @@ class Conductor:
         self.k8s_proxy.start()
         self._agent_kubeconfig_path = self.k8s_proxy.generate_agent_kubeconfig()
         self.logger.info(f"Agent kubeconfig generated at: {self._agent_kubeconfig_path}")
+        self._verify_agent_kubeconfig()
+
+    def _verify_agent_kubeconfig(self):
+        """Abort unless the agents' kubeconfig reaches only this experiment's cluster."""
+        path = getattr(self, "_agent_kubeconfig_path", None)
+        if path is None:
+            return  # no filtering proxy started, so no agent kubeconfig to check
+        verify_agent_kubeconfig(
+            path,
+            listen_port=self.k8s_proxy.listen_port,
+            cluster_name=os.environ.get("SREGYM_KIND_CLUSTER_NAME", "").strip() or None,
+        )
 
     def stop_k8s_proxy(self):
         """Stop the Kubernetes API proxy."""
@@ -254,6 +266,7 @@ class Conductor:
     def _inject_fault(self):
         """Inject fault and prepare diagnosis checkpoint if available."""
         problem = self.current_problem
+        self._verify_agent_kubeconfig()
         problem.inject_fault()
         self.results["fault_injected_at"] = time.time()
         self.logger.info("[ENV] Injected fault")
@@ -912,11 +925,11 @@ class Conductor:
         # everything added during a problem run (including infrastructure drift).
         warm_infrastructure = self.config.preserve_infrastructure and self._warm_infrastructure_ready()
         if not self._baseline_captured:
-            if warm_infrastructure and self.cluster_state.load_baseline_state(CLUSTER_BASELINE_STATE_FILE):
+            if warm_infrastructure and self.cluster_state.load_baseline_state(cluster_baseline_state_file()):
                 self.logger.info("[DEPLOY] Loaded persisted cluster baseline state")
             else:
                 self.logger.info("[DEPLOY] Capturing current cluster baseline state...")
-                self.cluster_state.save_baseline_state(CLUSTER_BASELINE_STATE_FILE)
+                self.cluster_state.save_baseline_state(cluster_baseline_state_file())
             self._baseline_captured = True
 
         if warm_infrastructure:
@@ -928,7 +941,7 @@ class Conductor:
                     "kubectl create configmap sregym-warm-infrastructure -n default "
                     "--from-literal=ready=true --dry-run=client -o yaml | kubectl apply -f -"
                 )
-                self.cluster_state.save_baseline_state(CLUSTER_BASELINE_STATE_FILE)
+                self.cluster_state.save_baseline_state(cluster_baseline_state_file())
                 self.logger.info("[DEPLOY] Preserved shared infrastructure as the cleanup baseline")
 
         self.logger.info("[DEPLOY] Deploying and starting workload")

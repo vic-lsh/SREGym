@@ -15,6 +15,38 @@ LLM_CACHE_FILE = CACHE_DIR / "llm_cache.json"
 # Cluster baseline state snapshot (captured from a fresh cluster)
 CLUSTER_BASELINE_STATE_FILE = CACHE_DIR / "cluster_baseline_state.json"
 
+
+#: Root of the fault injectors' backup files (original manifests restored on recovery).
+FAULT_SCRATCH_ROOT = Path("/tmp")
+
+
+def fault_scratch_path(name: str) -> str:
+    """Path of one fault-injector backup file, private to the cluster this process drives.
+
+    Concurrent experiments injecting the same fault on different clusters would
+    otherwise read, overwrite, or apply each other's backups. Without a cluster
+    name, the legacy ``/tmp/<name>`` path is used.
+    """
+
+    cluster = os.environ.get("SREGYM_KIND_CLUSTER_NAME", "").strip()
+    directory = FAULT_SCRATCH_ROOT / f"sregym-{cluster}" if cluster else FAULT_SCRATCH_ROOT
+    directory.mkdir(parents=True, exist_ok=True)
+    return str(directory / name)
+
+
+def cluster_baseline_state_file() -> Path:
+    """Baseline snapshot of the cluster this process drives.
+
+    Keyed by ``SREGYM_KIND_CLUSTER_NAME`` so concurrent experiments on different
+    clusters never load each other's baseline and reconcile away resources the
+    other cluster needs. Without a cluster name, the legacy shared file is used.
+    """
+
+    cluster = os.environ.get("SREGYM_KIND_CLUSTER_NAME", "").strip()
+    if not cluster:
+        return CLUSTER_BASELINE_STATE_FILE
+    return CACHE_DIR / f"cluster_baseline_state.{cluster}.json"
+
 # Fault scripts
 FAULT_SCRIPTS = BASE_DIR / "generators" / "fault" / "script"
 

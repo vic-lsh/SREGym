@@ -9,7 +9,7 @@ import yaml
 from kubernetes.client.rest import ApiException
 
 from sregym.generators.fault.base import FaultInjector
-from sregym.paths import TARGET_MICROSERVICES
+from sregym.paths import TARGET_MICROSERVICES, fault_scratch_path
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
 
@@ -201,7 +201,7 @@ class VirtualizationFaultInjector(FaultInjector):
     def recover_pvc_claim_mismatch(self, microservices: list[str]):
         """Restore the original Deployment YAML saved in /tmp/{svc}_modified.yaml."""
         for service in microservices:
-            orig_path = f"/tmp/{service}_modified.yaml"
+            orig_path = fault_scratch_path(f"{service}_modified.yaml")
             self.kubectl.exec_command(f"kubectl delete deployment {service} -n {self.namespace}")
             self.kubectl.exec_command(f"kubectl apply -f {orig_path} -n {self.namespace}")
             print(f"[{service}] Restored original claimName.")
@@ -909,7 +909,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def recover_liveness_probe_too_aggressive(self, microservices: list[str]):
         for service in microservices:
-            original_yaml_path = f"/tmp/{service}_modified.yaml"
+            original_yaml_path = fault_scratch_path(f"{service}_modified.yaml")
 
             delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
             apply_command = f"kubectl apply -f {original_yaml_path} -n {self.namespace}"
@@ -990,7 +990,7 @@ class VirtualizationFaultInjector(FaultInjector):
     def recover_missing_configmap(self, microservices: list[str]):
         for microservice in microservices:
             configmap_name = self.required_configmap(microservice)
-            backup_path = f"/tmp/{microservice}_modified.yaml"
+            backup_path = fault_scratch_path(f"{microservice}_modified.yaml")
 
             apply_cmd = f"kubectl apply -f {backup_path} -n {self.namespace}"
             self.kubectl.exec_command(apply_cmd)
@@ -1010,7 +1010,7 @@ class VirtualizationFaultInjector(FaultInjector):
             print(f"Read original config from {service} pod")
 
             # Save the original config to a file for recovery
-            original_config_path = f"/tmp/{service}-original-config.json"
+            original_config_path = fault_scratch_path(f"{service}-original-config.json")
             with open(original_config_path, "w") as f:
                 json.dump(original_config, f, indent=2)
             print(f"Saved original config to {original_config_path}")
@@ -1086,7 +1086,7 @@ class VirtualizationFaultInjector(FaultInjector):
             configmap_name = f"{service}-config"
 
             # Read the saved original config instead of trying to read from the pod
-            original_config_path = f"/tmp/{service}-original-config.json"
+            original_config_path = fault_scratch_path(f"{service}-original-config.json")
             with open(original_config_path) as f:
                 original_config = json.load(f)
             print(f"Read original config from saved file: {original_config_path}")
@@ -1137,7 +1137,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def recover_readiness_probe_misconfiguration(self, microservices: list[str]):
         for service in microservices:
-            original_yaml_path = f"/tmp/{service}_modified.yaml"
+            original_yaml_path = fault_scratch_path(f"{service}_modified.yaml")
 
             delete_command = f"kubectl delete deployment {service} -n {self.namespace} --ignore-not-found=true"
             apply_command = f"kubectl apply -f {original_yaml_path} -n {self.namespace}"
@@ -1190,7 +1190,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def recover_liveness_probe_misconfiguration(self, microservices: list[str]):
         for service in microservices:
-            original_yaml_path = f"/tmp/{service}_modified.yaml"
+            original_yaml_path = fault_scratch_path(f"{service}_modified.yaml")
 
             delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
             apply_command = f"kubectl apply -f {original_yaml_path} -n {self.namespace}"
@@ -1448,7 +1448,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def recover_env_variable_shadowing(self, microservices: list[str]):
         for service in microservices:
-            original_yaml_path = f"/tmp/{service}_modified.yaml"
+            original_yaml_path = fault_scratch_path(f"{service}_modified.yaml")
 
             delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
             apply_command = f"kubectl apply -f {original_yaml_path} -n {self.namespace}"
@@ -1531,7 +1531,7 @@ class VirtualizationFaultInjector(FaultInjector):
             self._wait_for_deployment_rollout(service)
             print(f"Healthy baseline rollout completed for `{service}`")
 
-            orig_path = f"/tmp/{service}-orig.yaml"
+            orig_path = fault_scratch_path(f"{service}-orig.yaml")
             with open(orig_path, "w") as f:
                 yaml.safe_dump(base_dep, f)
 
@@ -1560,7 +1560,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def recover_rolling_update_misconfigured(self, microservices: list[str]):
         for service in microservices:
-            original_yaml_path = f"/tmp/{service}-orig.yaml"
+            original_yaml_path = fault_scratch_path(f"{service}-orig.yaml")
 
             delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
             delete_result = self.kubectl.exec_command(delete_command)
@@ -1809,7 +1809,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def recover_persistent_volume_affinity_violation(self, microservices: list[str]):
         for service in microservices:
-            original_yaml_path = f"/tmp/{service}_modified.yaml"
+            original_yaml_path = fault_scratch_path(f"{service}_modified.yaml")
 
             delete_command = f"kubectl delete --ignore-not-found=true deployment {service} -n {self.namespace}"
             delete_pv_command = "kubectl delete --ignore-not-found=true pv temp-pv"
@@ -2038,7 +2038,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def recover_rbac_misconfiguration(self, microservices: list[str]):
         for service in microservices:
-            original_yaml_path = f"/tmp/{service}-original_modified.yaml"
+            original_yaml_path = fault_scratch_path(f"{service}-original_modified.yaml")
 
             self.kubectl.exec_command(
                 f"kubectl delete deployment {service} -n {self.namespace} --ignore-not-found=true"
@@ -2524,7 +2524,7 @@ class VirtualizationFaultInjector(FaultInjector):
             if not annotations:
                 meta.pop("annotations", None)
 
-            snapshot_path = f"/tmp/{service}_init_dep_hang_original.yaml"
+            snapshot_path = fault_scratch_path(f"{service}_init_dep_hang_original.yaml")
             with open(snapshot_path, "w") as fh:
                 yaml.safe_dump(original, fh)
             print(f"Saved pre-injection deployment to {snapshot_path}")
@@ -2556,7 +2556,7 @@ class VirtualizationFaultInjector(FaultInjector):
             existing_inits.append(init_container)
             tmpl_spec["initContainers"] = existing_inits
 
-            faulty_path = f"/tmp/{service}_init_dep_hang_faulty.yaml"
+            faulty_path = fault_scratch_path(f"{service}_init_dep_hang_faulty.yaml")
             with open(faulty_path, "w") as fh:
                 yaml.safe_dump(original, fh)
 
@@ -2574,7 +2574,7 @@ class VirtualizationFaultInjector(FaultInjector):
         injected init container has already been removed by the agent — the
         round-trip apply is idempotent."""
         for service in microservices:
-            snapshot_path = f"/tmp/{service}_init_dep_hang_original.yaml"
+            snapshot_path = fault_scratch_path(f"{service}_init_dep_hang_original.yaml")
             if not Path(snapshot_path).exists():
                 # Fall back to stripping our marker init container from whatever
                 # is currently deployed.
@@ -2662,7 +2662,7 @@ class VirtualizationFaultInjector(FaultInjector):
         return yaml.dump(values_yaml)
 
     def _apply_modified_yaml(self, service_name: str, modified_yaml: str):
-        modified_yaml_path = f"/tmp/{service_name}-values.yaml"
+        modified_yaml_path = fault_scratch_path(f"{service_name}-values.yaml")
         with open(modified_yaml_path, "w") as f:
             f.write(modified_yaml)
 
@@ -2699,7 +2699,7 @@ class VirtualizationFaultInjector(FaultInjector):
         """Helper function to write YAML content to a temporary file."""
         import yaml
 
-        file_path = f"/tmp/{service_name}_modified.yaml"
+        file_path = fault_scratch_path(f"{service_name}_modified.yaml")
         with open(file_path, "w") as file:
             yaml.dump(yaml_content, file)
         return file_path

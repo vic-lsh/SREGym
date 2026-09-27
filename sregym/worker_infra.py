@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import json
 import logging
@@ -16,6 +18,37 @@ import yaml
 
 KIND_CLUSTER_PREFIX = os.getenv("SREGYM_KIND_CLUSTER_PREFIX", "sregym-w")
 _REUSE_KUBECONFIG_DIR = os.path.expanduser("~/.cache/sregym/kubeconfigs")
+_LOCK_DIR = os.path.expanduser("~/.cache/sregym/locks")
+
+
+class ClusterInUseError(RuntimeError):
+    """Another experiment on this host already drives the cluster."""
+
+
+@contextlib.contextmanager
+def cluster_lock(cluster_name: str):
+    """Hold an exclusive host-wide lock on one cluster for a worker's lifetime.
+
+    The cluster name, conductor and MCP ports, filtering-proxy port, agent
+    kubeconfig path, and fault scratch directory all derive from the same
+    worker ID, so one lock per cluster keeps concurrent experiments from
+    sharing any of them.
+    """
+
+    os.makedirs(_LOCK_DIR, exist_ok=True)
+    path = os.path.join(_LOCK_DIR, f"{cluster_name}.lock")
+    with open(path, "a+", encoding="utf-8") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            handle.seek(0)
+            owner = handle.read().strip() or "unknown"
+            raise ClusterInUseError(f"cluster {cluster_name} is already in use by another experiment ({owner})") from exc
+        handle.seek(0)
+        handle.truncate()
+        handle.write(f"pid {os.getpid()}")
+        handle.flush()
+        yield
 _REUSE_BOOL_TRUE = {"1", "true", "yes", "on"}
 _CALICO_URL = "https://raw.githubusercontent.com/projectcalico/calico/v3.27.4/manifests/calico.yaml"
 _CALICO_SHA256 = ""
