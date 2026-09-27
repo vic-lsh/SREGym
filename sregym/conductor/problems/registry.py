@@ -164,6 +164,9 @@ class ProblemRegistry:
             "init_container_dependency_hang_social_network": lambda: InitContainerDependencyHang(app_name="social_network", faulty_service="user-service"),
             "init_container_dependency_hang_astronomy_shop": lambda: InitContainerDependencyHang(app_name="astronomy_shop", faulty_service="frontend"),
             "missing_configmap_hotel_reservation": lambda: MissingConfigMap(app_name="hotel_reservation", faulty_service="mongodb-geo"),
+            # Same root-cause class as missing_configmap_hotel_reservation, different parameters.
+            "missing_configmap_mongodb_rate_hotel_reservation": lambda: MissingConfigMap(app_name="hotel_reservation", faulty_service="mongodb-rate"),
+            "missing_configmap_mongodb_geo_rate_hotel_reservation": lambda: MissingConfigMap(app_name="hotel_reservation", faulty_service=["mongodb-geo", "mongodb-rate"]),
             "missing_configmap_social_network": lambda: MissingConfigMap(app_name="social_network", faulty_service="media-mongodb"),
             "missing_service_astronomy_shop": lambda: MissingService(app_name="astronomy_shop", faulty_service="ad"),
             "missing_service_hotel_reservation": lambda: MissingService(app_name="hotel_reservation", faulty_service="mongodb-rate"),

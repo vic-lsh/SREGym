@@ -924,22 +924,56 @@ class VirtualizationFaultInjector(FaultInjector):
 
             print(f"Recovered from liveness probe too aggressive fault for service: {service}")
 
-    # V.14 - Injects an environment variable leak by deleting a ConfigMap and restarting the associated deployment.
+    # Required ConfigMaps that each supported workload mounts as a non-optional volume,
+    # keyed by namespace and then by Deployment name.
+    REQUIRED_CONFIGMAPS: dict[str, dict[str, str]] = {
+        "hotel-reservation": {
+            "mongodb-geo": "mongo-geo-script",
+            "mongodb-rate": "mongo-rate-script",
+        },
+        "social-network": {
+            "media-mongodb": "media-mongodb",
+        },
+    }
+    # Historical fallback for workloads without a known required ConfigMap.
+    _DEFAULT_MISSING_CONFIGMAP = {
+        "hotel-reservation": "mongo-geo-script",
+        "social-network": "media-mongodb",
+    }
+    _SERVER_MANAGED_METADATA = ("uid", "resourceVersion", "creationTimestamp", "managedFields", "generation")
+
+    def required_configmap(self, microservice: str) -> str:
+        """Return the ConfigMap the given workload requires in this injector's namespace."""
+        known = self.REQUIRED_CONFIGMAPS.get(self.namespace, {})
+        if microservice in known:
+            return known[microservice]
+        if self.namespace in self._DEFAULT_MISSING_CONFIGMAP:
+            return self._DEFAULT_MISSING_CONFIGMAP[self.namespace]
+        raise ValueError(f"Unknown namespace: {self.namespace}")
+
+    @classmethod
+    def _restorable_configmap(cls, configmap: dict) -> dict:
+        """Drop server-managed metadata so the backup re-applies after the object was recreated."""
+        restorable = copy.deepcopy(configmap)
+        metadata = restorable.get("metadata") or {}
+        for field in cls._SERVER_MANAGED_METADATA:
+            metadata.pop(field, None)
+        annotations = metadata.get("annotations") or {}
+        annotations.pop("kubectl.kubernetes.io/last-applied-configuration", None)
+        if not annotations:
+            metadata.pop("annotations", None)
+        return restorable
+
+    # V.14 - Deletes the ConfigMap a workload requires and restarts the workload so its new pod cannot mount it.
     def inject_missing_configmap(self, microservices: list[str]):
         for microservice in microservices:
-            configmap_name = None
-            if self.namespace == "social-network":
-                configmap_name = "media-mongodb"
-            elif self.namespace == "hotel-reservation":
-                configmap_name = "mongo-geo-script"
-            else:
-                raise ValueError(f"Unknown namespace: {self.namespace}")
+            configmap_name = self.required_configmap(microservice)
 
             get_cmd = f"kubectl get configmap {configmap_name} -n {self.namespace} -o yaml"
             original_yaml = self.kubectl.exec_command(get_cmd)
             parsed_yaml = yaml.safe_load(original_yaml)
 
-            self._write_yaml_to_file(microservice, parsed_yaml)
+            self._write_yaml_to_file(microservice, self._restorable_configmap(parsed_yaml))
 
             delete_cmd = f"kubectl delete configmap {configmap_name} -n {self.namespace}"
             self.kubectl.exec_command(delete_cmd)
@@ -955,8 +989,8 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def recover_missing_configmap(self, microservices: list[str]):
         for microservice in microservices:
-            configmap_name = f"{microservice}"
-            backup_path = f"/tmp/{configmap_name}_modified.yaml"
+            configmap_name = self.required_configmap(microservice)
+            backup_path = f"/tmp/{microservice}_modified.yaml"
 
             apply_cmd = f"kubectl apply -f {backup_path} -n {self.namespace}"
             self.kubectl.exec_command(apply_cmd)
