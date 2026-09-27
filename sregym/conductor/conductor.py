@@ -36,6 +36,10 @@ from sregym.service.telemetry.prometheus import Prometheus
 from sregym.warm_infrastructure import marker_is_ready
 
 
+class SubmissionWhileEvaluating(RuntimeError):
+    """A submission arrived while the previous stage was still being graded."""
+
+
 @dataclass
 class ConductorConfig:
     """Configuration for Conductor deployment options."""
@@ -608,11 +612,10 @@ class Conductor:
 
         if not self.waiting_for_agent:
             if self._evaluating:
-                self.logger.info(
-                    "submit() called while evaluation is already in progress for "
-                    f"stage '{self.submission_stage}'. Submission was already accepted."
+                # Never acknowledge and drop: the API holds the request until the next stage opens.
+                raise SubmissionWhileEvaluating(
+                    f"stage '{self.submission_stage}' is still being evaluated; the submission was not recorded"
                 )
-                return {"status": "ok", "message": "Submission already accepted; evaluation in progress."}
             self.logger.error(
                 "submit() called when conductor is not waiting for a submission. "
                 f"Current submission_stage={self.submission_stage}"
