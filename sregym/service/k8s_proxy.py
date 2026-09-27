@@ -460,7 +460,9 @@ class KubernetesAPIProxy:
         }
 
         if output_path is None:
-            output_path = os.path.join(tempfile.gettempdir(), "sregym-agent-kubeconfig")
+            # One file per proxy port: concurrent conductors must not overwrite each other's agent
+            # kubeconfig, or an agent is silently pointed at another cluster's proxy.
+            output_path = os.path.join(tempfile.gettempdir(), f"sregym-agent-kubeconfig-p{self.listen_port}")
 
         with open(output_path, "w") as f:
             yaml.dump(kubeconfig, f)
