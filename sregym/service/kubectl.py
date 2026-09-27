@@ -497,6 +497,13 @@ class KubeCtl:
         """Delete a specified namespace."""
         try:
             self.core_v1_api.delete_namespace(name=namespace)
+            if os.getenv("SREGYM_FAST_NAMESPACE_TEARDOWN", "").strip().lower() in {"1", "true", "yes"}:
+                # Opt-in: the namespace is terminating, so controllers no longer
+                # recreate pods; drop them without their termination grace period.
+                try:
+                    self.core_v1_api.delete_collection_namespaced_pod(namespace, grace_period_seconds=0)
+                except Exception as e:
+                    logger.warning(f"Fast pod teardown in '{namespace}' failed; waiting normally: {e}")
             self.wait_for_namespace_deletion(namespace)
             logger.info(f"Namespace '{namespace}' deleted successfully.")
         except ApiException as e:
