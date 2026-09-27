@@ -26,7 +26,7 @@ from clients.harness.problem_id import HARNESS_ARTIFACT_ID_ENV, HARNESS_PROBLEM_
 from logger import console, init_logger
 from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents
-from sregym.conductor.conductor import Conductor, ConductorConfig
+from sregym.conductor.conductor import Conductor, ConductorConfig, defer_diagnosis_grading_enabled
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.problem_sets import PROBLEM_SETS
@@ -619,6 +619,7 @@ def main(args):
         defer_cleanup=agent_defer_cleanup,
         preserve_infrastructure=os.getenv("SREGYM_PRESERVE_INFRASTRUCTURE", "").lower() in {"1", "true", "yes"},
         defer_fault_injection=bool(agent_reg and agent_reg.defer_fault_injection),
+        defer_diagnosis_grading=defer_diagnosis_grading_enabled(),
     )
     conductor = Conductor(config=conductor_config)
 

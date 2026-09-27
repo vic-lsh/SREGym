@@ -47,6 +47,28 @@ class ConductorConfig:
     # Opt-in: deploy the app, then wait for the agent to request injection via
     # POST /inject_fault (e.g. after it has installed its own monitoring).
     defer_fault_injection: bool = False
+    # Opt-in: accept the diagnosis and open the mitigation stage at once, grading
+    # the diagnosis with the same oracle in the background. Teardown waits for
+    # the verdict, so published results are unchanged; only the agent stops
+    # waiting on the LLM judge.
+    defer_diagnosis_grading: bool = False
+
+
+_TRUTHY = {"1", "true", "yes"}
+
+
+def defer_diagnosis_grading_enabled() -> bool:
+    """Whether ``SREGYM_DEFER_DIAGNOSIS_GRADING`` opts into deferred diagnosis grading."""
+    return os.getenv("SREGYM_DEFER_DIAGNOSIS_GRADING", "").strip().lower() in _TRUTHY
+
+
+def _deferred_grading_timeout() -> float:
+    raw = os.getenv("SREGYM_DEFERRED_GRADING_TIMEOUT_SECONDS", "1800")
+    try:
+        timeout = float(raw)
+    except ValueError:
+        return 1800.0
+    return timeout if timeout > 0 else 1800.0
 
 
 class Conductor:
@@ -87,6 +109,8 @@ class Conductor:
         self.submission_stage = None
         self.results = {}
         self._submit_future = None  # Future for the executor running _submit_evaluate_and_advance
+        # Background diagnosis grading when config.defer_diagnosis_grading is on.
+        self._diagnosis_future: concurrent.futures.Future | None = None
         self._cleanup_lock = threading.Lock()
         self._cleanup_timer: threading.Timer | None = None
 
@@ -256,7 +280,8 @@ class Conductor:
             r = {"success": False, "error": f"{type(e).__name__}: {e}"}
         r["submission"] = solution
         self.results["Diagnosis"] = r
-        self.results["TTL"] = time.time() - self.execution_start_time
+        if not self.results.get("diagnosis_grading_deferred"):
+            self.results["TTL"] = time.time() - self.execution_start_time
         self.logger.info(
             f"[EVAL] Diagnosis "
             f"{'Succeed' if self.results['Diagnosis'].get('success') else 'Failed'}\n "
@@ -393,8 +418,37 @@ class Conductor:
             self._cancel_cleanup_watchdog()
             self.logger.info("[STAGE] Done, starting teardown")
             self.submission_stage = "tearing_down"
+            self._join_deferred_diagnosis()
             self._cleanup_sync()
             self.logger.info("[STAGE] Teardown complete")
+
+    def _start_deferred_diagnosis(self, solution) -> None:
+        """Grade the diagnosis in the background with the unchanged oracle."""
+        self.results["diagnosis_grading_deferred"] = True
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="diagnosis-grading")
+        self._diagnosis_future = executor.submit(self._evaluate_diagnosis, solution)
+        executor.shutdown(wait=False)
+        self.logger.info("[STAGE] Diagnosis accepted; grading continues in the background")
+
+    def _join_deferred_diagnosis(self) -> None:
+        """Wait for a deferred diagnosis verdict so teardown sees complete results."""
+        future = self._diagnosis_future
+        if future is None:
+            return
+        timeout = _deferred_grading_timeout()
+        self.logger.info("[WAIT] Waiting for deferred diagnosis grading before teardown...")
+        try:
+            future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            self.logger.error(f"Deferred diagnosis grading did not finish within {timeout:.0f}s")
+            self.results.setdefault(
+                "Diagnosis",
+                {"success": False, "error": f"deferred diagnosis grading timed out after {timeout:.0f}s"},
+            )
+        except Exception as e:  # _evaluate_diagnosis records oracle errors itself
+            self.logger.exception("Deferred diagnosis grading raised")
+            self.results.setdefault("Diagnosis", {"success": False, "error": f"{type(e).__name__}: {e}"})
+        self._diagnosis_future = None
 
     def force_cleanup(self) -> None:
         """Run deferred teardown exactly once."""
@@ -436,6 +490,9 @@ class Conductor:
             await asyncio.wrap_future(self._submit_future)
             self.logger.info("[WAIT] Previous problem's cleanup finished")
         self._submit_future = None
+        if self._diagnosis_future is not None:
+            await asyncio.wrap_future(self._diagnosis_future)
+        self._diagnosis_future = None
 
         self.execution_start_time = time.time()
         self.problem = self.problems.get_problem_instance(self.problem_id)
@@ -613,6 +670,19 @@ class Conductor:
         self._evaluating = True
         # When the agent sent this answer, before any API-side retry or oracle time.
         self.results[f"{current_stage['name']}_submitted_at"] = received_at if received_at is not None else time.time()
+
+        next_index = self.current_stage_index + 1
+        if (
+            self.config.defer_diagnosis_grading
+            and current_stage["name"] == "diagnosis"
+            and next_index < len(self.stage_sequence)
+        ):
+            # TTL is the time to the answer; the judge's latency is not the agent's.
+            self.results["TTL"] = self.results["diagnosis_submitted_at"] - self.execution_start_time
+            self._start_deferred_diagnosis(sol)
+            self._evaluating = False
+            self._advance_to_next_stage(start_index=next_index)
+            return {"status": "ok", "message": "Submission received"}
 
         # Run evaluation and stage advancement in an executor thread so the HTTP
         # response returns immediately.  Store the future so start_problem() can
