@@ -20,12 +20,15 @@ import json
 import logging
 import os
 import ssl
+import subprocess
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
 from urllib.parse import urlparse
 
 import urllib3
+import yaml
 from kubernetes import config
 
 logger = logging.getLogger("all.infra.k8s_proxy")
@@ -485,6 +488,48 @@ def get_proxy() -> KubernetesAPIProxy:
     if _proxy_instance is None:
         _proxy_instance = KubernetesAPIProxy()
     return _proxy_instance
+
+
+class AgentKubeconfigMismatch(RuntimeError):
+    """The kubeconfig handed to agents does not reach this experiment's own cluster."""
+
+
+def verify_agent_kubeconfig(
+    path: str,
+    *,
+    listen_port: int,
+    cluster_name: str | None,
+    runner: Any = subprocess.run,
+) -> None:
+    """Fail loudly unless the agent kubeconfig reaches this conductor's proxy and cluster.
+
+    The agent kubeconfig (mounted into agent containers, and ``KUBECONFIG`` for
+    host-side agents) must name exactly this proxy's port, and, for a kind
+    cluster, every node seen through it must belong to ``cluster_name``.
+    """
+
+    with open(path, encoding="utf-8") as stream:
+        document = yaml.safe_load(stream) or {}
+    servers = [str((item.get("cluster") or {}).get("server")) for item in document.get("clusters") or []]
+    expected = f"http://127.0.0.1:{listen_port}"
+    if servers != [expected]:
+        raise AgentKubeconfigMismatch(f"agent kubeconfig {path} targets {servers}, expected this proxy {expected}")
+    if not cluster_name:
+        return
+    completed = runner(
+        ["kubectl", "--kubeconfig", path, "get", "nodes", "-o", "name", "--request-timeout=20s"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    nodes = [line.strip().removeprefix("node/") for line in completed.stdout.splitlines() if line.strip()]
+    foreign = [node for node in nodes if not node.startswith(f"{cluster_name}-")]
+    if completed.returncode != 0 or not nodes or foreign:
+        details = completed.stderr.strip() if completed.returncode != 0 else f"nodes {foreign or nodes}"
+        raise AgentKubeconfigMismatch(
+            f"agent kubeconfig {path} does not reach cluster {cluster_name} only: {details}"
+        )
+    logger.info("Agent kubeconfig %s verified: port %s reaches only %s", path, listen_port, cluster_name)
 
 
 def agent_proxy_port() -> int:

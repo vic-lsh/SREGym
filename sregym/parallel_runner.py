@@ -43,7 +43,7 @@ from sregym.service.app_workspace import (
     application_workspace_seed_override,
     prepare_application_workspace,
 )
-from sregym.worker_infra import create_worker_cluster, delete_worker_cluster
+from sregym.worker_infra import KIND_CLUSTER_PREFIX, cluster_lock, create_worker_cluster, delete_worker_cluster
 
 
 @dataclass(frozen=True)
@@ -321,17 +321,19 @@ def _worker(
 ) -> None:
     cluster_name = ""
     try:
-        cluster_name, kubeconfig = create_worker_cluster(cluster_worker_id(worker_id), str(root))
-        while not stop.is_set():
-            task = tasks.get()
-            if task is None:
-                break
-            results.put(_run_child(args, task, worker_id, root, kubeconfig, cluster_name))
-            acknowledgement.get()
+        with cluster_lock(f"{KIND_CLUSTER_PREFIX}{cluster_worker_id(worker_id)}"):
+            try:
+                cluster_name, kubeconfig = create_worker_cluster(cluster_worker_id(worker_id), str(root))
+                while not stop.is_set():
+                    task = tasks.get()
+                    if task is None:
+                        break
+                    results.put(_run_child(args, task, worker_id, root, kubeconfig, cluster_name))
+                    acknowledgement.get()
+            finally:
+                delete_worker_cluster(cluster_name)
     except Exception as exc:
         results.put(("worker_error", worker_id, str(exc)))
-    finally:
-        delete_worker_cluster(cluster_name)
 
 
 _MANIFEST_FIELDS = (

@@ -26,7 +26,7 @@ from sregym.paths import cluster_baseline_state_file
 from sregym.service.apps.app_registry import AppRegistry
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.dm_flakey_manager import DmFlakeyManager
-from sregym.service.k8s_proxy import KubernetesAPIProxy, agent_proxy_port
+from sregym.service.k8s_proxy import KubernetesAPIProxy, agent_proxy_port, verify_agent_kubeconfig
 from sregym.service.khaos import KhaosController
 from sregym.service.kubectl import KubeCtl
 from sregym.service.mcp_server import MCPServer
@@ -118,6 +118,18 @@ class Conductor:
         self.k8s_proxy.start()
         self._agent_kubeconfig_path = self.k8s_proxy.generate_agent_kubeconfig()
         self.logger.info(f"Agent kubeconfig generated at: {self._agent_kubeconfig_path}")
+        self._verify_agent_kubeconfig()
+
+    def _verify_agent_kubeconfig(self):
+        """Abort unless the agents' kubeconfig reaches only this experiment's cluster."""
+        path = getattr(self, "_agent_kubeconfig_path", None)
+        if path is None:
+            return  # no filtering proxy started, so no agent kubeconfig to check
+        verify_agent_kubeconfig(
+            path,
+            listen_port=self.k8s_proxy.listen_port,
+            cluster_name=os.environ.get("SREGYM_KIND_CLUSTER_NAME", "").strip() or None,
+        )
 
     def stop_k8s_proxy(self):
         """Stop the Kubernetes API proxy."""
@@ -230,6 +242,7 @@ class Conductor:
     def _inject_fault(self):
         """Inject fault and prepare diagnosis checkpoint if available."""
         problem = self.current_problem
+        self._verify_agent_kubeconfig()
         problem.inject_fault()
         self.results["fault_injected_at"] = time.time()
         self.logger.info("[ENV] Injected fault")
