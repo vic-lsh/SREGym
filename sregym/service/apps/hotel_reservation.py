@@ -146,8 +146,11 @@ class HotelReservation(Application):
         self.kubectl.delete_namespace(self.namespace)
 
         self.kubectl.wait_for_namespace_deletion(self.namespace)
+        # Match the claim's namespace exactly: a substring match would also
+        # delete volumes of unrelated namespaces such as ``hotel-reservation-sdo``.
         pvs = self.kubectl.exec_command(
-            "kubectl get pv --no-headers | grep 'hotel-reservation' | awk '{print $1}'"
+            "kubectl get pv -o jsonpath='{range .items[*]}{.metadata.name}{\" \"}{.spec.claimRef.namespace}{\"\\n\"}{end}'"
+            f" | awk '$2 == \"{self.namespace}\" {{print $1}}'"
         ).splitlines()
 
         for pv in pvs:
