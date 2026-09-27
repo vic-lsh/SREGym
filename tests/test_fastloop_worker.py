@@ -82,8 +82,13 @@ class FakeProxy:
         return output_path or "/tmp/agent-kubeconfig"
 
 
-def _worker(fakes: Fakes, proxies: list[FakeProxy] | None = None) -> FastloopWorker:
+def _worker(
+    fakes: Fakes,
+    proxies: list[FakeProxy] | None = None,
+    verified: list[tuple[str, int]] | None = None,
+) -> FastloopWorker:
     created = proxies if proxies is not None else []
+    checks = verified if verified is not None else []
 
     def proxy_factory(hidden_namespaces: set[str], listen_port: int) -> FakeProxy:
         proxy = FakeProxy(hidden_namespaces=hidden_namespaces, listen_port=listen_port)
@@ -97,6 +102,7 @@ def _worker(fakes: Fakes, proxies: list[FakeProxy] | None = None) -> FastloopWor
         cluster_factory=fakes.cluster,
         proxy_factory=proxy_factory,
         prompt_builder=lambda app_info, api_base: f"{app_info['app_name']} in {app_info['namespace']} via {api_base}",
+        kubeconfig_verifier=lambda path, port: checks.append((path, port)),
     )
 
 
@@ -212,3 +218,91 @@ def test_codex_prompt_is_built_by_the_benchmark_client_for_the_given_endpoint() 
     prompt = worker.handle({"op": "codex_prompt", "problem_id": "p", "api_base": "http://127.0.0.1:18765"})
 
     assert prompt == {"prompt": "Hotel Reservation in hotel-reservation via http://127.0.0.1:18765"}
+
+
+def test_agent_kubeconfig_is_verified_at_proxy_start_and_again_before_each_injection() -> None:
+    verified: list[tuple[str, int]] = []
+    worker = _worker(Fakes(), verified=verified)
+
+    worker.handle({"op": "inject", "problem_id": "p"})
+    assert verified == []  # no agent proxy yet, nothing handed to an agent
+
+    worker.handle({"op": "proxy", "port": 26443, "kubeconfig": "/k"})
+    worker.handle({"op": "proxy", "port": 26443, "kubeconfig": "/k"})
+    worker.handle({"op": "inject", "problem_id": "p"})
+
+    assert verified == [("/k", 26443), ("/k", 26443)]
+
+
+def test_a_crossed_agent_kubeconfig_fails_the_proxy_request_and_is_not_handed_out() -> None:
+    def crossed(path: str, port: int) -> None:
+        raise RuntimeError(f"{path} does not reach fastloop-w0 only")
+
+    worker = FastloopWorker(
+        problem_factory=Fakes().problem,
+        deployer=Fakes().deploy,
+        health_probe=Fakes().health,
+        cluster_factory=Fakes().cluster,
+        proxy_factory=lambda hidden, port: FakeProxy(hidden_namespaces=hidden, listen_port=port),
+        kubeconfig_verifier=crossed,
+    )
+    replies = io.StringIO()
+
+    serve(worker, io.StringIO(json.dumps({"id": 1, "op": "proxy", "port": 26443, "kubeconfig": "/k"}) + "\n"), replies)
+
+    reply = json.loads(replies.getvalue())
+    assert reply["ok"] is False and "fastloop-w0 only" in reply["error"]
+
+
+def test_production_deploy_persists_the_baseline_to_the_requested_per_run_file(monkeypatch, tmp_path) -> None:
+    import sregym.conductor.conductor as conductor_module
+    from sregym.fastloop import worker as worker_module
+
+    seen: list[object] = []
+
+    class RecordingConductor:
+        def __init__(self, config) -> None:
+            self.mcp_server = type("Mcp", (), {"deploy": lambda self: None})()
+
+        def deploy_app(self) -> None:
+            seen.append(conductor_module.cluster_baseline_state_file())
+
+    monkeypatch.setattr(conductor_module, "Conductor", RecordingConductor)
+    # _deploy rebinds the conductor's baseline-path function; restore it after the test.
+    monkeypatch.setattr(conductor_module, "cluster_baseline_state_file", conductor_module.cluster_baseline_state_file)
+    monkeypatch.setenv("SREGYM_KIND_CLUSTER_NAME", "fastloop-w0")
+    baseline = tmp_path / "cluster_baseline_state.json"
+
+    worker_module._deploy(FakeProblem(), str(baseline))
+
+    assert seen == [baseline]
+
+
+def test_the_worker_holds_its_cluster_lock_so_a_second_driver_fails_loudly(monkeypatch, tmp_path) -> None:
+    import sregym.worker_infra as worker_infra
+    from sregym.fastloop.worker import cluster_lock_from_environment
+
+    monkeypatch.setattr(worker_infra, "_LOCK_DIR", str(tmp_path))
+    monkeypatch.setenv("SREGYM_KIND_CLUSTER_NAME", "fastloop-w0")
+
+    with (
+        cluster_lock_from_environment(),
+        pytest.raises(worker_infra.ClusterInUseError),
+        worker_infra.cluster_lock("fastloop-w0"),
+    ):
+        pass
+    with worker_infra.cluster_lock("fastloop-w0"):
+        pass  # released with the worker
+
+
+def test_without_a_cluster_name_the_worker_takes_no_lock(monkeypatch, tmp_path) -> None:
+    import sregym.worker_infra as worker_infra
+    from sregym.fastloop.worker import cluster_lock_from_environment
+
+    monkeypatch.setattr(worker_infra, "_LOCK_DIR", str(tmp_path))
+    monkeypatch.delenv("SREGYM_KIND_CLUSTER_NAME", raising=False)
+
+    with cluster_lock_from_environment():
+        pass
+
+    assert list(tmp_path.iterdir()) == []

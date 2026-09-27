@@ -19,12 +19,13 @@ Run: ``python -m sregym.fastloop.worker`` from the SREGym root, with ``KUBECONFI
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import IO, Any, Protocol
 
 logger = logging.getLogger("all.sregym.fastloop")
@@ -57,6 +58,8 @@ class _Proxy(Protocol):
 
 ProxyFactory = Callable[[set[str], int], _Proxy]
 PromptBuilder = Callable[[dict[str, Any], str], str]
+#: Raises unless the agent kubeconfig at ``path`` reaches only this proxy ``port`` and this cluster.
+KubeconfigVerifier = Callable[[str, int], None]
 #: Namespaces the conductor's agent proxy always hides (``Conductor.__init__``).
 BENCHMARK_HIDDEN_NAMESPACES = frozenset({"chaos-mesh", "khaos"})
 
@@ -73,6 +76,7 @@ class FastloopWorker:
         cluster_factory: ClusterFactory,
         proxy_factory: ProxyFactory | None = None,
         prompt_builder: PromptBuilder | None = None,
+        kubeconfig_verifier: KubeconfigVerifier | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self._problem_factory = problem_factory
@@ -81,6 +85,7 @@ class FastloopWorker:
         self._cluster_factory = cluster_factory
         self._proxy_factory = proxy_factory
         self._prompt_builder = prompt_builder
+        self._kubeconfig_verifier = kubeconfig_verifier
         self._clock = clock
         self._incident: _Problem | None = None
         self._proxy: dict[str, Any] | None = None
@@ -133,13 +138,18 @@ class FastloopWorker:
         if self._proxy_factory is None:
             raise RuntimeError("this worker has no agent proxy")
         hidden = set(BENCHMARK_HIDDEN_NAMESPACES) | {str(name) for name in request.get("hide", [])}
-        proxy = self._proxy_factory(hidden, int(request["port"]))
+        port = int(request["port"])
+        proxy = self._proxy_factory(hidden, port)
         proxy.start()
-        self._proxy = {
-            "kubeconfig": proxy.generate_agent_kubeconfig(str(request["kubeconfig"])),
-            "port": int(request["port"]),
-        }
+        started = {"kubeconfig": proxy.generate_agent_kubeconfig(str(request["kubeconfig"])), "port": port}
+        # The conductor's crossover guard: never hand an agent a kubeconfig that reaches another cluster.
+        self._verify_agent_kubeconfig(started)
+        self._proxy = started
         return self._proxy
+
+    def _verify_agent_kubeconfig(self, proxy: dict[str, Any]) -> None:
+        if self._kubeconfig_verifier is not None:
+            self._kubeconfig_verifier(str(proxy["kubeconfig"]), int(proxy["port"]))
 
     def _codex_prompt(self, request: dict[str, Any]) -> dict[str, Any]:
         if self._prompt_builder is None:
@@ -153,6 +163,9 @@ class FastloopWorker:
         # A fresh instance per incident, as SREGym constructs one per problem run; its oracle
         # snapshots the healthy deployment before the fault.
         problem = self._problem_factory(str(request["problem_id"]))
+        if self._proxy is not None:
+            # As the conductor does right before ``inject_fault``.
+            self._verify_agent_kubeconfig(self._proxy)
         self._incident = problem
         started = self._clock()
         problem.inject_fault()
@@ -224,8 +237,9 @@ def _deploy(problem: _Problem, baseline_path: str) -> None:
 
     import sregym.conductor.conductor as conductor_module
 
-    # The persisted baseline is per cluster, never the host-wide default other runs use.
-    conductor_module.CLUSTER_BASELINE_STATE_FILE = Path(baseline_path)
+    # The persisted baseline is this run's own file, never a host-wide or per-cluster default
+    # another run on the same cluster name could share.
+    conductor_module.cluster_baseline_state_file = lambda: Path(baseline_path)
     conductor = conductor_module.Conductor(
         conductor_module.ConductorConfig(deploy_loki=False, preserve_infrastructure=True)
     )
@@ -256,6 +270,15 @@ def production_worker() -> FastloopWorker:
 
         return KubernetesAPIProxy(hidden_namespaces=hidden_namespaces, listen_port=listen_port)
 
+    def kubeconfig_verifier(path: str, listen_port: int) -> None:
+        from sregym.service.k8s_proxy import verify_agent_kubeconfig
+
+        verify_agent_kubeconfig(
+            path,
+            listen_port=listen_port,
+            cluster_name=os.environ.get("SREGYM_KIND_CLUSTER_NAME", "").strip() or None,
+        )
+
     return FastloopWorker(
         problem_factory=problem_factory,
         deployer=_deploy,
@@ -263,7 +286,26 @@ def production_worker() -> FastloopWorker:
         cluster_factory=cluster_factory,
         proxy_factory=proxy_factory,
         prompt_builder=_codex_prompt,
+        kubeconfig_verifier=kubeconfig_verifier,
     )
+
+
+@contextlib.contextmanager
+def cluster_lock_from_environment() -> Iterator[None]:
+    """Hold the host-wide lock on ``SREGYM_KIND_CLUSTER_NAME`` for the worker's lifetime.
+
+    The same lock the parallel runner holds per cluster, so a fast loop and a benchmark
+    experiment (or two fast loops) never drive one cluster at once.
+    """
+
+    cluster = os.environ.get("SREGYM_KIND_CLUSTER_NAME", "").strip()
+    if not cluster:
+        yield
+        return
+    from sregym.worker_infra import cluster_lock
+
+    with cluster_lock(cluster):
+        yield
 
 
 def _codex_prompt(app_info: dict[str, Any], api_base: str) -> str:
@@ -293,7 +335,8 @@ def main() -> int:
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
     sys.stdout = sys.stderr
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    serve(production_worker(), sys.stdin, replies)
+    with cluster_lock_from_environment():
+        serve(production_worker(), sys.stdin, replies)
     return 0
 
 
