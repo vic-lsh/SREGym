@@ -18,6 +18,8 @@ from logger import console
 from sregym.conductor.constants import AWAITING_FAULT_INJECTION, MAX_DIAGNOSIS_CANDIDATES
 
 _conductor = None
+#: How long a submission that arrives during a previous stage's evaluation waits for the next stage.
+SUBMIT_WAIT_SECONDS = 600
 
 submit_mcp = FastMCP("Submit MCP Server")
 
@@ -45,7 +47,7 @@ async def submit_via_conductor(ans: str | list[str]) -> dict[str, str]:
     if validation_error:
         return {"status": "error", "text": validation_error}
 
-    max_wait = 60
+    max_wait = SUBMIT_WAIT_SECONDS
     for attempt in range(max_wait):
         try:
             await _conductor.submit(ans)
@@ -151,11 +153,13 @@ async def submit_solution(req: SubmitRequest):
 
     # The conductor evaluates submissions asynchronously. If a previous stage
     # is still being evaluated, waiting_for_agent will be False and submit()
-    # raises RuntimeError.  Retry for up to 60s to handle this race.
-    max_wait = 60
+    # raises RuntimeError. Hold the request until the next stage opens (judge
+    # grading can take minutes). A submission accepted after waiting is stamped
+    # when it was accepted, exactly like an agent that polled /status first.
+    max_wait = SUBMIT_WAIT_SECONDS
     for attempt in range(max_wait):
         try:
-            await _conductor.submit(req.solution, received_at=received_at)
+            await _conductor.submit(req.solution, received_at=received_at if attempt == 0 else time.time())
             return {"status": "200", "message": "Submission received"}
         except RuntimeError:
             if attempt < max_wait - 1:
