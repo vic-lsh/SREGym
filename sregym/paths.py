@@ -15,6 +15,20 @@ LLM_CACHE_FILE = CACHE_DIR / "llm_cache.json"
 # Cluster baseline state snapshot (captured from a fresh cluster)
 CLUSTER_BASELINE_STATE_FILE = CACHE_DIR / "cluster_baseline_state.json"
 
+
+def cluster_baseline_state_file() -> Path:
+    """Baseline snapshot of the cluster this process drives.
+
+    Keyed by ``SREGYM_KIND_CLUSTER_NAME`` so concurrent experiments on different
+    clusters never load each other's baseline and reconcile away resources the
+    other cluster needs. Without a cluster name, the legacy shared file is used.
+    """
+
+    cluster = os.environ.get("SREGYM_KIND_CLUSTER_NAME", "").strip()
+    if not cluster:
+        return CLUSTER_BASELINE_STATE_FILE
+    return CACHE_DIR / f"cluster_baseline_state.{cluster}.json"
+
 # Fault scripts
 FAULT_SCRIPTS = BASE_DIR / "generators" / "fault" / "script"
 

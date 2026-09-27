@@ -22,11 +22,11 @@ from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.generators.noise.manager import get_noise_manager
 from sregym.observer.jaeger import Jaeger
 from sregym.observer.otel_collector import OtelCollector
-from sregym.paths import CLUSTER_BASELINE_STATE_FILE
+from sregym.paths import cluster_baseline_state_file
 from sregym.service.apps.app_registry import AppRegistry
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.dm_flakey_manager import DmFlakeyManager
-from sregym.service.k8s_proxy import KubernetesAPIProxy
+from sregym.service.k8s_proxy import KubernetesAPIProxy, agent_proxy_port
 from sregym.service.khaos import KhaosController
 from sregym.service.kubectl import KubeCtl
 from sregym.service.mcp_server import MCPServer
@@ -72,7 +72,7 @@ class Conductor:
         # Kubernetes API proxy to hide chaos engineering namespaces and load generators from agents
         self.k8s_proxy = KubernetesAPIProxy(
             hidden_namespaces={"chaos-mesh", "khaos"},
-            listen_port=16443,
+            listen_port=agent_proxy_port(),
         )
         self._agent_kubeconfig_path: str | None = None
 
@@ -842,11 +842,11 @@ class Conductor:
         # everything added during a problem run (including infrastructure drift).
         warm_infrastructure = self.config.preserve_infrastructure and self._warm_infrastructure_ready()
         if not self._baseline_captured:
-            if warm_infrastructure and self.cluster_state.load_baseline_state(CLUSTER_BASELINE_STATE_FILE):
+            if warm_infrastructure and self.cluster_state.load_baseline_state(cluster_baseline_state_file()):
                 self.logger.info("[DEPLOY] Loaded persisted cluster baseline state")
             else:
                 self.logger.info("[DEPLOY] Capturing current cluster baseline state...")
-                self.cluster_state.save_baseline_state(CLUSTER_BASELINE_STATE_FILE)
+                self.cluster_state.save_baseline_state(cluster_baseline_state_file())
             self._baseline_captured = True
 
         if warm_infrastructure:
@@ -858,7 +858,7 @@ class Conductor:
                     "kubectl create configmap sregym-warm-infrastructure -n default "
                     "--from-literal=ready=true --dry-run=client -o yaml | kubectl apply -f -"
                 )
-                self.cluster_state.save_baseline_state(CLUSTER_BASELINE_STATE_FILE)
+                self.cluster_state.save_baseline_state(cluster_baseline_state_file())
                 self.logger.info("[DEPLOY] Preserved shared infrastructure as the cleanup baseline")
 
         self.logger.info("[DEPLOY] Deploying and starting workload")

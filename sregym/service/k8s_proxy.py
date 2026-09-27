@@ -485,6 +485,16 @@ def get_proxy() -> KubernetesAPIProxy:
     return _proxy_instance
 
 
+def agent_proxy_port() -> int:
+    """Filtering-proxy port for this worker: ``16443 + SREGYM_WORKER_ID``.
+
+    The proxy binds a host port, so concurrent conductors need distinct ones.
+    """
+
+    raw = os.environ.get("SREGYM_WORKER_ID", "").strip()
+    return 16443 + (int(raw) if raw else 0)
+
+
 def start_proxy(
     hidden_namespaces: set[str] | None = None,
     hidden_labels: dict[str, set[str]] | None = None,

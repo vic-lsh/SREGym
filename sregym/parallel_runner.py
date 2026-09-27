@@ -228,6 +228,22 @@ def _manifest_row_is_complete(row: dict[str, str]) -> bool:
     return False
 
 
+def cluster_worker_id(worker_id: int) -> int:
+    """Host-wide worker ID: the local worker ID plus ``SREGYM_WORKER_ID_OFFSET``.
+
+    It selects the kind cluster (``<prefix><id>``) and the host ports (conductor
+    API ``8000 + id``, MCP ``9954 + id``, filtering proxy ``16443 + id``), so
+    concurrent experiments on different clusters never share either. The local
+    results layout (``worker_<local id>``) is unchanged.
+    """
+
+    raw = os.environ.get("SREGYM_WORKER_ID_OFFSET", "").strip()
+    offset = int(raw) if raw else 0
+    if offset < 0:
+        raise ValueError(f"SREGYM_WORKER_ID_OFFSET must be non-negative, got {offset}")
+    return worker_id + offset
+
+
 def _run_child(
     args: Any,
     task: RunTask,
@@ -240,13 +256,14 @@ def _run_child(
     task_dir.mkdir(parents=True, exist_ok=True)
     log_path = task_dir / "worker.log"
     env = os.environ.copy()
-    api_port = 8000 + worker_id
-    mcp_port = 9954 + worker_id
+    host_worker_id = cluster_worker_id(worker_id)
+    api_port = 8000 + host_worker_id
+    mcp_port = 9954 + host_worker_id
     env.update(
         {
             "KUBECONFIG": kubeconfig,
             "SREGYM_BASE_KUBECONFIG": kubeconfig,
-            "SREGYM_WORKER_ID": str(worker_id),
+            "SREGYM_WORKER_ID": str(host_worker_id),
             "API_PORT": str(api_port),
             "MCP_SERVER_PORT": str(mcp_port),
             "MCP_SERVER_URL": f"http://127.0.0.1:{mcp_port}",
@@ -304,7 +321,7 @@ def _worker(
 ) -> None:
     cluster_name = ""
     try:
-        cluster_name, kubeconfig = create_worker_cluster(worker_id, str(root))
+        cluster_name, kubeconfig = create_worker_cluster(cluster_worker_id(worker_id), str(root))
         while not stop.is_set():
             task = tasks.get()
             if task is None:
