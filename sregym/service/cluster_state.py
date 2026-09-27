@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -21,6 +22,38 @@ logger.setLevel(logging.DEBUG)
 # without it the conductor wipes the chaos-mesh helm release and CRDs after
 # every problem and the next noise injection silently fails.
 PROTECTED_NAMESPACES = frozenset({"kube-system", "kube-public", "kube-node-lease", "default", "sregym", "chaos-mesh"})
+
+
+# Opt-in, runner-controlled namespace preservation. When set, namespaces
+# labelled ``<label>=true`` (and the PersistentVolumes bound to their claims)
+# survive per-problem reconciliation. Agents that keep one long-running
+# operator per application across problems (SDO's persistent controller) use
+# this; unset, reconciliation is unchanged for every other agent.
+PRESERVE_NAMESPACE_LABEL_ENV = "SREGYM_PRESERVE_NAMESPACE_LABEL"
+
+
+def preserved_namespace_names(core_v1) -> set[str]:
+    """Namespaces the runner asked reconciliation to keep, or none when not opted in."""
+    label = os.environ.get(PRESERVE_NAMESPACE_LABEL_ENV, "").strip()
+    if not label:
+        return set()
+    namespaces = core_v1.list_namespace(label_selector=f"{label}=true")
+    return {namespace.metadata.name for namespace in namespaces.items}
+
+
+def reconcilable_namespaces(current: set[str], *, baseline: set[str], preserved: set[str]) -> set[str]:
+    return current - baseline - PROTECTED_NAMESPACES - preserved
+
+
+def reconcilable_persistent_volumes(volumes, *, baseline: set[str], preserved: set[str]) -> set[str]:
+    names: set[str] = set()
+    for volume in volumes:
+        name = volume.metadata.name
+        claim = getattr(volume.spec, "claim_ref", None) if volume.spec is not None else None
+        if name in baseline or (claim is not None and claim.namespace in preserved):
+            continue
+        names.add(name)
+    return names
 
 
 def _is_chaos_mesh_resource(name: str) -> bool:
@@ -207,7 +240,16 @@ class ClusterStateManager:
 
         # 1. Delete unexpected namespaces
         current_namespaces = self._get_namespaces()
-        unexpected_namespaces = current_namespaces - self.baseline.namespaces - PROTECTED_NAMESPACES
+        try:
+            preserved = preserved_namespace_names(self.core_v1)
+        except ApiException as e:
+            logger.warning(f"Failed to list preserved namespaces: {e}")
+            preserved = set()
+        if preserved:
+            logger.info(f"Preserving opted-in namespaces: {sorted(preserved)}")
+        unexpected_namespaces = reconcilable_namespaces(
+            current_namespaces, baseline=self.baseline.namespaces, preserved=preserved
+        )
         for ns in unexpected_namespaces:
             logger.info(f"Deleting unexpected namespace: {ns}")
             try:
@@ -250,8 +292,15 @@ class ClusterStateManager:
                     logger.warning(f"Failed to delete ClusterRoleBinding {binding}: {e}")
 
         # 4. Delete unexpected PersistentVolumes
-        current_pvs = self._get_persistent_volumes()
-        unexpected_pvs = current_pvs - self.baseline.persistent_volumes
+        try:
+            unexpected_pvs = reconcilable_persistent_volumes(
+                self.core_v1.list_persistent_volume().items,
+                baseline=self.baseline.persistent_volumes,
+                preserved=preserved,
+            )
+        except ApiException as e:
+            logger.error(f"Failed to list PersistentVolumes: {e}")
+            unexpected_pvs = set()
         for pv in unexpected_pvs:
             logger.info(f"Deleting unexpected PersistentVolume: {pv}")
             try:
