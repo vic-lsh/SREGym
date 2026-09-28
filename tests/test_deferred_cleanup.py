@@ -45,3 +45,36 @@ def test_final_stage_defers_teardown_until_cleanup_signal(monkeypatch) -> None:
 
     assert conductor.submission_stage == "awaiting_cleanup"
     assert started == [True]
+
+
+def test_a_recovery_error_is_recorded_and_teardown_still_runs() -> None:
+    """A composite raises its components' recovery errors; the conductor must not stop at them."""
+    events: list[str] = []
+
+    class _App:
+        def cleanup(self) -> None:
+            events.append("undeploy")
+
+    class _Problem:
+        app = _App()
+
+        def recover_fault(self) -> None:
+            events.append("recover")
+            raise ExceptionGroup("composite_x: recovery failed for a", [RuntimeError("a failed")])
+
+    logged: list[str] = []
+    conductor = Conductor.__new__(Conductor)
+    conductor.config = ConductorConfig()
+    conductor.problem = _Problem()
+    conductor.results = {}
+    conductor._baseline_captured = False
+    conductor.logger = type(
+        "Logger", (), {"info": lambda *args: None, "exception": lambda _self, message: logged.append(message)}
+    )()
+
+    conductor._cleanup_sync()
+
+    assert events == ["recover", "undeploy"]
+    assert conductor.submission_stage == "done"
+    assert "composite_x: recovery failed for a" in conductor.results["fault_recovery_error"]
+    assert logged

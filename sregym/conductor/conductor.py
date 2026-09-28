@@ -391,8 +391,14 @@ class Conductor:
         # Recover fault using the captured problem reference
         if problem:
             self.logger.info("[CLEANUP] Recovering fault...")
-            problem.recover_fault()
-            self.logger.info("[CLEANUP] Fault recovered")
+            try:
+                problem.recover_fault()
+                self.logger.info("[CLEANUP] Fault recovered")
+            except Exception as e:
+                # A composite raises every component's recovery error together (single problems
+                # only warn); record it and still undeploy and reconcile.
+                self.results["fault_recovery_error"] = f"{type(e).__name__}: {e}"
+                self.logger.exception(f"[CLEANUP] Fault recovery failed: {e}")
 
         # Undeploy app using the captured problem reference
         self.logger.info("[CLEANUP] Undeploying app...")
