@@ -159,6 +159,16 @@ class Conductor:
             cluster_name=os.environ.get("SREGYM_KIND_CLUSTER_NAME", "").strip() or None,
         )
 
+    def _scope_agent_exec(self, problem):
+        """Limit proxied exec/attach/port-forward to this problem's application namespaces."""
+        proxy = getattr(self, "k8s_proxy", None)
+        if proxy is None:
+            return  # no filtering proxy, so nothing to scope
+        app = getattr(problem, "app", None)
+        proxy.exec_namespaces = set(getattr(app, "namespaces", None) or [app.namespace]) if app is not None else set()
+        if proxy.allow_exec:
+            self.logger.info(f"Agent exec allowed in namespaces: {sorted(proxy.exec_namespaces)}")
+
     def stop_k8s_proxy(self):
         """Stop the Kubernetes API proxy."""
         self.logger.info("Stopping Kubernetes API filtering proxy...")
@@ -271,6 +281,7 @@ class Conductor:
         """Inject fault and prepare diagnosis checkpoint if available."""
         problem = self.current_problem
         self._verify_agent_kubeconfig()
+        self._scope_agent_exec(problem)
         problem.inject_fault()
         self.results["fault_injected_at"] = time.time()
         self.logger.info("[ENV] Injected fault")

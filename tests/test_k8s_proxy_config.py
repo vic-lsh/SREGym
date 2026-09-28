@@ -52,3 +52,21 @@ def test_agent_kubeconfigs_of_concurrent_workers_do_not_share_a_file(monkeypatch
     assert first != second
     assert "16443" in open(first).read()
     assert "16444" in open(second).read()
+
+
+def test_conductor_scopes_agent_exec_to_the_problem_app_namespaces() -> None:
+    from types import SimpleNamespace
+
+    from sregym.conductor.conductor import Conductor
+
+    conductor = Conductor.__new__(Conductor)
+    conductor.k8s_proxy = SimpleNamespace(exec_namespaces={"stale"}, allow_exec=False)
+    conductor._scope_agent_exec(SimpleNamespace(app=SimpleNamespace(namespace="hotel-reservation")))
+    assert conductor.k8s_proxy.exec_namespaces == {"hotel-reservation"}
+
+    composite = SimpleNamespace(namespace="a", namespaces=["a", "b"])
+    conductor._scope_agent_exec(SimpleNamespace(app=composite))
+    assert conductor.k8s_proxy.exec_namespaces == {"a", "b"}
+
+    conductor._scope_agent_exec(SimpleNamespace(app=None))
+    assert conductor.k8s_proxy.exec_namespaces == set()
