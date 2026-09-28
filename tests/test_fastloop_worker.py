@@ -306,3 +306,70 @@ def test_without_a_cluster_name_the_worker_takes_no_lock(monkeypatch, tmp_path) 
         pass
 
     assert list(tmp_path.iterdir()) == []
+
+
+def test_composed_faults_stay_injected_together_and_recover_one_at_a_time() -> None:
+    fakes = Fakes(healthy=True)
+    worker = _worker(fakes)
+
+    first = worker.handle({"op": "inject", "problem_id": "a"})
+    second = worker.handle({"op": "inject", "problem_id": "b", "compose": True})
+    partial = worker.handle({"op": "recover", "fault": 1})
+    remaining = worker.handle({"op": "recover"})
+
+    assert (first["fault"], second["fault"]) == (0, 1)
+    assert partial["recovered"] == [1]
+    assert remaining["recovered"] == [0]
+    assert [problem.events for problem in fakes.problems] == [["inject", "recover"], ["inject", "recover"]]
+
+
+def test_recovering_a_composition_reverts_every_fault_in_reverse_order() -> None:
+    fakes = Fakes(healthy=True)
+    worker = _worker(fakes)
+    order: list[int] = []
+    for index, problem_id in enumerate(("a", "b", "c")):
+        worker.handle({"op": "inject", "problem_id": problem_id, "compose": index > 0})
+        fakes.problems[index].recover_fault = lambda index=index: order.append(index)
+
+    assert worker.handle({"op": "recover"})["recovered"] == [2, 1, 0]
+    assert order == [2, 1, 0]
+    with pytest.raises(RuntimeError, match="no injected incident"):
+        worker.handle({"op": "recover"})
+
+
+def test_a_fault_is_recovered_at_most_once() -> None:
+    fakes = Fakes(healthy=True)
+    worker = _worker(fakes)
+    worker.handle({"op": "inject", "problem_id": "a"})
+    worker.handle({"op": "inject", "problem_id": "b", "compose": True})
+    worker.handle({"op": "recover", "fault": 0})
+
+    with pytest.raises(ValueError, match="fault 0 is already recovered"):
+        worker.handle({"op": "recover", "fault": 0})
+    with pytest.raises(ValueError, match="no fault 5"):
+        worker.handle({"op": "recover", "fault": 5})
+
+
+def test_the_oracle_of_a_composition_passes_only_when_every_fault_is_mitigated() -> None:
+    fakes = Fakes(healthy=True)
+    worker = _worker(fakes)
+    worker.handle({"op": "inject", "problem_id": "a"})
+    worker.handle({"op": "inject", "problem_id": "b", "compose": True})
+    fakes.problems[1].mitigation_oracle = FakeOracle(success=False)
+
+    combined = worker.handle({"op": "oracle"})
+    single = worker.handle({"op": "oracle", "fault": 0})
+
+    assert combined["success"] is False
+    assert [part["success"] for part in combined["details"]["faults"]] == [True, False]
+    assert single == {"kind": "sregym-mitigation-oracle", "success": True, "details": {"success": True}}
+
+
+def test_a_new_uncomposed_injection_starts_a_fresh_composition() -> None:
+    fakes = Fakes(healthy=True)
+    worker = _worker(fakes)
+    worker.handle({"op": "inject", "problem_id": "a"})
+    worker.handle({"op": "recover"})
+
+    assert worker.handle({"op": "inject", "problem_id": "b"})["fault"] == 0
+    assert worker.handle({"op": "recover"})["recovered"] == [0]

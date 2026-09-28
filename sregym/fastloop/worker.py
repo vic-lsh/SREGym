@@ -4,9 +4,12 @@ A driver outside SREGym runs many incidents against one warm deployment:
 
     cluster  -> create or reuse the kind cluster (``sregym.worker_infra``)
     deploy   -> shared infrastructure + application + workload, skipped while the app is healthy
-    inject   -> a fresh problem instance injects its fault
-    oracle   -> that problem's mitigation oracle (deterministic), or a health check if it has none
-    recover  -> that problem recovers its fault
+    inject   -> a fresh problem instance injects its fault; with ``compose`` it joins the faults
+                already injected, so several problems can be live at once (a composite fault)
+    oracle   -> that problem's mitigation oracle (deterministic), or a health check if it has none;
+                a composition passes only when every fault's oracle passes (``fault`` grades one)
+    recover  -> that problem recovers its fault; a composition recovers every fault, the last
+                injected first, or only the one ``fault`` names
 
 It reuses the problem classes, fault injectors, oracles, and ``Conductor.deploy_app`` for the
 one-time deployment, but never the conductor's stage machine, HTTP API, LLM judge, undeploy, or
@@ -87,7 +90,9 @@ class FastloopWorker:
         self._prompt_builder = prompt_builder
         self._kubeconfig_verifier = kubeconfig_verifier
         self._clock = clock
-        self._incident: _Problem | None = None
+        #: The faults injected since the last plain ``inject``; ``compose`` injections join them.
+        self._incidents: list[_Problem] = []
+        self._recovered: set[int] = set()
         self._proxy: dict[str, Any] | None = None
 
     def handle(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -160,35 +165,82 @@ class FastloopWorker:
         return self._health_probe(str(request["namespace"]))
 
     def _inject(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Inject one fault; with ``compose`` it joins the faults injected since the last plain inject.
+
+        The reply's ``fault`` is its index in the composition, for ``recover`` and ``oracle``.
+        """
+
         # A fresh instance per incident, as SREGym constructs one per problem run; its oracle
         # snapshots the healthy deployment before the fault.
         problem = self._problem_factory(str(request["problem_id"]))
         if self._proxy is not None:
             # As the conductor does right before ``inject_fault``.
             self._verify_agent_kubeconfig(self._proxy)
-        self._incident = problem
+        if not request.get("compose"):
+            self._incidents, self._recovered = [], set()
+        self._incidents.append(problem)
         started = self._clock()
         problem.inject_fault()
-        return {"started_at": started, "finished_at": self._clock()}
+        return {"started_at": started, "finished_at": self._clock(), "fault": len(self._incidents) - 1}
+
+    @property
+    def _incident(self) -> _Problem | None:
+        return self._incidents[-1] if self._incidents else None
+
+    def _fault(self, request: dict[str, Any]) -> int | None:
+        raw = request.get("fault")
+        if raw is None:
+            return None
+        index = int(raw)
+        if not 0 <= index < len(self._incidents):
+            raise ValueError(f"no fault {index}; {len(self._incidents)} injected")
+        return index
 
     def _current(self) -> _Problem:
         if self._incident is None:
             raise RuntimeError("no injected incident; send an inject request first")
         return self._incident
 
-    def _oracle(self, _request: dict[str, Any]) -> dict[str, Any]:
-        problem = self._current()
+    def _grade(self, problem: _Problem) -> dict[str, Any]:
         if problem.mitigation_oracle is None:
             health = self._health_probe(problem.app.namespace)
             return {"kind": "health-check", "success": bool(health.get("healthy")), "details": health}
         details = problem.mitigation_oracle.evaluate()
         return {"kind": "sregym-mitigation-oracle", "success": bool(details.get("success")), "details": details}
 
-    def _recover(self, _request: dict[str, Any]) -> dict[str, Any]:
-        problem = self._current()
+    def _oracle(self, request: dict[str, Any]) -> dict[str, Any]:
+        self._current()
+        index = self._fault(request)
+        if index is not None:
+            return self._grade(self._incidents[index])
+        if len(self._incidents) == 1:
+            return self._grade(self._incidents[0])
+        grades = [self._grade(problem) for problem in self._incidents]
+        return {
+            "kind": "composition",
+            "success": all(grade["success"] for grade in grades),
+            "details": {"faults": grades},
+        }
+
+    def _recover(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Recover one fault (``fault``) or every unrecovered fault, the last injected first."""
+
+        self._current()
+        index = self._fault(request)
+        if index is not None and index in self._recovered:
+            raise ValueError(f"fault {index} is already recovered")
+        pending = (
+            [index]
+            if index is not None
+            else [i for i in reversed(range(len(self._incidents))) if i not in self._recovered]
+        )
+        if not pending:
+            raise RuntimeError("no injected incident is left to recover; send an inject request first")
         started = self._clock()
-        problem.recover_fault()
-        return {"seconds": self._clock() - started}
+        for fault in pending:
+            self._incidents[fault].recover_fault()
+            self._recovered.add(fault)
+        return {"seconds": self._clock() - started, "recovered": pending}
 
 
 def serve(worker: FastloopWorker, requests: IO[str], replies: IO[str]) -> None:
