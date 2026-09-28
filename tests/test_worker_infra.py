@@ -116,3 +116,79 @@ def test_install_calico_loads_locally_selected_images(tmp_path, monkeypatch):
         ("cluster", [target for _, target in worker_infra._CALICO_IMAGE_MIRRORS], "linux/amd64")
     ]
     assert all("--platform" in command for command in commands if command[:2] == ["docker", "pull"])
+
+
+_THREE_WORKERS = """
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    image: kind-node:x86
+  - role: worker
+    image: kind-node:x86
+    extraMounts: [{hostPath: /run/udev, containerPath: /run/udev}]
+  - role: worker
+    image: kind-node:x86
+  - role: worker
+    image: kind-node:x86
+"""
+
+
+def _prepared_nodes(tmp_path, monkeypatch, workers: str | None) -> list[dict]:
+    base = tmp_path / "kind.yml"
+    base.write_text(_THREE_WORKERS, encoding="utf-8")
+    if workers is None:
+        monkeypatch.delenv("SREGYM_KIND_WORKER_NODES", raising=False)
+    else:
+        monkeypatch.setenv("SREGYM_KIND_WORKER_NODES", workers)
+    generated = Path(worker_infra.prepare_kind_config(str(base), None, None))
+    try:
+        return yaml.safe_load(generated.read_text(encoding="utf-8"))["nodes"]
+    finally:
+        generated.unlink()
+
+
+def test_kind_topology_is_unchanged_without_a_worker_count(tmp_path, monkeypatch):
+    nodes = _prepared_nodes(tmp_path, monkeypatch, None)
+
+    assert [node["role"] for node in nodes] == ["control-plane", "worker", "worker", "worker"]
+
+
+@pytest.mark.parametrize("workers", [1, 2, 4])
+def test_kind_worker_count_sizes_the_cluster_from_the_first_worker(tmp_path, monkeypatch, workers):
+    nodes = _prepared_nodes(tmp_path, monkeypatch, str(workers))
+
+    assert [node["role"] for node in nodes] == ["control-plane"] + ["worker"] * workers
+    # Every worker keeps the base worker's image and mounts.
+    assert all(node["image"] == "kind-node:x86" for node in nodes)
+    assert all(node["extraMounts"] == [{"hostPath": "/run/udev", "containerPath": "/run/udev"}] for node in nodes[1:])
+
+
+@pytest.mark.parametrize("workers", ["0", "-1", "two"])
+def test_kind_worker_count_must_be_a_positive_integer(tmp_path, monkeypatch, workers):
+    with pytest.raises(ValueError, match="SREGYM_KIND_WORKER_NODES"):
+        _prepared_nodes(tmp_path, monkeypatch, workers)
+
+
+def _reuse_candidate(tmp_path, monkeypatch, nodes: list[str]) -> tuple[bool, str]:
+    kubeconfig = tmp_path / "stable.kubeconfig"
+    kubeconfig.write_text("apiVersion: v1\n", encoding="utf-8")
+
+    def check_output(command, **kwargs):
+        return "ready-w9\n" if command[:3] == ["kind", "get", "clusters"] else "\n".join(nodes) + "\n"
+
+    monkeypatch.setattr(worker_infra.subprocess, "check_output", check_output)
+    return worker_infra.existing_cluster_is_reusable("ready-w9", str(kubeconfig))
+
+
+def test_a_reused_cluster_must_have_the_requested_worker_count(tmp_path, monkeypatch):
+    three = ["ready-w9-control-plane", "ready-w9-worker", "ready-w9-worker2", "ready-w9-worker3"]
+    monkeypatch.setenv("SREGYM_KIND_WORKER_NODES", "1")
+
+    reusable, reason = _reuse_candidate(tmp_path, monkeypatch, three)
+    assert reusable is False
+    assert "3 worker nodes, not the requested 1" in reason
+
+    assert _reuse_candidate(tmp_path, monkeypatch, three[:2]) == (True, "")
+    monkeypatch.delenv("SREGYM_KIND_WORKER_NODES")
+    assert _reuse_candidate(tmp_path, monkeypatch, three) == (True, "")

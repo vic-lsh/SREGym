@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import fcntl
 import hashlib
 import json
@@ -17,6 +18,9 @@ from pathlib import Path
 import yaml
 
 KIND_CLUSTER_PREFIX = os.getenv("SREGYM_KIND_CLUSTER_PREFIX", "sregym-w")
+#: Optional worker-node count for a worker cluster; unset keeps the base
+#: kind config's topology (1 control plane + 3 workers).
+KIND_WORKER_NODES_ENV = "SREGYM_KIND_WORKER_NODES"
 _REUSE_KUBECONFIG_DIR = os.path.expanduser("~/.cache/sregym/kubeconfigs")
 _LOCK_DIR = os.path.expanduser("~/.cache/sregym/locks")
 
@@ -198,6 +202,32 @@ def preflight_cluster_requirements(cluster_name: str, kubeconfig_path: str) -> N
             verify_network_policy_enforcement(cluster_name, canary_image, kubeconfig_path)
 
 
+def kind_worker_nodes() -> int | None:
+    """The requested worker-node count, or None to keep the base topology."""
+
+    raw = os.environ.get(KIND_WORKER_NODES_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        workers = int(raw)
+    except ValueError:
+        raise ValueError(f"{KIND_WORKER_NODES_ENV} must be a positive integer, got {raw!r}") from None
+    if workers < 1:
+        raise ValueError(f"{KIND_WORKER_NODES_ENV} must be a positive integer, got {raw!r}")
+    return workers
+
+
+def _size_workers(config: dict, workers: int) -> None:
+    """Keep the control-plane nodes and repeat the first worker entry ``workers`` times."""
+
+    nodes = config.get("nodes") or []
+    templates = [node for node in nodes if node.get("role") == "worker"]
+    if not templates:
+        raise ValueError(f"{KIND_WORKER_NODES_ENV} needs a worker node in the base kind config to copy")
+    control_planes = [node for node in nodes if node.get("role", "control-plane") == "control-plane"]
+    config["nodes"] = control_planes + [copy.deepcopy(templates[0]) for _ in range(workers)]
+
+
 def prepare_kind_config(
     base_config_path: str,
     docker_user: str | None,
@@ -205,6 +235,9 @@ def prepare_kind_config(
 ) -> str:
     with open(base_config_path, encoding="utf-8") as stream:
         config = yaml.safe_load(stream) or {}
+    workers = kind_worker_nodes()
+    if workers is not None:
+        _size_workers(config, workers)
     if _truthy_env("SREGYM_KIND_REQUIRE_NETWORK_POLICY"):
         config["networking"] = {
             "disableDefaultCNI": True,
@@ -345,6 +378,20 @@ def existing_cluster_is_reusable(cluster_name: str, kubeconfig_path: str) -> tup
         return False, f"`kind get clusters` failed: {exc}"
     if cluster_name not in clusters:
         return False, f"cluster {cluster_name} not registered with kind"
+    workers = kind_worker_nodes()
+    if workers is not None:
+        try:
+            nodes = subprocess.check_output(
+                ["kind", "get", "nodes", "--name", cluster_name],
+                text=True,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            ).split()
+        except (subprocess.SubprocessError, OSError) as exc:
+            return False, f"`kind get nodes` failed: {exc}"
+        existing = sum(1 for node in nodes if re.search(r"-worker\d*$", node))
+        if existing != workers:
+            return False, f"cluster {cluster_name} has {existing} worker nodes, not the requested {workers}"
     return True, ""
 
 
