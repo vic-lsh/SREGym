@@ -199,8 +199,9 @@ Important:
 """
 
     from clients.harness.memory import inject_operational_memory
+    from clients.harness.prompt_appendix import append_prompt_appendix
 
-    instruction = inject_operational_memory(instruction)
+    instruction = inject_operational_memory(append_prompt_appendix(instruction))
     logger.info(f"Built instruction:\n{instruction}")
     return instruction
 
