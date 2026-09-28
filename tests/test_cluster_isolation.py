@@ -92,3 +92,5 @@ def test_fault_injectors_keep_no_fixed_tmp_paths() -> None:
 
     source = (Path(paths.BASE_DIR) / "generators" / "fault" / "inject_virtual.py").read_text()
     assert 'f"/tmp/' not in source
+    # A recovery that reads a fixed /tmp backup never finds the per-cluster one its injection wrote.
+    assert "/tmp/{" not in source

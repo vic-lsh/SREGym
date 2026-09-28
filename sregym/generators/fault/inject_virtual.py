@@ -199,7 +199,7 @@ class VirtualizationFaultInjector(FaultInjector):
         self.kubectl.wait_for_stable(self.namespace)
 
     def recover_pvc_claim_mismatch(self, microservices: list[str]):
-        """Restore the original Deployment YAML saved in /tmp/{svc}_modified.yaml."""
+        """Restore the original Deployment YAML saved at its per-cluster fault scratch path."""
         for service in microservices:
             orig_path = fault_scratch_path(f"{service}_modified.yaml")
             self.kubectl.exec_command(f"kubectl delete deployment {service} -n {self.namespace}")
@@ -309,7 +309,9 @@ class VirtualizationFaultInjector(FaultInjector):
         for service in microservices:
             delete_service_command = f"kubectl delete service {service} -n {self.namespace}"
             result = self.kubectl.exec_command(delete_service_command)
-            create_service_command = f"kubectl apply -f /tmp/{service}_modified.yaml -n {self.namespace}"
+            create_service_command = (
+                f"kubectl apply -f {fault_scratch_path(f'{service}_modified.yaml')} -n {self.namespace}"
+            )
             result = self.kubectl.exec_command(create_service_command)
             print(f"Recreated service {service} to recover from the fault: {result}")
 
@@ -338,7 +340,7 @@ class VirtualizationFaultInjector(FaultInjector):
         for service in microservices:
             # Delete the deployment and re-apply
             delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
-            apply_command = f"kubectl apply -f /tmp/{service}_modified.yaml -n {self.namespace}"
+            apply_command = f"kubectl apply -f {fault_scratch_path(f'{service}_modified.yaml')} -n {self.namespace}"
             self.kubectl.exec_command(delete_command)
             self.kubectl.exec_command(apply_command)
 
@@ -857,7 +859,7 @@ class VirtualizationFaultInjector(FaultInjector):
     def recover_sidecar_port_conflict(self, microservices: list[str]):
         for service in microservices:
             delete_cmd = f"kubectl delete deployment {service} -n {self.namespace}"
-            apply_cmd = f"kubectl apply -f /tmp/{service}_modified.yaml -n {self.namespace}"
+            apply_cmd = f"kubectl apply -f {fault_scratch_path(f'{service}_modified.yaml')} -n {self.namespace}"
 
             delete_result = self.kubectl.exec_command(delete_cmd)
             print(f"Delete result for {service}: {delete_result}")
@@ -2275,7 +2277,7 @@ class VirtualizationFaultInjector(FaultInjector):
     def recover_service_port_conflict(self, microservices: list[str]):
         for service in microservices:
             delete_cmd = f"kubectl delete deployment {service} -n {self.namespace}"
-            apply_cmd = f"kubectl apply -f /tmp/{service}_modified.yaml -n {self.namespace}"
+            apply_cmd = f"kubectl apply -f {fault_scratch_path(f'{service}_modified.yaml')} -n {self.namespace}"
 
             delete_result = self.kubectl.exec_command(delete_cmd)
             print(f"Delete result for {service}: {delete_result}")
