@@ -16,7 +16,7 @@ agents:
     kickoff_workdir: .
     kickoff_env: null
     install_script: install-codex.sh
-    agent_version: null
+    agent_version: "0.157.1"  # pinned: npm latest 0.158.0 platform package 404s; matches SDO images
   - name: claudecode
     kickoff_command: python -m clients.claudecode.driver
     kickoff_workdir: .
