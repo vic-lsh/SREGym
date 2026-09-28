@@ -373,3 +373,83 @@ def test_a_new_uncomposed_injection_starts_a_fresh_composition() -> None:
 
     assert worker.handle({"op": "inject", "problem_id": "b"})["fault"] == 0
     assert worker.handle({"op": "recover"})["recovered"] == [0]
+
+
+@dataclass
+class FakeCompositeProblem(FakeProblem):
+    """A registry composite: fault components 0 and 2, a decoy at 1."""
+
+    fault_indices: tuple[int, ...] = (0, 2)
+    component_oracles: dict[int, FakeOracle] = field(default_factory=lambda: {0: FakeOracle(), 2: FakeOracle()})
+    recovered: list[int] = field(default_factory=list)
+
+    @property
+    def pending_components(self) -> tuple[int, ...]:
+        return tuple(index for index in (2, 1, 0) if index not in self.recovered)
+
+    def recover_component(self, index: int) -> None:
+        self.events.append(f"recover component {index}")
+        self.recovered.append(index)
+
+    def component_oracle(self, index: int) -> FakeOracle:
+        return self.component_oracles[index]
+
+    def recover_fault(self) -> None:
+        self.events.append(f"recover {list(self.pending_components)}")
+        self.recovered.extend(self.pending_components)
+
+
+def _composite_worker(fakes: Fakes) -> tuple[FastloopWorker, list[FakeCompositeProblem]]:
+    composites: list[FakeCompositeProblem] = []
+    plain = fakes.problem
+
+    def problem(problem_id: str) -> FakeProblem:
+        if problem_id.startswith("composite_"):
+            created = FakeCompositeProblem()
+            composites.append(created)
+            return created
+        return plain(problem_id)
+
+    fakes.problem = problem  # type: ignore[method-assign]
+    return _worker(fakes), composites
+
+
+def test_a_registry_composite_exposes_its_fault_components_as_the_faults() -> None:
+    fakes = Fakes(healthy=True)
+    worker, composites = _composite_worker(fakes)
+
+    injected = worker.handle({"op": "inject", "problem_id": "composite_k"})
+    composites[0].component_oracles[2] = FakeOracle(success=False)
+    second = worker.handle({"op": "oracle", "fault": 1})
+    partial = worker.handle({"op": "recover", "fault": 0})
+    rest = worker.handle({"op": "recover"})
+
+    assert (injected["fault"], injected["faults"]) == (0, [0, 1])
+    assert second == {"kind": "sregym-mitigation-oracle", "success": False, "details": {"success": False}}
+    assert partial["recovered"] == [0]
+    assert composites[0].events == ["inject", "recover component 0", "recover [2, 1]"]
+    assert rest["recovered"] == [1]
+    with pytest.raises(RuntimeError, match="no injected incident"):
+        worker.handle({"op": "recover"})
+
+
+def test_a_whole_registry_composite_is_graded_by_its_own_oracle() -> None:
+    fakes = Fakes(healthy=True)
+    worker, composites = _composite_worker(fakes)
+    worker.handle({"op": "inject", "problem_id": "composite_k"})
+    composites[0].mitigation_oracle = FakeOracle(success=False)
+
+    assert worker.handle({"op": "oracle"})["success"] is False
+
+
+def test_a_registry_composite_joins_a_worker_composition_after_plain_faults() -> None:
+    fakes = Fakes(healthy=True)
+    worker, composites = _composite_worker(fakes)
+    worker.handle({"op": "inject", "problem_id": "a"})
+    joined = worker.handle({"op": "inject", "problem_id": "composite_k", "compose": True})
+    everything = worker.handle({"op": "recover"})
+
+    assert (joined["fault"], joined["faults"]) == (1, [1, 2])
+    assert everything["recovered"] == [2, 1, 0]
+    assert composites[0].events[-1] == "recover [2, 1, 0]"
+    assert fakes.problems[0].events == ["inject", "recover"]

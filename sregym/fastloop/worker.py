@@ -11,6 +11,9 @@ A driver outside SREGym runs many incidents against one warm deployment:
     recover  -> that problem recovers its fault; a composition recovers every fault, the last
                 injected first, or only the one ``fault`` names
 
+A registry composite (``composite_*``, ``CompositeFaultProblem``) is one problem whose fault
+components are the addressable faults: ``fault`` indexes them for ``oracle`` and ``recover``.
+
 It reuses the problem classes, fault injectors, oracles, and ``Conductor.deploy_app`` for the
 one-time deployment, but never the conductor's stage machine, HTTP API, LLM judge, undeploy, or
 cluster reconciliation. Requests and replies are one JSON object per line; everything the
@@ -90,8 +93,11 @@ class FastloopWorker:
         self._prompt_builder = prompt_builder
         self._kubeconfig_verifier = kubeconfig_verifier
         self._clock = clock
-        #: The faults injected since the last plain ``inject``; ``compose`` injections join them.
+        #: The problems injected since the last plain ``inject``; ``compose`` injections join them.
         self._incidents: list[_Problem] = []
+        #: The addressable faults, in injection order: (incident, component). A plain problem is one
+        #: fault (component ``None``); a registry composite contributes each of its fault components.
+        self._faults: list[tuple[int, int | None]] = []
         self._recovered: set[int] = set()
         self._proxy: dict[str, Any] | None = None
 
@@ -165,9 +171,11 @@ class FastloopWorker:
         return self._health_probe(str(request["namespace"]))
 
     def _inject(self, request: dict[str, Any]) -> dict[str, Any]:
-        """Inject one fault; with ``compose`` it joins the faults injected since the last plain inject.
+        """Inject one problem; with ``compose`` it joins the problems injected since the last plain inject.
 
-        The reply's ``fault`` is its index in the composition, for ``recover`` and ``oracle``.
+        The reply's ``faults`` are the indices of its faults in the composition, for ``recover`` and
+        ``oracle`` (``fault`` is the first). A plain problem is one fault; a registry composite
+        (``CompositeFaultProblem``) contributes one fault per fault component, never its decoys.
         """
 
         # A fresh instance per incident, as SREGym constructs one per problem run; its oracle
@@ -177,11 +185,15 @@ class FastloopWorker:
             # As the conductor does right before ``inject_fault``.
             self._verify_agent_kubeconfig(self._proxy)
         if not request.get("compose"):
-            self._incidents, self._recovered = [], set()
+            self._incidents, self._faults, self._recovered = [], [], set()
+        incident = len(self._incidents)
         self._incidents.append(problem)
+        first = len(self._faults)
+        self._faults.extend((incident, component) for component in _fault_components(problem))
         started = self._clock()
         problem.inject_fault()
-        return {"started_at": started, "finished_at": self._clock(), "fault": len(self._incidents) - 1}
+        faults = list(range(first, len(self._faults)))
+        return {"started_at": started, "finished_at": self._clock(), "fault": first, "faults": faults}
 
     @property
     def _incident(self) -> _Problem | None:
@@ -192,8 +204,8 @@ class FastloopWorker:
         if raw is None:
             return None
         index = int(raw)
-        if not 0 <= index < len(self._incidents):
-            raise ValueError(f"no fault {index}; {len(self._incidents)} injected")
+        if not 0 <= index < len(self._faults):
+            raise ValueError(f"no fault {index}; {len(self._faults)} injected")
         return index
 
     def _current(self) -> _Problem:
@@ -201,18 +213,23 @@ class FastloopWorker:
             raise RuntimeError("no injected incident; send an inject request first")
         return self._incident
 
-    def _grade(self, problem: _Problem) -> dict[str, Any]:
-        if problem.mitigation_oracle is None:
+    def _grade(self, problem: _Problem, oracle: _Oracle | None = None) -> dict[str, Any]:
+        oracle = problem.mitigation_oracle if oracle is None else oracle
+        if oracle is None:
             health = self._health_probe(problem.app.namespace)
             return {"kind": "health-check", "success": bool(health.get("healthy")), "details": health}
-        details = problem.mitigation_oracle.evaluate()
+        details = oracle.evaluate()
         return {"kind": "sregym-mitigation-oracle", "success": bool(details.get("success")), "details": details}
 
     def _oracle(self, request: dict[str, Any]) -> dict[str, Any]:
         self._current()
         index = self._fault(request)
         if index is not None:
-            return self._grade(self._incidents[index])
+            incident, component = self._faults[index]
+            problem = self._incidents[incident]
+            if component is None:
+                return self._grade(problem)
+            return self._grade(problem, problem.component_oracle(component))  # type: ignore[attr-defined]
         if len(self._incidents) == 1:
             return self._grade(self._incidents[0])
         grades = [self._grade(problem) for problem in self._incidents]
@@ -223,24 +240,63 @@ class FastloopWorker:
         }
 
     def _recover(self, request: dict[str, Any]) -> dict[str, Any]:
-        """Recover one fault (``fault``) or every unrecovered fault, the last injected first."""
+        """Recover one fault (``fault``) or every unrecovered fault, the last injected first.
+
+        Recovering everything recovers each problem the harness's way (a composite recovers its
+        remaining components, decoys included, in reverse); every problem is attempted even when an
+        earlier one raises, and the errors are raised together.
+        """
 
         self._current()
         index = self._fault(request)
-        if index is not None and index in self._recovered:
-            raise ValueError(f"fault {index} is already recovered")
-        pending = (
-            [index]
-            if index is not None
-            else [i for i in reversed(range(len(self._incidents))) if i not in self._recovered]
-        )
+        started = self._clock()
+        if index is not None:
+            if index in self._recovered:
+                raise ValueError(f"fault {index} is already recovered")
+            incident, component = self._faults[index]
+            problem = self._incidents[incident]
+            if component is None:
+                problem.recover_fault()
+            else:
+                problem.recover_component(component)  # type: ignore[attr-defined]
+            self._recovered.add(index)
+            return {"seconds": self._clock() - started, "recovered": [index]}
+
+        pending = [incident for incident in reversed(range(len(self._incidents))) if self._pending(incident)]
         if not pending:
             raise RuntimeError("no injected incident is left to recover; send an inject request first")
-        started = self._clock()
-        for fault in pending:
-            self._incidents[fault].recover_fault()
-            self._recovered.add(fault)
-        return {"seconds": self._clock() - started, "recovered": pending}
+        recovered: list[int] = []
+        errors: list[Exception] = []
+        for incident in pending:
+            faults = [
+                fault
+                for fault in reversed(range(len(self._faults)))
+                if self._faults[fault][0] == incident and fault not in self._recovered
+            ]
+            try:
+                self._incidents[incident].recover_fault()
+            except Exception as error:
+                errors.append(error)
+            self._recovered.update(faults)
+            recovered.extend(faults)
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise ExceptionGroup("recovery failed for several injected problems", errors)
+        return {"seconds": self._clock() - started, "recovered": recovered}
+
+    def _pending(self, incident: int) -> bool:
+        problem = self._incidents[incident]
+        if hasattr(problem, "pending_components"):
+            return bool(problem.pending_components)
+        return any(fault not in self._recovered for fault, (owner, _) in enumerate(self._faults) if owner == incident)
+
+
+def _fault_components(problem: _Problem) -> list[int | None]:
+    """The addressable faults of one problem: a registry composite's fault components, else itself."""
+
+    indices = getattr(problem, "fault_indices", None)
+    return [None] if indices is None else list(indices)
 
 
 def serve(worker: FastloopWorker, requests: IO[str], replies: IO[str]) -> None:
