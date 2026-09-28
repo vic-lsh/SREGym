@@ -1,0 +1,23 @@
+{
+  "composite_policy_and_rate_configmap_hotel_reservation": {
+    "description": "Two independent faults on different services: a deny-all NetworkPolicy isolates recommendation, and mongodb-rate cannot start without its init-script ConfigMap.",
+    "components": [
+      {"role": "fault", "problem": "network_policy_block"},
+      {"role": "fault", "problem": "missing_configmap_mongodb_rate_hotel_reservation"}
+    ]
+  },
+  "composite_frontend_selector_and_readiness_hotel_reservation": {
+    "description": "Two causes, one symptom, one service: Service/frontend selects no pods, and frontend's readiness probe never succeeds.",
+    "components": [
+      {"role": "fault", "problem": "wrong_service_selector_hotel_reservation"},
+      {"role": "fault", "problem": "readiness_probe_misconfiguration_hotel_reservation"}
+    ]
+  },
+  "composite_geo_configmap_with_log_drift_hotel_reservation": {
+    "description": "A fault plus a misleading benign drift: mongodb-geo cannot start without its init-script ConfigMap, while geo carries a fresh, harmless LOG_LEVEL=debug change.",
+    "components": [
+      {"role": "fault", "problem": "missing_configmap_hotel_reservation"},
+      {"role": "decoy", "decoy": "benign_env_drift", "params": {"deployment": "geo", "env": {"LOG_LEVEL": "debug"}}}
+    ]
+  }
+}

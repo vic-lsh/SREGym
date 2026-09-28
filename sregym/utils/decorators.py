@@ -1,4 +1,9 @@
+import functools
+
+
 def mark_fault_injected(method):
+    # ``__wrapped__`` lets a composite call the undecorated recovery and see its errors.
+    @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
         try:
             result = method(self, *args, **kwargs)

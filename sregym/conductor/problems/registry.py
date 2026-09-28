@@ -110,6 +110,7 @@ from sregym.conductor.problems.wrong_bin_usage import WrongBinUsage
 from sregym.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from sregym.conductor.problems.wrong_service_selector import WrongServiceSelector
 from sregym.conductor.problems.variant_generator import filter_variant_ids_by_spec, generate_all_variants
+from sregym.conductor.problems.composite import COMPOSITE_PREFIX, composite_factories
 from sregym.conductor.problems.variant_specs import get_all_variant_specs
 from sregym.service.kubectl import KubeCtl
 
@@ -355,6 +356,12 @@ class ProblemRegistry:
             if vid not in self.PROBLEM_REGISTRY:
                 self.PROBLEM_REGISTRY[vid] = factory
 
+        # Named composites (composite_specs.json); each component is built through this registry.
+        for cid, factory in composite_factories(self._component_instance).items():
+            if cid in self.PROBLEM_REGISTRY:
+                raise ValueError(f"composite id {cid} collides with a registered problem")
+            self.PROBLEM_REGISTRY[cid] = factory
+
         self.kubectl = KubeCtl()
         self.non_emulated_cluster_problems = ["node_clock_drift_hotel_reservation"]
 
@@ -367,6 +374,13 @@ class ProblemRegistry:
             raise RuntimeError(f"Problem ID {problem_id} is not supported in emulated clusters.")
 
         return self.PROBLEM_REGISTRY.get(problem_id)()
+
+    def _component_instance(self, problem_id: str):
+        if problem_id.startswith(COMPOSITE_PREFIX):
+            raise ValueError(f"a composite cannot contain another composite ({problem_id})")
+        if problem_id not in self.PROBLEM_REGISTRY:
+            raise ValueError(f"Composite component {problem_id} not found in registry.")
+        return self.PROBLEM_REGISTRY[problem_id]()
 
     def get_problem(self, problem_id: str):
         return self.PROBLEM_REGISTRY.get(problem_id)
