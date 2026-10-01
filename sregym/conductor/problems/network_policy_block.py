@@ -1,4 +1,5 @@
 from kubernetes import client
+from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.network_policy_oracle import NetworkPolicyMitigationOracle
@@ -54,9 +55,21 @@ class NetworkPolicyBlock(Problem):
                 "egress": [],
             },
         }
-        self.networking_v1.create_namespaced_network_policy(namespace=self.namespace, body=policy)
+        try:
+            self.networking_v1.create_namespaced_network_policy(namespace=self.namespace, body=policy)
+        except ApiException as exc:
+            if exc.status != 409:
+                raise
+            # A repaired source tree can ship a permissive policy of the same name; the fault replaces it.
+            self.networking_v1.replace_namespaced_network_policy(
+                name=self.policy_name, namespace=self.namespace, body=policy
+            )
 
     @mark_fault_injected
     def recover_fault(self):
         """Remove the NetworkPolicy"""
-        self.networking_v1.delete_namespaced_network_policy(name=self.policy_name, namespace=self.namespace)
+        try:
+            self.networking_v1.delete_namespaced_network_policy(name=self.policy_name, namespace=self.namespace)
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
