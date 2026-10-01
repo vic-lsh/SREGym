@@ -23,7 +23,7 @@ from sregym.conductor.problems.base import Problem
 from sregym.utils.decorators import mark_fault_injected
 
 MIN_FAULTS = 2
-MAX_FAULTS = 3
+MAX_FAULTS = 5
 SUPPORTED_APP_NAME = "Hotel Reservation"
 
 JudgeFactory = Callable[[Problem, str], Oracle]
@@ -194,6 +194,15 @@ def _selector(service: str) -> Callable[[], Problem]:
     return build
 
 
+def _resource_request_too_large(service: str) -> Callable[[], Problem]:
+    def build() -> Problem:
+        from sregym.conductor.problems.resource_request import ResourceRequestTooLarge
+
+        return ResourceRequestTooLarge(app_name="hotel_reservation", faulty_service=service)
+
+    return build
+
+
 # Fixed composites. Each pairs faults on different Deployments with no call-graph dependency between the
 # targets. Ids carry no ``__v_`` so they are listed like any concrete problem.
 COMPOSITE_SPECS: dict[str, tuple[Callable[[], Problem], ...]] = {
@@ -202,6 +211,21 @@ COMPOSITE_SPECS: dict[str, tuple[Callable[[], Problem], ...]] = {
     "composite_network_policy_recommendation__configmap_mongodb_geo": (
         _network_policy("recommendation"),
         _configmap("mongodb-geo"),
+    ),
+    # N-fault composites: each fault on its own Deployment, no call-graph dependency between targets,
+    # mixing easy faults (readiness, ConfigMap, oversized request) with ones the memoryless baseline misses
+    # when alone (network policy, wrong selector).
+    "composite3_hotel_geo_rate_recommendation": (
+        _readiness("geo"),
+        _configmap("mongodb-rate"),
+        _network_policy("recommendation"),
+    ),
+    "composite5_hotel_geo_rate_recommendation_frontend_reservation": (
+        _readiness("geo"),
+        _configmap("mongodb-rate"),
+        _network_policy("recommendation"),
+        _selector("frontend"),
+        _resource_request_too_large("reservation"),
     ),
 }
 

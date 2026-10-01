@@ -76,7 +76,7 @@ def test_rejects_wrong_arity_and_foreign_apps():
     with pytest.raises(ValueError):
         ComposedFailures([_Sub("geo")], judge_factory=_judge({}))
     with pytest.raises(ValueError):
-        ComposedFailures([_Sub(str(i)) for i in range(4)], judge_factory=_judge({}))
+        ComposedFailures([_Sub(str(i)) for i in range(6)], judge_factory=_judge({}))
     other = SimpleNamespace(name="Social Network", namespace="social")
     with pytest.raises(ValueError, match="Hotel Reservation"):
         ComposedFailures([_Sub("geo"), _Sub("user", app=other)], judge_factory=_judge({}))
@@ -145,11 +145,39 @@ def test_inject_in_order_and_recover_in_reverse():
     ]
 
 
-def test_registered_composites_are_hotel_reservation_pairs():
-    assert len(COMPOSITE_SPECS) == 3
+def test_registered_composites_are_hotel_reservation_groups():
+    assert len(COMPOSITE_SPECS) == 5
     for problem_id, parts in COMPOSITE_SPECS.items():
         assert "__v_" not in problem_id
-        assert len(parts) == 2
+        assert 2 <= len(parts) <= 5
+
+
+def test_registered_n_fault_composites_have_three_and_five_faults():
+    sizes = {problem_id: len(parts) for problem_id, parts in COMPOSITE_SPECS.items()}
+    assert sizes["composite3_hotel_geo_rate_recommendation"] == 3
+    assert sizes["composite5_hotel_geo_rate_recommendation_frontend_reservation"] == 5
+
+
+@pytest.mark.parametrize("size", [3, 4, 5])
+def test_n_fault_mitigation_needs_every_sub_oracle(size):
+    for failing in range(size):
+        subs = [_Sub(f"svc{i}", mitigated=i != failing) for i in range(size)]
+        result = ComposedFailures(subs, judge_factory=_judge({})).mitigation_oracle.evaluate()
+        assert result["success"] is False
+        assert [item["success"] for item in result["oracles"]].count(False) == 1
+    subs = [_Sub(f"svc{i}", mitigated=True) for i in range(size)]
+    assert ComposedFailures(subs, judge_factory=_judge({})).mitigation_oracle.evaluate()["success"] is True
+
+
+def test_five_fault_diagnosis_counts_partial_credit():
+    subs = [_Sub(f"svc{i}") for i in range(5)]
+    verdicts = {"svc0": True, "svc1": True, "svc3": True}
+    problem = ComposedFailures(subs, judge_factory=_judge(verdicts))
+    result = problem.diagnosis_oracle.evaluate("svc0 svc1 svc3")
+    assert result["faults_found"] == 3
+    assert result["faults_total"] == 5
+    assert result["accuracy"] == 60.0
+    assert result["success"] is False
 
 
 def test_registry_lists_composites(monkeypatch):
