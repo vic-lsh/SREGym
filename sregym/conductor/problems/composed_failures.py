@@ -220,12 +220,12 @@ COMPOSITE_SPECS: dict[str, tuple[Callable[[], Problem], ...]] = {
         _configmap("mongodb-rate"),
         _network_policy("recommendation"),
     ),
-    "composite5_hotel_geo_rate_recommendation_frontend_reservation": (
+    "composite5_hotel_geo_rate_recommendation_frontend_user": (
         _readiness("geo"),
         _configmap("mongodb-rate"),
         _network_policy("recommendation"),
         _selector("frontend"),
-        _resource_request_too_large("reservation"),
+        _resource_request_too_large("user"),
     ),
 }
 

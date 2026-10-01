@@ -155,7 +155,7 @@ def test_registered_composites_are_hotel_reservation_groups():
 def test_registered_n_fault_composites_have_three_and_five_faults():
     sizes = {problem_id: len(parts) for problem_id, parts in COMPOSITE_SPECS.items()}
     assert sizes["composite3_hotel_geo_rate_recommendation"] == 3
-    assert sizes["composite5_hotel_geo_rate_recommendation_frontend_reservation"] == 5
+    assert sizes["composite5_hotel_geo_rate_recommendation_frontend_user"] == 5
 
 
 @pytest.mark.parametrize("size", [3, 4, 5])
