@@ -226,6 +226,18 @@ COMPOSITE_SPECS: dict[str, tuple[Callable[[], Problem], ...]] = {
         _configmap("mongodb-geo"),
         _network_policy("recommendation"),
     ),
+    # Stream variants (rate readiness, user network policy, extra selector composite) sharing components with the above.
+    "composite3c_hotel_rate_mongodb_geo_user": (
+        _readiness("rate"),
+        _configmap("mongodb-geo"),
+        _network_policy("user"),
+    ),
+    "composite4_hotel_profile_rate_recommendation_frontend": (
+        _readiness("profile"),
+        _configmap("mongodb-rate"),
+        _network_policy("recommendation"),
+        _selector("frontend"),
+    ),
     "composite5_hotel_geo_rate_recommendation_frontend_user": (
         _readiness("geo"),
         _configmap("mongodb-rate"),

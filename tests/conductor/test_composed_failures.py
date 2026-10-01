@@ -146,7 +146,7 @@ def test_inject_in_order_and_recover_in_reverse():
 
 
 def test_registered_composites_are_hotel_reservation_groups():
-    assert len(COMPOSITE_SPECS) == 6
+    assert len(COMPOSITE_SPECS) == 8
     for problem_id, parts in COMPOSITE_SPECS.items():
         assert "__v_" not in problem_id
         assert 2 <= len(parts) <= 5
@@ -156,6 +156,8 @@ def test_registered_n_fault_composites_have_three_and_five_faults():
     sizes = {problem_id: len(parts) for problem_id, parts in COMPOSITE_SPECS.items()}
     assert sizes["composite3_hotel_geo_rate_recommendation"] == 3
     assert sizes["composite3b_hotel_profile_mongodb_geo_recommendation"] == 3
+    assert sizes["composite3c_hotel_rate_mongodb_geo_user"] == 3
+    assert sizes["composite4_hotel_profile_rate_recommendation_frontend"] == 4
     assert sizes["composite5_hotel_geo_rate_recommendation_frontend_user"] == 5
 
 
