@@ -220,6 +220,12 @@ COMPOSITE_SPECS: dict[str, tuple[Callable[[], Problem], ...]] = {
         _configmap("mongodb-rate"),
         _network_policy("recommendation"),
     ),
+    # Same family as composite3 with different readiness and ConfigMap targets (network policy shared).
+    "composite3b_hotel_profile_mongodb_geo_recommendation": (
+        _readiness("profile"),
+        _configmap("mongodb-geo"),
+        _network_policy("recommendation"),
+    ),
     "composite5_hotel_geo_rate_recommendation_frontend_user": (
         _readiness("geo"),
         _configmap("mongodb-rate"),
