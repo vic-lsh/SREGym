@@ -112,7 +112,7 @@ from sregym.conductor.problems.wrong_service_selector import WrongServiceSelecto
 from sregym.conductor.problems.variant_generator import filter_variant_ids_by_spec, generate_all_variants
 from sregym.conductor.problems.composite import COMPOSITE_PREFIX, composite_factories
 from sregym.conductor.problems.variant_specs import get_all_variant_specs
-from sregym.conductor.problems.composed_failures import composite_factories
+from sregym.conductor.problems.composed_failures import composite_factories as hand_composite_factories
 from sregym.service.kubectl import KubeCtl
 
 
@@ -351,7 +351,7 @@ class ProblemRegistry:
         }
 # fmt: on
         # Hand-registered same-app composites (two faults on different Deployments).
-        self.PROBLEM_REGISTRY.update(composite_factories())
+        self.PROBLEM_REGISTRY.update(hand_composite_factories())
 
         # Auto-generate variants from variant specs.
         # Generated IDs use __v_ separator so they never collide with manual entries.
