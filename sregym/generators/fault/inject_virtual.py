@@ -338,7 +338,9 @@ class VirtualizationFaultInjector(FaultInjector):
         for service in microservices:
             # Delete the deployment and re-apply
             delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
-            apply_command = f"kubectl apply -f /tmp/{service}_modified.yaml -n {self.namespace}"
+            apply_command = (
+                f"kubectl apply -f {fault_scratch_path(f'{service}_modified.yaml')} -n {self.namespace}"
+            )
             self.kubectl.exec_command(delete_command)
             self.kubectl.exec_command(apply_command)
 
