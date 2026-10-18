@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import json
 import os
 import queue
 import random
@@ -147,14 +148,55 @@ def select_problem_ids(args: Any) -> list[str]:
 def build_static_plan(args: Any) -> list[RunTask]:
     selected = select_problem_ids(args)
     if args.sequence_len:
-        if not selected:
-            raise ValueError("Cannot generate a sequence from an empty problem selection")
-        generator = random.Random(args.sequence_seed)
-        selected = [generator.choice(selected) for _ in range(args.sequence_len)]
+        weights_spec = getattr(args, "fault_count_weights", None)
+        schedule = getattr(args, "schedule", "list")
+        apps = getattr(args, "composition_apps", None)
+        if weights_spec or schedule != "list" or apps:
+            from sregym.conductor.problems.composition.catalog import SERVICES, entries_for
+            from sregym.conductor.problems.composition.generator import draw_plan, parse_plan_id, parse_weights
+            from sregym.conductor.problems.composition.schedule import (
+                DEFAULT_APPS,
+                filter_pool_by_apps,
+                plan_sequence,
+                single_fault_stream,
+            )
+
+            weights = parse_weights(weights_spec or "1:1")
+            app_names = apps or DEFAULT_APPS
+            unknown_apps = set(app_names) - set(SERVICES)
+            if unknown_apps:
+                raise ValueError(f"unsupported composition applications: {sorted(unknown_apps)}")
+            max_faults = min(len(SERVICES[app]) for app in app_names)
+            if max(weights) > max_faults:
+                raise ValueError(f"generated compositions support at most {max_faults} faults per problem")
+            pool = filter_pool_by_apps(selected, app_names)
+            pool = [problem_id for problem_id in pool if not problem_id.startswith(("composite_", "mf__"))]
+            stream = single_fault_stream(pool, schedule, args.sequence_seed) if 1 in weights else iter(())
+            selected = plan_sequence(args.sequence_len, weights, app_names, args.sequence_seed, stream)
+            for problem_id in selected:
+                parsed = parse_plan_id(problem_id)
+                if parsed is not None:
+                    app, count, seed = parsed
+                    draw_plan(app, count, seed, entries_for(app))
+        else:
+            if not selected:
+                raise ValueError("Cannot generate a sequence from an empty problem selection")
+            generator = random.Random(args.sequence_seed)
+            selected = [generator.choice(selected) for _ in range(args.sequence_len)]
     return [
         RunTask(sequence=index, problem_id=problem_id)
         for index, problem_id in enumerate(problem_id for problem_id in selected for _ in range(args.n_attempts))
     ]
+
+
+def save_sequence_plan(path: Path, tasks: list[RunTask]) -> None:
+    """Keep the full ordered plan so resuming cannot silently change problem slots."""
+    payload = [{"sequence": task.sequence, "problem_id": task.problem_id} for task in tasks]
+    if path.exists():
+        if json.loads(path.read_text(encoding="utf-8")) != payload:
+            raise ValueError(f"Existing sequence plan at {path} does not match the requested sequence")
+        return
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
 def _child_command(args: Any, task: RunTask) -> list[str]:
@@ -490,9 +532,13 @@ def _adaptive_scheduler(args: Any, completed: list[dict[str, str]]) -> AdaptiveS
 
 
 def run_parallel(args: Any) -> int:
+    adaptive = args.variants and args.variant_order == "adaptive" and not args.sequence_len
+    planned_tasks = None if adaptive else build_static_plan(args)
     remote_worker_clusters(args)
     root = _experiment_root(args)
     root.mkdir(parents=True, exist_ok=True)
+    if args.sequence_len:
+        save_sequence_plan(root / "sequence_plan.json", planned_tasks)
     if args.application_workspace:
         prepare_application_workspace(
             experiment_dir=root,
@@ -523,7 +569,6 @@ def run_parallel(args: Any) -> int:
     for worker in workers:
         worker.start()
 
-    adaptive = args.variants and args.variant_order == "adaptive"
     scheduler = (
         _adaptive_scheduler(args, [row for row in manifest if int(row.get("returncode", "1")) == 0])
         if adaptive
@@ -539,7 +584,7 @@ def run_parallel(args: Any) -> int:
             task_queue.put(RunTask(*item))
             pending += 1
     else:
-        plan = [task for task in build_static_plan(args) if (task.sequence, task.problem_id) not in completed_keys]
+        plan = [task for task in planned_tasks if (task.sequence, task.problem_id) not in completed_keys]
         total = len(plan)
         for task in plan:
             task_queue.put(task)
@@ -620,6 +665,9 @@ def _args_for_tests(**overrides: Any) -> SimpleNamespace:
         "n_attempts": 1,
         "sequence_len": 0,
         "sequence_seed": 42,
+        "fault_count_weights": None,
+        "composition_apps": None,
+        "schedule": "list",
         "judge_rounds": 3,
         "judge_voting_temperature": 0.7,
         "enable_summary": False,

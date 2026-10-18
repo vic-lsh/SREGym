@@ -30,6 +30,7 @@ from sregym.conductor.conductor import Conductor, ConductorConfig, defer_diagnos
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.problem_sets import PROBLEM_SETS
+from sregym.conductor.problems.composition.generator import parse_plan_id, parse_weights
 from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts
 from sregym.service.container_runner import ContainerRunner, ExecInput
 from sregym.traces import postprocess as trace_postprocess
@@ -241,7 +242,11 @@ def driver_loop(
         problem_ids = conductor.problems.get_problem_ids()
         all_problem_ids = conductor.problems.get_problem_ids(all=True)
         if problem_selection is not None:
-            unknown_problem_ids = set(problem_selection) - set(all_problem_ids)
+            unknown_problem_ids = {
+                problem_id
+                for problem_id in problem_selection
+                if problem_id not in all_problem_ids and parse_plan_id(problem_id) is None
+            }
             if unknown_problem_ids:
                 console.log(
                     f"⚠️  Problems not found in registry: {sorted(unknown_problem_ids)}. "
@@ -255,7 +260,11 @@ def driver_loop(
                 console.log(f"🎯 Running selected benchmark suite: {len(problem_ids)} problems")
 
         # sanity check: are there any specified problem ids that do not exist in the registry?
-        unknown_problem_ids = set(problem_ids) - set(all_problem_ids)
+        unknown_problem_ids = {
+            problem_id
+            for problem_id in problem_ids
+            if problem_id not in all_problem_ids and parse_plan_id(problem_id) is None
+        }
         if unknown_problem_ids:
             console.log(
                 f"⚠️  These problem ids do not exist in the registry and they will be skipped: {unknown_problem_ids}"
@@ -810,8 +819,29 @@ if __name__ == "__main__":
     )
     parser.add_argument("--summary-model", type=str, default=None, help="Model used to update operational memory")
     parser.add_argument("--seed-summary", type=str, default=None, help="Initial operational-memory Markdown file")
-    parser.add_argument("--sequence-len", type=int, default=0, help="Sample a deterministic problem sequence")
-    parser.add_argument("--sequence-seed", type=int, default=42)
+    parser.add_argument(
+        "--sequence-len", "--num-problems", type=int, default=0, help="Number of problems in a deterministic sequence"
+    )
+    parser.add_argument("--sequence-seed", "--seed", type=int, default=42)
+    parser.add_argument(
+        "--fault-count-weights",
+        type=str,
+        default=None,
+        help="Weighted number of faults per sequence problem, for example 1:3,2:2,5:1",
+    )
+    parser.add_argument(
+        "--apps",
+        dest="composition_apps",
+        type=lambda value: [item.strip() for item in value.split(",") if item.strip()],
+        default=None,
+        help="Comma-separated applications eligible for generated compositions",
+    )
+    parser.add_argument(
+        "--schedule",
+        choices=("list", "shuffle", "round_robin", "grouped", "adaptive"),
+        default="list",
+        help="Ordering of single-fault problems within a generated sequence",
+    )
     parser.add_argument("--worker-child", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
@@ -831,6 +861,21 @@ if __name__ == "__main__":
         parser.error("--judge-rounds must be at least 1")
     if args.sequence_len < 0:
         parser.error("--sequence-len must not be negative")
+    if args.fault_count_weights is not None:
+        try:
+            parse_weights(args.fault_count_weights)
+        except ValueError as exc:
+            parser.error(f"--fault-count-weights: {exc}")
+    if args.composition_apps is not None:
+        from sregym.conductor.problems.composition.catalog import SERVICES
+
+        if not args.composition_apps:
+            parser.error("--apps must name at least one application")
+        unknown_apps = set(args.composition_apps) - set(SERVICES)
+        if unknown_apps:
+            parser.error(f"--apps contains unsupported applications: {sorted(unknown_apps)}")
+    if (args.fault_count_weights or args.composition_apps or args.schedule != "list") and not args.sequence_len:
+        parser.error("--num-problems is required for a planned sequence")
     if args.seed_summary and not Path(args.seed_summary).is_file():
         parser.error("--seed-summary must name an existing file")
     if args.application_workspace and (not args.deploy_from_source or not args.app_filter):

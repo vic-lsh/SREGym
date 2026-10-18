@@ -373,6 +373,11 @@ class ProblemRegistry:
 
     def get_problem_instance(self, problem_id: str):
         if problem_id not in self.PROBLEM_REGISTRY:
+            from sregym.conductor.problems import composition
+
+            generated = composition.resolve(problem_id)
+            if generated is not None:
+                return generated
             raise ValueError(f"Problem ID {problem_id} not found in registry.")
 
         is_emulated_cluster = self.kubectl.is_emulated_cluster()
@@ -389,6 +394,10 @@ class ProblemRegistry:
         return self.PROBLEM_REGISTRY[problem_id]()
 
     def get_problem(self, problem_id: str):
+        from sregym.conductor.problems.composition.generator import parse_plan_id
+
+        if parse_plan_id(problem_id) is not None:
+            return lambda: self.get_problem_instance(problem_id)
         return self.PROBLEM_REGISTRY.get(problem_id)
 
     def get_problem_ids(self, task_type: str = None, all: bool = False):

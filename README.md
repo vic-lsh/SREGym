@@ -168,6 +168,21 @@ between tasks. `--sequence-len` and `--sequence-seed` sample a reproducible task
 sequence, while `--tasklist` accepts a YAML task list. Run `uv run main.py --help`
 for all supervisor and judge-voting options.
 
+To mix single-fault tasks with generated multi-fault tasks, set a fault-count
+weight for each desired count. Each slot draws its count independently; counts
+above one create a reproducible, conflict-checked combination on one application.
+The composition catalog currently supports target-port, incorrect-image, and
+readiness-probe faults across four applications, with at most eight faults per
+generated problem. The exact ordered IDs are saved in `sequence_plan.json`, and
+resuming with a different plan is rejected.
+
+```bash
+uv run main.py --agent codex --parallel 4 --num-problems 20 --seed 17 \
+  --problem missing_service_hotel_reservation --apps hotel_reservation \
+  --fault-count-weights 1:3,2:2,5:1 \
+  --experiment-dir results/mixed-faults
+```
+
 #### Container Isolation
 
 Agents always run in isolated Docker containers, preventing access to SREGym internals like problem definitions and grading logic. The image is built automatically on first run.
