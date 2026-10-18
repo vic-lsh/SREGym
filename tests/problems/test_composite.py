@@ -255,6 +255,9 @@ def test_the_shipped_table_parses_and_names_the_assurance_composites() -> None:
         "composite_policy_and_rate_configmap_hotel_reservation",
         "composite_frontend_selector_and_readiness_hotel_reservation",
         "composite_geo_configmap_with_log_drift_hotel_reservation",
+        "composite_user_target_port_and_geo_image_hotel_reservation",
+        "composite_rate_service_and_geo_image_hotel_reservation",
+        "composite_user_target_port_and_rate_service_hotel_reservation",
     }
     k1 = specs["composite_policy_and_rate_configmap_hotel_reservation"]
     assert [component.problem for component in k1.components] == [

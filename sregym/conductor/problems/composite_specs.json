@@ -19,5 +19,26 @@
       {"role": "fault", "problem": "missing_configmap_hotel_reservation"},
       {"role": "decoy", "decoy": "benign_env_drift", "params": {"deployment": "geo", "env": {"LOG_LEVEL": "debug"}}}
     ]
+  },
+  "composite_user_target_port_and_geo_image_hotel_reservation": {
+    "description": "The user Service routes to the wrong port while the geo Deployment uses an unavailable image.",
+    "components": [
+      {"role": "fault", "problem": "k8s_target_port_user_hotel_reservation"},
+      {"role": "fault", "problem": "incorrect_image_geo_hotel_reservation"}
+    ]
+  },
+  "composite_rate_service_and_geo_image_hotel_reservation": {
+    "description": "The mongodb-rate Service is absent while the geo Deployment uses an unavailable image.",
+    "components": [
+      {"role": "fault", "problem": "missing_service_hotel_reservation"},
+      {"role": "fault", "problem": "incorrect_image_geo_hotel_reservation"}
+    ]
+  },
+  "composite_user_target_port_and_rate_service_hotel_reservation": {
+    "description": "The user Service routes to the wrong port while the mongodb-rate Service is absent.",
+    "components": [
+      {"role": "fault", "problem": "k8s_target_port_user_hotel_reservation"},
+      {"role": "fault", "problem": "missing_service_hotel_reservation"}
+    ]
   }
 }

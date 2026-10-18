@@ -17,6 +17,33 @@ class SilentDataCorruptionStrategy(StrEnum):
     BOTH_CORRUPT = "both_corrupt"
 
 
+# Maps corruption_timing profile names to (up_interval, down_interval) tuples.
+# up_interval = seconds the device behaves normally; down_interval = seconds it corrupts.
+# Duty cycle = down / (up + down).
+_CORRUPTION_TIMING_PROFILES: dict[str, dict] = {
+    "always_on": {
+        "up_interval": 0,
+        "down_interval": 1,
+        "description": "Corruption is always active with no healthy intervals, "
+        "so every I/O operation is subject to silent data corruption.",
+    },
+    "intermittent_short": {
+        "up_interval": 10,
+        "down_interval": 5,
+        "description": "Corruption occurs in short intermittent bursts (~33% duty cycle: "
+        "5s corrupt every 15s), making it difficult to reproduce consistently "
+        "but frequent enough to cause noticeable data integrity issues.",
+    },
+    "intermittent_long": {
+        "up_interval": 30,
+        "down_interval": 5,
+        "description": "Corruption occurs in rare, widely-spaced bursts (~14% duty cycle: "
+        "5s corrupt every 35s), making it extremely difficult to catch in "
+        "short diagnostic windows and mimicking transient hardware faults.",
+    },
+}
+
+
 class SilentDataCorruption(Problem):
     def __init__(
         self,
@@ -24,8 +51,7 @@ class SilentDataCorruption(Problem):
         namespace: str = "hotel-reservation",
         strategy: SilentDataCorruptionStrategy = SilentDataCorruptionStrategy.BOTH_CORRUPT,
         probability: int = 100,  # (0-100)% probability
-        up_interval: int = 0,  # Seconds device is healthy
-        down_interval: int = 1,  # Seconds device corrupts data
+        corruption_timing: str = "always_on",
     ):
         self.kubectl = KubeCtl()
         self.namespace = namespace
@@ -35,21 +61,53 @@ class SilentDataCorruption(Problem):
         self.target_node: str | None = None
         self.strategy = strategy
         self.probability = probability
-        self.up_interval = up_interval
-        self.down_interval = down_interval
+        self.corruption_timing = corruption_timing
+
+        timing_profile = _CORRUPTION_TIMING_PROFILES[corruption_timing]
+        self.up_interval = timing_profile["up_interval"]
+        self.down_interval = timing_profile["down_interval"]
+
         self.probability = self.probability * 10000000  # (0-1000000000 scale) for (0-100% probability)
 
         super().__init__(app=HotelReservation())
 
-        self.root_cause = self.build_structured_root_cause(
-            component=f"deployment/{self.deploy}",
-            namespace=self.namespace,
-            description=(
+        corruption_descriptions = {
+            SilentDataCorruptionStrategy.READ_CORRUPT: (
+                "The underlying storage used by this MongoDB workload exhibits latent sector-level corruption, "
+                "so reads from the storage device can be silently corrupted while writes complete normally, "
+                "leading to latent data integrity issues. Symptoms include inconsistent query results, "
+                "mismatched records, or intermittent application anomalies that do not map cleanly to "
+                "obvious storage failures."
+            ),
+            SilentDataCorruptionStrategy.WRITE_CORRUPT: (
+                "The underlying storage used by this MongoDB workload exhibits latent sector-level corruption, "
+                "so writes to the storage device can be silently corrupted while reads return stale but "
+                "uncorrupted data, leading to latent data integrity issues. Symptoms include inconsistent "
+                "query results, mismatched records, or intermittent application anomalies that do not map "
+                "cleanly to obvious storage failures."
+            ),
+            SilentDataCorruptionStrategy.BOTH_CORRUPT: (
                 "The underlying storage used by this MongoDB workload exhibits latent sector-level corruption, "
                 "so reads and/or writes can be silently corrupted without immediate hard I/O errors, leading to latent "
                 "data integrity issues. Symptoms include inconsistent query results, mismatched records, or "
                 "intermittent application anomalies that do not map cleanly to obvious storage failures."
             ),
+        }
+
+        if self.probability < 1000000000:
+            probability_qualifier = (
+                " Corruption is intermittent (~10% of I/O operations), "
+                "making symptoms non-deterministic and harder to reproduce consistently."
+            )
+        else:
+            probability_qualifier = " Corruption affects every I/O operation."
+
+        timing_description = timing_profile["description"]
+
+        self.root_cause = self.build_structured_root_cause(
+            component=f"deployment/{self.deploy}",
+            namespace=self.namespace,
+            description=corruption_descriptions[self.strategy] + probability_qualifier + " " + timing_description,
         )
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)

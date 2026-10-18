@@ -203,9 +203,27 @@ def _resource_request_too_large(service: str) -> Callable[[], Problem]:
     return build
 
 
+def _target_port(service: str) -> Callable[[], Problem]:
+    def build() -> Problem:
+        from sregym.conductor.problems.target_port import K8STargetPortMisconfig
+
+        return K8STargetPortMisconfig(app_name="hotel_reservation", faulty_service=service)
+
+    return build
+
+
 # Fixed composites. Each pairs faults on different Deployments with no call-graph dependency between the
 # targets. Ids carry no ``__v_`` so they are listed like any concrete problem.
 COMPOSITE_SPECS: dict[str, tuple[Callable[[], Problem], ...]] = {
+    "composite_targetport_n2_hotel_reservation": (_target_port("user"), _target_port("search")),
+    "composite_targetport_n3_hotel_reservation": (_target_port("user"), _target_port("search"), _target_port("rate")),
+    "composite_targetport_n5_hotel_reservation": (
+        _target_port("user"),
+        _target_port("search"),
+        _target_port("rate"),
+        _target_port("recommendation"),
+        _target_port("reservation"),
+    ),
     "composite_readiness_geo__network_policy_recommendation": (_readiness("geo"), _network_policy("recommendation")),
     "composite_configmap_mongodb_rate__wrong_selector_frontend": (_configmap("mongodb-rate"), _selector("frontend")),
     "composite_network_policy_recommendation__configmap_mongodb_geo": (

@@ -10,13 +10,27 @@ from sregym.utils.decorators import mark_fault_injected
 
 logger = logging.getLogger(__name__)
 
+_DECOY_FLAG_COUNTS = {
+    "none": 0,
+    "low": 3,
+    "high": 10,
+}
+
 
 class TrainTicketF22(Problem):
-    def __init__(self):
+    def __init__(self, decoy_flag_count="high"):
         self.app_name = "train-ticket"
         self.faulty_service = "ts-contacts-service"
         self.fault_name = "fault-22-sql-column-name-mismatch-error"
+        self._decoy_flag_count = decoy_flag_count
+        self._decoy_count = _DECOY_FLAG_COUNTS[decoy_flag_count]
         super().__init__(app=TrainTicket())
+
+        decoy_context = {
+            "none": "",
+            "low": " A small number of unrelated feature flags are also enabled, adding mild noise to the investigation.",
+            "high": " Many unrelated feature flags are also enabled, adding significant noise to the investigation.",
+        }[decoy_flag_count]
 
         self.root_cause = self.build_structured_root_cause(
             component=f"deployment/{self.faulty_service}",
@@ -24,6 +38,7 @@ class TrainTicketF22(Problem):
             description=(
                 "SQL statements in the contacts service reference an incorrect column name, so database queries "
                 "fail at execution time and related API operations return errors."
+                f"{decoy_context}"
             ),
         )
         self.kubectl = KubeCtl()
@@ -38,8 +53,11 @@ class TrainTicketF22(Problem):
         self.injector = TrainTicketFaultInjector(namespace=self.namespace)
         self.injector._inject(
             fault_type="tt-feat-22",
+            decoy_count=self._decoy_count,
         )
-        print(f"Injected fault-22-sql-column-name-mismatch-error | Namespace: {self.namespace}\n")
+        print(
+            f"Injected fault-22-sql-column-name-mismatch-error (decoys={self._decoy_flag_count}) | Namespace: {self.namespace}\n"
+        )
 
     @mark_fault_injected
     def recover_fault(self):

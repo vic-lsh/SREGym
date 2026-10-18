@@ -3,17 +3,19 @@
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
+from sregym.conductor.problems.variant_utils import create_app
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
-from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
 
 class MongoDBAuthMissing(Problem):
-    def __init__(self):
-        super().__init__(app=SocialNetwork())
+    def __init__(self, app_name: str = "social_network", faulty_service: str = "url-shorten-mongodb"):
+        app = create_app(app_name)
+        super().__init__(app=app)
+        self.app_name = app_name
         self.kubectl = KubeCtl()
-        self.faulty_service = "url-shorten-mongodb"
+        self.faulty_service = faulty_service
         self.root_cause = self.build_structured_root_cause(
             component=f"service/{self.faulty_service}",
             namespace=self.namespace,

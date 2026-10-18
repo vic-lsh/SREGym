@@ -34,18 +34,37 @@ from sregym.conductor.problems.base import Problem
 from sregym.service.apps.astronomy_shop import AstronomyShop
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.apps.social_network import SocialNetwork
+from sregym.service.apps.train_ticket import TrainTicket
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
+
+_WEBHOOK_KIND_CONFIG = {
+    "validating": {
+        "api_kind": "ValidatingWebhookConfiguration",
+        "create": "create_validating_webhook_configuration",
+        "read": "read_validating_webhook_configuration",
+        "replace": "replace_validating_webhook_configuration",
+        "delete": "delete_validating_webhook_configuration",
+    },
+    "mutating": {
+        "api_kind": "MutatingWebhookConfiguration",
+        "create": "create_mutating_webhook_configuration",
+        "read": "read_mutating_webhook_configuration",
+        "replace": "replace_mutating_webhook_configuration",
+        "delete": "delete_mutating_webhook_configuration",
+    },
+}
 
 
 class AdmissionWebhookTLSMismatch(Problem):
     """Inject a reachable admission webhook backend but configure the
-    ValidatingWebhookConfiguration with a stale/wrong caBundle."""
+    webhook configuration (Validating or Mutating) with a stale/wrong caBundle."""
 
     APPS = {
         "hotel_reservation": HotelReservation,
         "social_network": SocialNetwork,
         "astronomy_shop": AstronomyShop,
+        "train_ticket": TrainTicket,
     }
 
     WEBHOOK_NAME = "pod-policy.validation.k8s.io"
@@ -53,12 +72,21 @@ class AdmissionWebhookTLSMismatch(Problem):
     BACKEND_SVC_NAMESPACE = "policy-system"
     BACKEND_DEPLOYMENT_NAME = "pod-policy-webhook"
 
-    def __init__(self, app_name: str = "hotel_reservation", faulty_service: str = "recommendation"):
+    def __init__(
+        self,
+        app_name: str = "hotel_reservation",
+        faulty_service: str = "recommendation",
+        webhook_kind: str = "validating",
+    ):
         if app_name not in self.APPS:
             raise ValueError(f"Unsupported app name: {app_name}")
+        if webhook_kind not in _WEBHOOK_KIND_CONFIG:
+            raise ValueError(f"Unsupported webhook_kind: {webhook_kind}")
 
         self.app_name = app_name
         self.faulty_service = faulty_service
+        self.webhook_kind = webhook_kind
+        self._webhook_config = _WEBHOOK_KIND_CONFIG[webhook_kind]
         app = self.APPS[app_name]()
         super().__init__(app=app)
 
@@ -67,11 +95,12 @@ class AdmissionWebhookTLSMismatch(Problem):
         self.core_api = client.CoreV1Api()
         self.wrong_ca_bundle = None
 
+        api_kind = self._webhook_config["api_kind"]
         self.root_cause = self.build_structured_root_cause(
-            component=f"ValidatingWebhookConfiguration/{self.WEBHOOK_NAME}",
+            component=f"{api_kind}/{self.WEBHOOK_NAME}",
             namespace=self.namespace,
             description=(
-                f"A cluster-scoped ValidatingWebhookConfiguration named `{self.WEBHOOK_NAME}` has been installed "
+                f"A cluster-scoped {api_kind} named `{self.WEBHOOK_NAME}` has been installed "
                 f"with `failurePolicy: Fail` and a `namespaceSelector` scoped to the `{self.namespace}` namespace. "
                 f"The webhook intercepts pod CREATE operations and points to the reachable HTTPS service "
                 f"`{self.BACKEND_SVC_NAMESPACE}/{self.BACKEND_SVC_NAME}`, but the webhook configuration contains "
@@ -79,8 +108,8 @@ class AdmissionWebhookTLSMismatch(Problem):
                 "certificate and rejects pod creation with a `failed calling webhook` / `x509` certificate error. "
                 f"The ReplicaSet controlling the `{self.faulty_service}` deployment cannot recreate pods after "
                 "they are deleted, leaving the deployment under-replicated. The deployment itself is healthy; it is "
-                "an innocent victim of a cluster-scoped admission TLS trust dependency. The mitigation is to remove "
-                "the broken ValidatingWebhookConfiguration, change `failurePolicy` to `Ignore`, or repair the "
+                f"an innocent victim of a cluster-scoped admission TLS trust dependency. The mitigation is to remove "
+                f"the broken {api_kind}, change `failurePolicy` to `Ignore`, or repair the "
                 "webhook TLS trust chain by restoring the correct `caBundle`."
             ),
         )
@@ -339,7 +368,7 @@ spec:
 
         return {
             "apiVersion": "admissionregistration.k8s.io/v1",
-            "kind": "ValidatingWebhookConfiguration",
+            "kind": self._webhook_config["api_kind"],
             "metadata": {"name": self.WEBHOOK_NAME},
             "webhooks": [
                 {
@@ -373,6 +402,50 @@ spec:
             ],
         }
 
+    def _find_target_pod(self) -> str:
+        selectors = [
+            f"app={self.faulty_service}",
+            f"io.kompose.service={self.faulty_service}",
+            f"app.kubernetes.io/name={self.faulty_service}",
+            f"service={self.faulty_service}",
+        ]
+        for sel in selectors:
+            pods = self.core_api.list_namespaced_pod(namespace=self.namespace, label_selector=sel)
+            if pods.items:
+                return pods.items[0].metadata.name
+        raise RuntimeError(f"No pods found for service '{self.faulty_service}' in namespace '{self.namespace}'")
+
+    def _create_or_replace_webhook(self, webhook: dict):
+        """Create the webhook configuration, replacing it if it already exists."""
+        api_kind = self._webhook_config["api_kind"]
+        create = getattr(self.admission_api, self._webhook_config["create"])
+        read = getattr(self.admission_api, self._webhook_config["read"])
+        replace = getattr(self.admission_api, self._webhook_config["replace"])
+        try:
+            create(body=webhook)
+            print(f"Created {api_kind}: {self.WEBHOOK_NAME}")
+        except ApiException as e:
+            if e.status == 409:
+                print(f"{api_kind} {self.WEBHOOK_NAME} exists; replacing")
+                existing = read(name=self.WEBHOOK_NAME)
+                webhook["metadata"]["resourceVersion"] = existing.metadata.resource_version
+                replace(name=self.WEBHOOK_NAME, body=webhook)
+            else:
+                raise
+
+    def _delete_webhook(self):
+        """Delete the webhook configuration, tolerating 404."""
+        api_kind = self._webhook_config["api_kind"]
+        delete = getattr(self.admission_api, self._webhook_config["delete"])
+        try:
+            delete(name=self.WEBHOOK_NAME)
+            print(f"Deleted {api_kind}: {self.WEBHOOK_NAME}")
+        except ApiException as e:
+            if e.status == 404:
+                print(f"{api_kind} {self.WEBHOOK_NAME} already absent")
+            else:
+                raise
+
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
@@ -380,28 +453,11 @@ spec:
         self._ensure_webhook_backend()
 
         webhook = self._build_webhook_body()
-        try:
-            self.admission_api.create_validating_webhook_configuration(body=webhook)
-            print(f"Created ValidatingWebhookConfiguration: {self.WEBHOOK_NAME}")
-        except ApiException as e:
-            if e.status == 409:
-                print(f"ValidatingWebhookConfiguration {self.WEBHOOK_NAME} exists; replacing")
-                existing = self.admission_api.read_validating_webhook_configuration(name=self.WEBHOOK_NAME)
-                webhook["metadata"]["resourceVersion"] = existing.metadata.resource_version
-                self.admission_api.replace_validating_webhook_configuration(name=self.WEBHOOK_NAME, body=webhook)
-            else:
-                raise
+        self._create_or_replace_webhook(webhook)
 
         time.sleep(2)
 
-        pods = self.core_api.list_namespaced_pod(
-            namespace=self.namespace,
-            label_selector=f"io.kompose.service={self.faulty_service}",
-        )
-        if not pods.items:
-            raise RuntimeError(f"No pods found for service '{self.faulty_service}' in namespace '{self.namespace}'")
-
-        target = pods.items[0].metadata.name
+        target = self._find_target_pod()
         self.core_api.delete_namespaced_pod(
             name=target,
             namespace=self.namespace,
@@ -413,14 +469,7 @@ spec:
     @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")
-        try:
-            self.admission_api.delete_validating_webhook_configuration(name=self.WEBHOOK_NAME)
-            print(f"Deleted ValidatingWebhookConfiguration: {self.WEBHOOK_NAME}")
-        except ApiException as e:
-            if e.status == 404:
-                print(f"ValidatingWebhookConfiguration {self.WEBHOOK_NAME} already absent")
-            else:
-                raise
+        self._delete_webhook()
 
         subprocess.run(
             ["kubectl", "delete", "namespace", self.BACKEND_SVC_NAMESPACE, "--ignore-not-found"],

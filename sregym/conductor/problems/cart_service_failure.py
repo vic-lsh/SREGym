@@ -10,12 +10,12 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class CartServiceFailure(Problem):
-    def __init__(self):
+    def __init__(self, faulty_service: str = "cart", feature_flag: str = "cartFailure"):
         super().__init__(app=AstronomyShop())
         self.kubectl = KubeCtl()
         self.injector = OtelFaultInjector(namespace=self.namespace)
-        self.faulty_service = "cart"
-        self.feature_flag = "cartFailure"
+        self.faulty_service = faulty_service
+        self.feature_flag = feature_flag
         self.root_cause = self.build_structured_root_cause(
             component=self.faulty_service,
             namespace=self.namespace,

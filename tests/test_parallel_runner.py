@@ -164,6 +164,65 @@ def test_worker_waits_for_supervisor_ack_before_next_task(tmp_path, monkeypatch)
     assert not worker.is_alive()
 
 
+def test_external_workers_use_distinct_clusters_without_creating_or_deleting_them(tmp_path, monkeypatch):
+    from sregym.parallel_runner import remote_worker_clusters
+
+    paths = []
+    for index in range(2):
+        path = tmp_path / f"worker-{index}.yaml"
+        path.write_text(
+            f"current-context: context-{index}\ncontexts:\n- name: context-{index}\n"
+            f"  context:\n    cluster: cluster-{index}\nclusters:\n- name: cluster-{index}\n"
+            f"  cluster:\n    server: https://cluster-{index}.example\n"
+        )
+        paths.append(str(path))
+    args = _args_for_tests(worker_kubeconfig=paths, parallel=2)
+    clusters = remote_worker_clusters(args)
+    assert len(clusters) == 2
+    assert clusters[0][0] == paths[0]
+    assert clusters[0][1] != clusters[1][1]
+
+    monkeypatch.setattr(
+        "sregym.parallel_runner.create_worker_cluster", lambda *args: (_ for _ in ()).throw(AssertionError("created"))
+    )
+    monkeypatch.setattr(
+        "sregym.parallel_runner.delete_worker_cluster", lambda *args: (_ for _ in ()).throw(AssertionError("deleted"))
+    )
+    seen = []
+    monkeypatch.setattr(
+        "sregym.parallel_runner._run_child",
+        lambda args, task, worker_id, root, kubeconfig, cluster_name: (
+            seen.append((kubeconfig, cluster_name)) or RunResult(task, worker_id, 0, 1.0, str(tmp_path), True)
+        ),
+    )
+    for worker_id in range(2):
+        tasks = queue.Queue()
+        tasks.put(RunTask(worker_id, "target_port"))
+        tasks.put(None)
+        acknowledgement = queue.Queue()
+        acknowledgement.put(None)
+        _worker(args, worker_id, tmp_path, tasks, queue.Queue(), acknowledgement, threading.Event())
+    assert seen == clusters
+
+
+def test_external_workers_reject_two_contexts_pointing_to_one_cluster(tmp_path):
+    import pytest
+
+    from sregym.parallel_runner import remote_worker_clusters
+
+    paths = []
+    for index in range(2):
+        path = tmp_path / f"worker-{index}.yaml"
+        path.write_text(
+            f"current-context: context-{index}\ncontexts:\n- name: context-{index}\n"
+            "  context:\n    cluster: cluster\nclusters:\n- name: cluster\n"
+            "  cluster:\n    server: https://same.example\n"
+        )
+        paths.append(str(path))
+    with pytest.raises(ValueError, match="same cluster"):
+        remote_worker_clusters(_args_for_tests(worker_kubeconfig=paths, parallel=2))
+
+
 def test_worker_id_offset_selects_cluster_and_host_ports(tmp_path, monkeypatch):
     """Concurrent single-worker runs on different clusters must not share a cluster or a host port."""
 
@@ -181,8 +240,9 @@ def test_worker_id_offset_selects_cluster_and_host_ports(tmp_path, monkeypatch):
     seen = []
     monkeypatch.setattr(
         "sregym.parallel_runner._run_child",
-        lambda args, task, worker_id, root, kubeconfig, cluster_name: seen.append((worker_id, cluster_name))
-        or RunResult(task, worker_id, 0, 1.0, str(tmp_path), True),
+        lambda args, task, worker_id, root, kubeconfig, cluster_name: (
+            seen.append((worker_id, cluster_name)) or RunResult(task, worker_id, 0, 1.0, str(tmp_path), True)
+        ),
     )
     tasks = queue.Queue()
     tasks.put(RunTask(0, "target_port"))

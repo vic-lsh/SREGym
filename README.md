@@ -139,6 +139,18 @@ uv run main.py --suite sregym-lite --agent codex --parallel 4 \
   --experiment-dir results/lite-parallel
 ```
 
+You can assign each worker a separate, existing Kubernetes cluster by repeating
+`--worker-kubeconfig` once per worker. The supervisor uses the active context in
+each file, checks that the API servers differ, and leaves those clusters in place
+after the run. These clusters need the normal benchmark prerequisites and access
+to the application images. Source deployment currently requires local Kind workers.
+
+```bash
+uv run main.py --suite sregym-lite --agent codex --parallel 2 \
+  --worker-kubeconfig ~/.kube/worker-a.yaml \
+  --worker-kubeconfig ~/.kube/worker-b.yaml
+```
+
 Generated variants support shuffled, round-robin, grouped, and adaptive
 scheduling. `--variant-spec` can be repeated to restrict the base problem types:
 
@@ -146,6 +158,10 @@ scheduling. `--variant-spec` can be repeated to restrict the base problem types:
 uv run main.py --agent codex --parallel 4 --variants --variant-count 100 \
   --variant-order adaptive --variant-spec missing_env_variable
 ```
+
+Use `--enable-safety-invariants` to check agent actions and workload changes
+during a run. Named composite problems grade each fault component, and the
+generated variant catalog covers additional fault parameters and applications.
 
 Use `--enable-summary` to maintain and inject a bounded operational-memory file
 between tasks. `--sequence-len` and `--sequence-seed` sample a reproducible task

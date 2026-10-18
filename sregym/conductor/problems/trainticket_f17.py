@@ -11,19 +11,35 @@ from sregym.utils.decorators import mark_fault_injected
 
 logger = logging.getLogger(__name__)
 
+_DECOY_FLAG_COUNTS = {
+    "none": 0,
+    "low": 3,
+    "high": 10,
+}
+
 
 class TrainTicketF17(Problem):
-    def __init__(self):
+    def __init__(self, decoy_flag_count="high"):
         self.app_name = "train-ticket"
         self.faulty_service = "ts-voucher-service"
         self.fault_name = "fault-17-nested-sql-select-clause-error"
+        self._decoy_flag_count = decoy_flag_count
+        self._decoy_count = _DECOY_FLAG_COUNTS[decoy_flag_count]
         super().__init__(app=TrainTicket())
+
+        decoy_context = {
+            "none": "",
+            "low": " A small number of unrelated feature flags are also enabled, adding mild noise to the investigation.",
+            "high": " Many unrelated feature flags are also enabled, adding significant noise to the investigation.",
+        }[decoy_flag_count]
+
         self.root_cause = self.build_structured_root_cause(
             component=f"deployment/{self.faulty_service}",
             namespace=self.namespace,
             description=(
                 "The voucher service executes malformed nested SQL SELECT logic, which causes query execution failures "
                 "in the database layer and breaks voucher-related request handling."
+                f"{decoy_context}"
             ),
         )
 
@@ -42,8 +58,11 @@ class TrainTicketF17(Problem):
         self.injector = TrainTicketFaultInjector(namespace=self.namespace)
         self.injector._inject(
             fault_type="tt-feat-17",
+            decoy_count=self._decoy_count,
         )
-        print(f"Injected fault-17-nested-sql-select-clause-error | Namespace: {self.namespace}\n")
+        print(
+            f"Injected fault-17-nested-sql-select-clause-error (decoys={self._decoy_flag_count}) | Namespace: {self.namespace}\n"
+        )
 
     @mark_fault_injected
     def recover_fault(self):

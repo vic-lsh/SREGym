@@ -10,12 +10,12 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class AdServiceManualGc(Problem):
-    def __init__(self):
+    def __init__(self, faulty_service: str = "ad", feature_flag: str = "adManualGc"):
         super().__init__(app=AstronomyShop())
         self.kubectl = KubeCtl()
         self.injector = OtelFaultInjector(namespace=self.namespace)
-        self.faulty_service = "ad"
-        self.feature_flag = "adManualGc"
+        self.faulty_service = faulty_service
+        self.feature_flag = feature_flag
         self.root_cause = self.build_structured_root_cause(
             component=self.faulty_service,
             namespace=self.namespace,

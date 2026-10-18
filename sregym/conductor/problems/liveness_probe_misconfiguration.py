@@ -1,34 +1,27 @@
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
+from sregym.conductor.problems.variant_utils import create_app
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
-from sregym.service.apps.astronomy_shop import AstronomyShop
-from sregym.service.apps.hotel_reservation import HotelReservation
-from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
 
 class LivenessProbeMisconfiguration(Problem):
-    def __init__(self, app_name="social_network", faulty_service="user-service"):
+    def __init__(
+        self, app_name="social_network", faulty_service="user-service", probe_error_mode="wrong_path", replica_count=1
+    ):
         self.app_name = app_name
         self.faulty_service = faulty_service
+        self.probe_error_mode = probe_error_mode
+        self.replica_count = replica_count
 
-        if app_name == "social_network":
-            app = SocialNetwork()
-            app.create_workload(duration=30)
+        from sregym.conductor.problems.readiness_probe_misconfiguration import PROBE_ERROR_MODES
 
-        elif app_name == "hotel_reservation":
-            app = HotelReservation()
-            app.create_workload(duration=30)
+        mode = PROBE_ERROR_MODES[probe_error_mode]
+        self.probe_config = mode["config"]
 
-        elif app_name == "astronomy_shop":
-            app = AstronomyShop()
-            app.create_workload()
-
-        else:
-            raise ValueError(f"Unsupported app name: {app_name}")
-
+        app = create_app(app_name)
         super().__init__(app=app)
 
         self.kubectl = KubeCtl()
@@ -37,24 +30,35 @@ class LivenessProbeMisconfiguration(Problem):
             component=self.faulty_service,
             namespace=self.namespace,
             description=(
-                f"The deployment `{self.faulty_service}` has a misconfigured liveness probe that checks a non-existent "
-                "health endpoint (`/healthz` on port `8080`), causing Kubernetes to repeatedly kill and restart pods. "
+                f"The deployment `{self.faulty_service}` has a misconfigured liveness probe that targets "
+                f"{mode['description']}, causing Kubernetes to repeatedly kill and restart pods. "
                 "Pods enter recurrent restart loops with unstable availability and shortened uptime between crashes. "
                 "Users experience intermittent request failures and latency spikes as endpoints churn during restarts."
             ),
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
+        self.app.create_workload()
         self.mitigation_oracle = MitigationOracle(problem=self)
+
+    def _scale_if_needed(self):
+        if self.replica_count > 1:
+            cmd = f"kubectl scale deployment/{self.faulty_service} --replicas={self.replica_count} -n {self.namespace}"
+            self.kubectl.exec_command(cmd)
+            self.kubectl.wait_for_ready(self.namespace)
 
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
-        self.injector._inject(
-            fault_type="liveness_probe_misconfiguration",
-            microservices=[self.faulty_service],
+        self._scale_if_needed()
+        self.injector.inject_liveness_probe_misconfiguration(
+            [self.faulty_service],
+            probe_config=self.probe_config,
         )
-        print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
+        import time
+
+        time.sleep(6)
+        print(f"Service: {self.faulty_service} | Mode: {self.probe_error_mode} | Namespace: {self.namespace}\n")
 
     @mark_fault_injected
     def recover_fault(self):

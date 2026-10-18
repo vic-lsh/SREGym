@@ -13,10 +13,10 @@ class TargetPortMisconfigMitigationOracle(Oracle):
         faulty_service = self.problem.faulty_service
         results = {}
 
-        # Check if target port has been reset to 9090
+        # Check whether the service has its original target port.
         configs = kubectl.get_service_json(faulty_service, namespace)
         target_port = configs["spec"]["ports"][0]["targetPort"]
-        all_normal = is_exact_match(target_port, 9090)
+        all_normal = is_exact_match(target_port, getattr(self.problem, "original_port", 9090))
 
         if all_normal:
             # Check if all services (not only faulty service) is back to normal (Running)

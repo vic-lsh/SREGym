@@ -85,6 +85,17 @@ SERVICES_BY_APP = {
         "kafka",
         "valkey-cart",
     ],
+    "train_ticket": [
+        "ts-admin-basic-info-service",
+        "ts-auth-service",
+        "ts-order-service",
+        "ts-route-service",
+        "ts-seat-service",
+        "ts-ticketinfo-service",
+        "ts-travel-service",
+        "ts-user-service",
+        "ts-station-service",
+    ],
 }
 
 

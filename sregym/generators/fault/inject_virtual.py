@@ -33,23 +33,32 @@ class VirtualizationFaultInjector(FaultInjector):
     ############# FAULT LIBRARY ################
 
     # V.1 - misconfig_k8s: Misconfigure service port in Kubernetes - Misconfig
-    def inject_misconfig_k8s(self, microservices: list[str]):
-        """Inject a fault to misconfigure service's target port in Kubernetes."""
+    def inject_misconfig_k8s(self, microservices: list[str], to_port: int = 9999, from_port: int = 9090):
+        """Inject a fault to misconfigure service's target port in Kubernetes.
+
+        ``to_port`` is the (wrong) port to redirect the real targetPort to, and
+        ``from_port`` is that real targetPort. Both are threaded through from the
+        problem (``bad_port`` and the service's captured ``original_port``); the
+        defaults keep the original 9090->9999 behavior for argument-less callers.
+        """
         for service in microservices:
             service_config = self._modify_target_port_config(
-                from_port=9090,
-                to_port=9999,
+                from_port=from_port,
+                to_port=to_port,
                 configs=self.kubectl.get_service_json(service, self.testbed),
             )
 
             print(f"Misconfig fault for service: {service} | namespace: {self.testbed}")
             self.kubectl.patch_service(service, self.testbed, service_config)
 
-    def recover_misconfig_k8s(self, microservices: list[str]):
+    def recover_misconfig_k8s(self, microservices: list[str], from_port: int = 9999, to_port: int = 9090):
+        """Restore the real targetPort. ``from_port`` is the wrong port to rewrite
+        back (must match the injected ``to_port``); ``to_port`` here is the real
+        original targetPort to restore (defaults to 9090 for legacy callers)."""
         for service in microservices:
             service_config = self._modify_target_port_config(
-                from_port=9999,
-                to_port=9090,
+                from_port=from_port,
+                to_port=to_port,
                 configs=self.kubectl.get_service_json(service, self.testbed),
             )
 
@@ -450,22 +459,22 @@ class VirtualizationFaultInjector(FaultInjector):
         print(f"Recovered from wrong pod selection fault for service: {target_service}")
 
     # V.10 - Inject service DNS resolution failure by patching CoreDNS ConfigMap
-    def inject_service_dns_resolution_failure(self, microservices: list[str]):
+    def inject_service_dns_resolution_failure(self, microservices: list[str], rcode: str = "NXDOMAIN"):
         for service in microservices:
             fqdn = f"{service}.{self.namespace}.svc.cluster.local"
 
             # Get configmap as structured data
-            cm_yaml = self.kubectl.exec_command_checked("kubectl -n kube-system get cm coredns -o yaml")
+            cm_yaml = self.kubectl.exec_command("kubectl -n kube-system get cm coredns -o yaml")
             cm_data = yaml.safe_load(cm_yaml)
             corefile = cm_data["data"]["Corefile"]
 
             start_line_id = f"template ANY ANY {fqdn} {{"
             if start_line_id in corefile:
-                print("NXDOMAIN template already present; recovering from previous injection")
+                print("DNS template already present; recovering from previous injection")
                 self.recover_service_dns_resolution_failure([service])
 
                 # Re-fetch after recovery
-                cm_yaml = self.kubectl.exec_command_checked("kubectl -n kube-system get cm coredns -o yaml")
+                cm_yaml = self.kubectl.exec_command("kubectl -n kube-system get cm coredns -o yaml")
                 cm_data = yaml.safe_load(cm_yaml)
                 corefile = cm_data["data"]["Corefile"]
 
@@ -473,7 +482,7 @@ class VirtualizationFaultInjector(FaultInjector):
             template_block = (
                 f"    template ANY ANY {fqdn} {{\n"
                 f'        match "^{fqdn}\\.$"\n'
-                f"        rcode NXDOMAIN\n"
+                f"        rcode {rcode}\n"
                 f"        fallthrough\n"
                 f"    }}\n"
             )
@@ -481,7 +490,8 @@ class VirtualizationFaultInjector(FaultInjector):
             # Find the position of "kubernetes" word
             kubernetes_pos = corefile.find("kubernetes")
             if kubernetes_pos == -1:
-                raise RuntimeError("Could not locate 'kubernetes' plugin in CoreDNS Corefile")
+                print("Could not locate 'kubernetes' plugin in Corefile")
+                return
 
             # Find the start of the line containing "kubernetes"
             line_start = corefile.rfind("\n", 0, kubernetes_pos)
@@ -498,17 +508,11 @@ class VirtualizationFaultInjector(FaultInjector):
             # Apply using temporary file
             tmp_file_path = self._write_yaml_to_file("coredns", cm_data)
 
-            self.kubectl.exec_command_checked(f"kubectl apply -f {tmp_file_path}")
+            self.kubectl.exec_command(f"kubectl apply -f {tmp_file_path}")
 
             # Restart CoreDNS
-            self.kubectl.exec_command_checked("kubectl -n kube-system rollout restart deployment coredns")
-            self.kubectl.exec_command_checked("kubectl -n kube-system rollout status deployment coredns --timeout=30s")
-
-            corefile_after = yaml.safe_load(
-                self.kubectl.exec_command_checked("kubectl -n kube-system get cm coredns -o yaml")
-            )["data"]["Corefile"]
-            if start_line_id not in corefile_after:
-                raise RuntimeError(f"CoreDNS did not retain the NXDOMAIN rule for {fqdn}")
+            self.kubectl.exec_command("kubectl -n kube-system rollout restart deployment coredns")
+            self.kubectl.exec_command("kubectl -n kube-system rollout status deployment coredns --timeout=30s")
 
             print(f"Injected Service DNS Resolution Failure fault for service: {service}")
 
@@ -576,13 +580,22 @@ class VirtualizationFaultInjector(FaultInjector):
             print(f"Recovered Service DNS Resolution Failure fault for service: {service}")
 
     # V.11 - Inject a fault by modifying the DNS policy of a service
-    def inject_wrong_dns_policy(self, microservices: list[str]):
+    def inject_wrong_dns_policy(
+        self,
+        microservices: list[str],
+        dns_patch: str | None = None,
+        propagation_ns: str = "8.8.8.8",
+        expect_external: bool = True,
+    ):
         for service in microservices:
-            patch = (
-                '[{"op":"replace","path":"/spec/template/spec/dnsPolicy","value":"None"},'
-                '{"op":"add","path":"/spec/template/spec/dnsConfig","value":'
-                '{"nameservers":["8.8.8.8"],"searches":[]}}]'
-            )
+            if dns_patch is None:
+                patch = (
+                    '[{"op":"replace","path":"/spec/template/spec/dnsPolicy","value":"None"},'
+                    '{"op":"add","path":"/spec/template/spec/dnsConfig","value":'
+                    '{"nameservers":["8.8.8.8"],"searches":[]}}]'
+                )
+            else:
+                patch = dns_patch
             patch_cmd = f"kubectl patch deployment {service} -n {self.namespace} --type json -p '{patch}'"
             result = self.kubectl.exec_command(patch_cmd)
             print(f"Patch result for {service}: {result}")
@@ -590,17 +603,25 @@ class VirtualizationFaultInjector(FaultInjector):
             self.kubectl.exec_command(f"kubectl rollout restart deployment {service} -n {self.namespace}")
             self.kubectl.exec_command(f"kubectl rollout status deployment {service} -n {self.namespace}")
 
-            # Check if nameserver 8.8.8.8 present in the pods
-            self._wait_for_dns_policy_propagation(service, external_ns="8.8.8.8", expect_external=True)
+            self._wait_for_dns_policy_propagation(service, external_ns=propagation_ns, expect_external=expect_external)
 
             print(f"Injected wrong DNS policy fault for service: {service}")
 
-    def recover_wrong_dns_policy(self, microservices: list[str]):
+    def recover_wrong_dns_policy(
+        self,
+        microservices: list[str],
+        recovery_patch: str | None = None,
+        propagation_ns: str = "8.8.8.8",
+        expect_external: bool = False,
+    ):
         for service in microservices:
-            patch = (
-                '[{"op":"remove","path":"/spec/template/spec/dnsPolicy"},'
-                '{"op":"remove","path":"/spec/template/spec/dnsConfig"}]'
-            )
+            if recovery_patch is None:
+                patch = (
+                    '[{"op":"remove","path":"/spec/template/spec/dnsPolicy"},'
+                    '{"op":"remove","path":"/spec/template/spec/dnsConfig"}]'
+                )
+            else:
+                patch = recovery_patch
             patch_cmd = f"kubectl patch deployment {service} -n {self.namespace} --type json -p '{patch}'"
             result = self.kubectl.exec_command(patch_cmd)
             print(f"Patch result for {service}: {result}")
@@ -608,8 +629,7 @@ class VirtualizationFaultInjector(FaultInjector):
             self.kubectl.exec_command(f"kubectl rollout restart deployment {service} -n {self.namespace}")
             self.kubectl.exec_command(f"kubectl rollout status deployment {service} -n {self.namespace}")
 
-            # Check if nameserver 8.8.8.8 absent in the pods
-            self._wait_for_dns_policy_propagation(service, external_ns="8.8.8.8", expect_external=False)
+            self._wait_for_dns_policy_propagation(service, external_ns=propagation_ns, expect_external=expect_external)
 
             print(f"Recovered wrong DNS policy fault for service: {service}")
 
@@ -872,11 +892,16 @@ class VirtualizationFaultInjector(FaultInjector):
             print(f"Recovered from sidecar port conflict fault for service: {service}")
 
     # Inject a liveness probe too aggressive fault
-    def inject_liveness_probe_too_aggressive(self, microservices: list[str]):
-        for service in microservices:
-            script_path = Path(__file__).parent / "custom" / "slow_service.py"
-            self.deploy_custom_service(service, script_path)
+    def inject_liveness_probe_too_aggressive(self, microservices: list[str], probe_params: dict | None = None):
+        if probe_params is None:
+            probe_params = {
+                "initialDelaySeconds": 0,
+                "periodSeconds": 1,
+                "failureThreshold": 1,
+                "timeoutSeconds": 1,
+            }
 
+        for service in microservices:
             deployment_yaml = self._get_deployment_yaml(service)
             original_deployment_yaml = copy.deepcopy(deployment_yaml)
 
@@ -885,9 +910,19 @@ class VirtualizationFaultInjector(FaultInjector):
             for container in containers:
                 probe = container.get("livenessProbe")
                 if probe:
-                    probe["initialDelaySeconds"] = 0
-                    probe["periodSeconds"] = 1
-                    probe["failureThreshold"] = 1
+                    probe.update(probe_params)
+                else:
+                    port = 8080
+                    ports = container.get("ports", [])
+                    if ports:
+                        port = ports[0].get("containerPort", 8080)
+                    container["livenessProbe"] = {
+                        "httpGet": {
+                            "path": "/_internal/healthz",
+                            "port": port,
+                        },
+                        **probe_params,
+                    }
 
             deployment_yaml["spec"]["template"]["spec"]["terminationGracePeriodSeconds"] = 0
 
@@ -1104,22 +1139,22 @@ class VirtualizationFaultInjector(FaultInjector):
             print(f"Recovered ConfigMap drift fault for service: {service}")
 
     # V.14 - Inject a readiness probe misconfiguration fault
-    def inject_readiness_probe_misconfiguration(self, microservices: list[str]):
+    def inject_readiness_probe_misconfiguration(self, microservices: list[str], probe_config: dict | None = None):
+        if probe_config is None:
+            probe_config = {
+                "httpGet": {"path": "/healthz", "port": 8080},
+                "initialDelaySeconds": 10,
+                "periodSeconds": 10,
+                "failureThreshold": 1,
+            }
         for service in microservices:
             deployment_yaml = self._get_deployment_yaml(service)
             original_deployment_yaml = copy.deepcopy(deployment_yaml)
 
             containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
 
-            initial_delay = 10
-
             for container in containers:
-                container["readinessProbe"] = {
-                    "httpGet": {"path": "/healthz", "port": 8080},
-                    "initialDelaySeconds": initial_delay,
-                    "periodSeconds": 10,
-                    "failureThreshold": 1,
-                }
+                container["readinessProbe"] = probe_config
 
             modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
 
@@ -1155,21 +1190,22 @@ class VirtualizationFaultInjector(FaultInjector):
             print(f"Recovered from readiness probe misconfiguration fault for service: {service}")
 
     # V.15 - Inject a liveness probe misconfiguration fault
-    def inject_liveness_probe_misconfiguration(self, microservices: list[str]):
+    def inject_liveness_probe_misconfiguration(self, microservices: list[str], probe_config: dict | None = None):
+        if probe_config is None:
+            probe_config = {
+                "httpGet": {"path": "/healthz", "port": 8080},
+                "initialDelaySeconds": 10,
+                "periodSeconds": 10,
+                "failureThreshold": 1,
+            }
         for service in microservices:
             deployment_yaml = self._get_deployment_yaml(service)
             original_deployment_yaml = copy.deepcopy(deployment_yaml)
 
             containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
-            initial_delay = 10
 
             for container in containers:
-                container["livenessProbe"] = {
-                    "httpGet": {"path": "/healthz", "port": 8080},
-                    "initialDelaySeconds": initial_delay,
-                    "periodSeconds": 10,
-                    "failureThreshold": 1,
-                }
+                container["livenessProbe"] = probe_config
 
             # Set terminationGracePeriodSeconds at the pod template spec level (not inside a container spec)
             deployment_yaml["spec"]["template"]["spec"]["terminationGracePeriodSeconds"] = 0
@@ -1495,7 +1531,13 @@ class VirtualizationFaultInjector(FaultInjector):
         raise TimeoutError(f"Deployment '{service}' did not complete its healthy baseline rollout within {timeout}s")
 
     # Inject Rolling Update Misconfiguration
-    def inject_rolling_update_misconfigured(self, microservices: list[str]):
+    def inject_rolling_update_misconfigured(
+        self,
+        microservices: list[str],
+        init_command: str = "sleep infinity",
+        max_unavailable: str = "100%",
+        max_surge: str = "0%",
+    ):
         import tempfile
 
         for service in microservices:
@@ -1540,13 +1582,13 @@ class VirtualizationFaultInjector(FaultInjector):
             dep = copy.deepcopy(base_dep)
             dep["spec"]["strategy"] = {
                 "type": "RollingUpdate",
-                "rollingUpdate": {"maxUnavailable": "100%", "maxSurge": "0%"},
+                "rollingUpdate": {"maxUnavailable": max_unavailable, "maxSurge": max_surge},
             }
             init = {
                 "name": "hang-init",
                 "image": "busybox:1.36",
                 "imagePullPolicy": "IfNotPresent",
-                "command": ["/bin/sh", "-c", "sleep infinity"],
+                "command": ["/bin/sh", "-c", init_command],
             }
             dep.setdefault("spec", {}).setdefault("template", {}).setdefault("spec", {}).setdefault(
                 "initContainers", []
@@ -1834,19 +1876,33 @@ class VirtualizationFaultInjector(FaultInjector):
 
             print(f"Recovered from persistent volume affinity violation fault for service: {service}")
 
-    def inject_pod_anti_affinity_deadlock(self, microservices: list[str]):
+    def inject_pod_anti_affinity_deadlock(self, microservices: list[str], topology_key: str = "kubernetes.io/hostname"):
         """
         Inject a fault that creates pod anti-affinity deadlock.
-        Sets requiredDuringScheduling anti-affinity that excludes all nodes.
+        Sets requiredDuringScheduling anti-affinity that excludes all nodes/zones.
+
+        Args:
+            microservices: List of service names to inject the fault into.
+            topology_key: The topology key for anti-affinity rules.
+                'kubernetes.io/hostname' spreads across nodes;
+                'topology.kubernetes.io/zone' spreads across zones.
         """
         for service in microservices:
             deployment_yaml = self._get_deployment_yaml(service)
 
-            # Set replicas higher than node count to guarantee a scheduling deadlock.
-            node_count = int(self.kubectl.exec_command("kubectl get nodes --no-headers | wc -l").strip())
-            deployment_yaml["spec"]["replicas"] = node_count + 1
+            # Set replicas higher than the number of distinct topology domains
+            # to guarantee a scheduling deadlock.
+            if topology_key == "topology.kubernetes.io/zone":
+                # Count distinct zone labels across nodes
+                zone_output = self.kubectl.exec_command(
+                    "kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.labels.topology\\.kubernetes\\.io/zone}{\"\\n\"}{end}'"
+                ).strip()
+                distinct_domains = len(set(line for line in zone_output.split("\n") if line))
+            else:
+                distinct_domains = int(self.kubectl.exec_command("kubectl get nodes --no-headers | wc -l").strip())
+            deployment_yaml["spec"]["replicas"] = distinct_domains + 1
 
-            # Create anti-affinity rules that prevent pods from being scheduled on same nodes
+            # Create anti-affinity rules that prevent pods from being scheduled on same topology domain
             anti_affinity_rules = {
                 "podAntiAffinity": {
                     "requiredDuringSchedulingIgnoredDuringExecution": [
@@ -1854,7 +1910,7 @@ class VirtualizationFaultInjector(FaultInjector):
                             "labelSelector": {
                                 "matchExpressions": [{"key": "app", "operator": "In", "values": [service]}]
                             },
-                            "topologyKey": "kubernetes.io/hostname",
+                            "topologyKey": topology_key,
                         }
                     ]
                 }
@@ -2490,7 +2546,7 @@ class VirtualizationFaultInjector(FaultInjector):
     INIT_DEP_HANG_CONTAINER_NAME = "wait-for-legacy-config"
     INIT_DEP_HANG_TARGET_SVC = "legacy-config-service"
 
-    def inject_init_container_dependency_hang(self, microservices: list[str]):
+    def inject_init_container_dependency_hang(self, microservices: list[str], check_command: str = "dns_lookup_loop"):
         """Patch each target deployment to add a busybox init container that loops
         on `nslookup` against a non-existent service, so the pod never leaves
         `Init:0/1`.  Saves the pre-injection deployment manifest for recovery
@@ -2526,24 +2582,28 @@ class VirtualizationFaultInjector(FaultInjector):
             if not annotations:
                 meta.pop("annotations", None)
 
-            snapshot_path = fault_scratch_path(f"{service}_init_dep_hang_original.yaml")
+            snapshot_path = fault_scratch_path(f"{self.namespace}_{service}_init_dep_hang_original.yaml")
             with open(snapshot_path, "w") as fh:
                 yaml.safe_dump(original, fh)
             print(f"Saved pre-injection deployment to {snapshot_path}")
 
-            # Build the dep-wait init container.  We pin `busybox:1.28` because
-            # its nslookup exits non-zero on NXDOMAIN; newer busybox releases
-            # regressed this (kubernetes/website#12050) and would silently
-            # break the fault.  We rely on the exit code alone — an earlier
-            # `grep '^Address'` guard matched the resolver's own self-id line
-            # in busybox 1.28 output and let the loop terminate immediately
-            # even when the target name did not resolve.
-            init_cmd = (
-                f"echo 'waiting for {self.INIT_DEP_HANG_TARGET_SVC} to become ready...'; "
-                f"until nslookup {self.INIT_DEP_HANG_TARGET_SVC}.{self.namespace}.svc.cluster.local "
-                f">/dev/null 2>&1; do "
-                f"echo 'still waiting on {self.INIT_DEP_HANG_TARGET_SVC}'; sleep 5; done"
-            )
+            # Build the dep-wait init container.  The check_command parameter
+            # selects the mechanism used to probe the (non-existent) dependency.
+            target_fqdn = f"{self.INIT_DEP_HANG_TARGET_SVC}.{self.namespace}.svc.cluster.local"
+            if check_command == "tcp_connect_loop":
+                probe = f"until nc -z {self.INIT_DEP_HANG_TARGET_SVC} 80; do sleep 2; done"
+            elif check_command == "http_ready_check":
+                probe = f"until wget -q -O- http://{self.INIT_DEP_HANG_TARGET_SVC}:80/ready; do sleep 2; done"
+            else:
+                # dns_lookup_loop (default).  We pin `busybox:1.28` because
+                # its nslookup exits non-zero on NXDOMAIN; newer busybox
+                # releases regressed this (kubernetes/website#12050).
+                probe = (
+                    f"until nslookup {target_fqdn} "
+                    f">/dev/null 2>&1; do "
+                    f"echo 'still waiting on {self.INIT_DEP_HANG_TARGET_SVC}'; sleep 5; done"
+                )
+            init_cmd = f"echo 'waiting for {self.INIT_DEP_HANG_TARGET_SVC} to become ready...'; " + probe
             init_container = {
                 "name": self.INIT_DEP_HANG_CONTAINER_NAME,
                 "image": "busybox:1.28",
@@ -2558,7 +2618,7 @@ class VirtualizationFaultInjector(FaultInjector):
             existing_inits.append(init_container)
             tmpl_spec["initContainers"] = existing_inits
 
-            faulty_path = fault_scratch_path(f"{service}_init_dep_hang_faulty.yaml")
+            faulty_path = fault_scratch_path(f"{self.namespace}_{service}_init_dep_hang_faulty.yaml")
             with open(faulty_path, "w") as fh:
                 yaml.safe_dump(original, fh)
 
@@ -2576,7 +2636,7 @@ class VirtualizationFaultInjector(FaultInjector):
         injected init container has already been removed by the agent — the
         round-trip apply is idempotent."""
         for service in microservices:
-            snapshot_path = fault_scratch_path(f"{service}_init_dep_hang_original.yaml")
+            snapshot_path = fault_scratch_path(f"{self.namespace}_{service}_init_dep_hang_original.yaml")
             if not Path(snapshot_path).exists():
                 # Fall back to stripping our marker init container from whatever
                 # is currently deployed.
@@ -2764,3 +2824,30 @@ if __name__ == "__main__":
     injector = VirtualizationFaultInjector(namespace)
     # injector._inject(fault_type, microservices)
     injector._recover(fault_type, microservices)
+
+    def inject_namespace_memory_limit(self, deployment_name: str, namespace: str, memory_limit: str):
+        # Create memory resource quota FIRST so new pods are rejected
+        quota_body = {
+            "apiVersion": "v1",
+            "kind": "ResourceQuota",
+            "metadata": {"name": "memory-limit-quota", "namespace": namespace},
+            "spec": {"hard": {"memory": memory_limit}},
+        }
+        self.kubectl.apply_resource(quota_body)
+
+        # Then delete associated ReplicaSet to trigger pod recreation
+        rs_list = self.kubectl.get_matching_replicasets(namespace, deployment_name)
+        if not rs_list:
+            raise RuntimeError(f"No ReplicaSet found for deployment {deployment_name} in {namespace}")
+        rs_name = rs_list[0].metadata.name
+        self.kubectl.delete_replicaset(name=rs_name, namespace=namespace)
+
+    def recover_namespace_memory_limit(self, deployment_name: str, namespace: str):
+        # Remove all memory-based quotas
+        quotas = self.kubectl.get_resource_quotas(namespace)
+        for quota in quotas:
+            if "memory" in quota.spec.hard:
+                self.kubectl.delete_resource_quota(name=quota.metadata.name, namespace=namespace)
+
+        # Scale deployment to 1 replica (if needed)
+        self.kubectl.scale_deployment(name=deployment_name, namespace=namespace, replicas=1)

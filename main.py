@@ -620,6 +620,7 @@ def main(args):
         preserve_infrastructure=os.getenv("SREGYM_PRESERVE_INFRASTRUCTURE", "").lower() in {"1", "true", "yes"},
         defer_fault_injection=bool(agent_reg and agent_reg.defer_fault_injection),
         defer_diagnosis_grading=defer_diagnosis_grading_enabled(),
+        enable_safety_invariants=args.enable_safety_invariants,
     )
     conductor = Conductor(config=conductor_config)
 
@@ -771,7 +772,18 @@ if __name__ == "__main__":
         help="Resume from a previous results CSV file. Problems already in the CSV will be skipped.",
     )
     parser.add_argument("--parallel", type=int, default=1, help="Run benchmark tasks across isolated worker clusters")
+    parser.add_argument(
+        "--worker-kubeconfig",
+        action="append",
+        default=None,
+        help="Use an existing Kubernetes cluster for one parallel worker; repeat once per worker",
+    )
     parser.add_argument("--deploy-from-source", action="store_true")
+    parser.add_argument(
+        "--enable-safety-invariants",
+        action="store_true",
+        help="Fail a problem when an agent violates a trajectory safety invariant",
+    )
     parser.add_argument("--app-filter", type=str, default=None)
     parser.add_argument("--application-workspace", action="store_true")
     parser.add_argument("--experiment-dir", type=str, default=None, help="Parallel-run directory; reuse it to resume")
@@ -809,6 +821,8 @@ if __name__ == "__main__":
         parser.error("--use-external-harness cannot be used with --suite; use --problem instead")
     if args.parallel < 1:
         parser.error("--parallel must be at least 1")
+    if args.worker_kubeconfig and len(args.worker_kubeconfig) != args.parallel:
+        parser.error("--worker-kubeconfig must be specified once for each parallel worker")
     if args.variant_count is not None and args.variant_count < 1:
         parser.error("--variant-count must be at least 1")
     if args.variant_offset < 0:
@@ -830,6 +844,7 @@ if __name__ == "__main__":
         or args.problem_spec
         or args.enable_summary
         or args.sequence_len
+        or args.worker_kubeconfig
     ):
         from sregym.parallel_runner import run_parallel
 

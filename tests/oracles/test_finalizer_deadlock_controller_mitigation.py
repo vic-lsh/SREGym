@@ -187,10 +187,13 @@ def test_rejects_unhealthy_application_without_creating_request():
     assert core_v1.created == []
 
 
-def test_correct_role_grants_only_the_api_operation_used_by_controller():
-    correct = _correct_clusterrole_rules()[0]
+def test_correct_role_grants_the_configmap_and_finalizer_operations_used_by_controller():
+    rules = _correct_clusterrole_rules()
+    correct = rules[0]
     broken = _broken_clusterrole_rules()[0]
 
     assert correct.resources == ["configmaps"]
-    assert set(correct.verbs) == {"get", "list", "watch", "patch"}
+    assert set(correct.verbs) == {"get", "list", "watch", "patch", "update"}
+    assert rules[1].resources == ["configmaps/finalizers"]
+    assert set(rules[1].verbs) == {"patch", "update"}
     assert "patch" not in broken.verbs

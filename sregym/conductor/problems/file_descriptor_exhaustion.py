@@ -16,13 +16,29 @@ from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
+_ULIMIT_SEVERITY = {
+    "severe": {
+        "limit": 64,
+        "description": "extremely low",
+        "cycle_size": 200,
+    },
+    "moderate": {
+        "limit": 1024,
+        "description": "insufficient",
+        "cycle_size": 1100,
+    },
+}
+
 
 class FileDescriptorExhaustion(Problem):
-    def __init__(self):
+    def __init__(self, faulty_service: str = "frontend", ulimit_severity: str = "moderate"):
         self.app = HotelReservation()
         self.namespace = self.app.namespace
-        self.faulty_service = "frontend"
-        self.forced_ulimit = 1024
+        self.faulty_service = faulty_service
+
+        profile = _ULIMIT_SEVERITY[ulimit_severity]
+        self.forced_ulimit = profile["limit"]
+        self.cycle_size = profile["cycle_size"]
 
         super().__init__(app=self.app, namespace=self.namespace)
         self.kubectl = KubeCtl()
@@ -31,10 +47,10 @@ class FileDescriptorExhaustion(Problem):
             namespace=f"{self.namespace}",
             description=(
                 f"The {self.faulty_service} deployment is experiencing file descriptor exhaustion. "
-                f"An external load generator is flooding the service with ~1,100 simultaneous TCP connections. "
+                f"An external load generator is flooding the service with ~{self.cycle_size} simultaneous TCP connections. "
                 f"Because the container's open file limit (ulimit -n) is {self.forced_ulimit}, "
                 f"it cannot handle this volume of traffic, causing the pod to drop connections and log "
-                f"'too many open files' errors. The root cause is the insufficient ulimit value of {self.forced_ulimit}."
+                f"'too many open files' errors. The root cause is the {profile['description']} ulimit value of {self.forced_ulimit}."
             ),
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
@@ -71,11 +87,14 @@ class FileDescriptorExhaustion(Problem):
                 continue
 
             if new_pod != current_pod:
-                if pf_process:
-                    pf_process.terminate()
-                    pf_process.wait(timeout=2)
+                target_container = frontend_pods[0].spec.containers[0]
+                target_port = (
+                    target_container.ports[0].container_port
+                    if (target_container.ports and len(target_container.ports) > 0)
+                    else 5000
+                )
                 pf_process = subprocess.Popen(
-                    ["kubectl", "port-forward", f"pod/{new_pod}", "-n", self.namespace, ":5000"],
+                    ["kubectl", "port-forward", f"pod/{new_pod}", "-n", self.namespace, f":{target_port}"],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL,
                     text=True,
@@ -93,7 +112,7 @@ class FileDescriptorExhaustion(Problem):
                 current_pod = new_pod
                 self.pf_process = pf_process
 
-            cycle_size = 1100
+            cycle_size = self.cycle_size
             hold_seconds = 5
             last_success = time.time()
 

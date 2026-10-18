@@ -10,21 +10,42 @@ from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
+_TOPOLOGY_CONFIGS = {
+    "hostname": {
+        "topology_key": "kubernetes.io/hostname",
+        "description": (
+            "uses strict `requiredDuringSchedulingIgnoredDuringExecution` pod "
+            "anti-affinity with per-node topology (kubernetes.io/hostname), but the cluster "
+            "has insufficient eligible nodes to satisfy replica placement rules. "
+            "As replicas increase or pods restart, scheduling reaches a deadlock where pods stay Pending with "
+            "anti-affinity constraint violations. Users experience reduced capacity, intermittent failures, and prolonged degradation."
+        ),
+    },
+    "zone": {
+        "topology_key": "topology.kubernetes.io/zone",
+        "description": (
+            "uses strict `requiredDuringSchedulingIgnoredDuringExecution` pod "
+            "anti-affinity with per-zone topology (topology.kubernetes.io/zone), but the cluster "
+            "has insufficient availability zones to satisfy replica placement rules. "
+            "As replicas increase or pods restart, scheduling reaches a deadlock where pods stay Pending with "
+            "anti-affinity constraint violations. Users experience reduced capacity, intermittent failures, and prolonged degradation."
+        ),
+    },
+}
+
 
 class PodAntiAffinityDeadlock(Problem):
-    def __init__(self, faulty_service: str = "user-service"):
+    def __init__(self, faulty_service: str = "user-service", anti_affinity_topology: str = "hostname"):
         super().__init__(app=SocialNetwork())
         self.kubectl = KubeCtl()
         self.faulty_service = faulty_service
+        self.anti_affinity_topology = anti_affinity_topology
+        topology_config = _TOPOLOGY_CONFIGS[anti_affinity_topology]
+        self.topology_key = topology_config["topology_key"]
         self.root_cause = self.build_structured_root_cause(
             component=self.faulty_service,
             namespace=self.namespace,
-            description=(
-                f"Deployment `{self.faulty_service}` uses strict `requiredDuringSchedulingIgnoredDuringExecution` pod "
-                "anti-affinity, but the cluster has insufficient eligible nodes to satisfy replica placement rules. "
-                "As replicas increase or pods restart, scheduling reaches a deadlock where pods stay Pending with "
-                "anti-affinity constraint violations. Users experience reduced capacity, intermittent failures, and prolonged degradation."
-            ),
+            description=(f"Deployment `{self.faulty_service}` " + topology_config["description"]),
         )
 
         # === Attach evaluation oracles ===
@@ -44,6 +65,7 @@ class PodAntiAffinityDeadlock(Problem):
         injector._inject(
             fault_type="pod_anti_affinity_deadlock",
             microservices=[self.faulty_service],
+            topology_key=self.topology_key,
         )
 
         # Wait for the deadlock to manifest

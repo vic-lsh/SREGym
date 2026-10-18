@@ -61,20 +61,44 @@ def _ensure_problem_class_stubs():
                 setattr(self, k, v)
 
     mapping = {
+        "ad_service_manual_gc": "AdServiceManualGc",
+        "admission_webhook_outage": "AdmissionWebhookOutage",
+        "admission_webhook_tls_mismatch": "AdmissionWebhookTLSMismatch",
+        "auth_miss_mongodb": "MongoDBAuthMissing",
+        "cart_service_failure": "CartServiceFailure",
+        "configmap_drift": "ConfigMapDrift",
         "duplicate_pvc_mounts": "DuplicatePVCMounts",
+        "env_variable_shadowing": "EnvVariableShadowing",
+        "ephemeral_port_range_hotel_reservation": "EphemeralPortRangeHotelReservation",
+        "file_descriptor_exhaustion": "FileDescriptorExhaustion",
+        "finalizer_deadlock_controller": "FinalizerDeadlockController",
+        "incorrect_image": "IncorrectImage",
         "incorrect_port_assignment": "IncorrectPortAssignment",
+        "init_container_dependency_hang": "InitContainerDependencyHang",
         "liveness_probe_misconfiguration": "LivenessProbeMisconfiguration",
         "liveness_probe_too_aggressive": "LivenessProbeTooAggressive",
         "missing_configmap": "MissingConfigMap",
         "missing_env_variable": "MissingEnvVariable",
         "missing_service": "MissingService",
+        "network_policy_block": "NetworkPolicyBlock",
+        "pod_anti_affinity_deadlock": "PodAntiAffinityDeadlock",
+        "psa_restricted_blocks_recreation": "PSARestrictedBlocksRecreation",
+        "pvc_claim_mismatch": "PVCClaimMismatch",
         "readiness_probe_misconfiguration": "ReadinessProbeMisconfiguration",
+        "resource_request": "ResourceRequestTooLarge",
+        "revoke_auth": "MongoDBRevokeAuth",
         "rolling_update_misconfigured": "RollingUpdateMisconfigured",
         "service_dns_resolution_failure": "ServiceDNSResolutionFailure",
         "service_port_conflict": "ServicePortConflict",
         "sidecar_port_conflict": "SidecarPortConflict",
+        "silent_data_corruption": "SilentDataCorruption",
         "stale_coredns_config": "StaleCoreDNSConfig",
+        "storage_user_unregistered": "MongoDBUserUnregistered",
+        "taint_no_toleration": "TaintNoToleration",
         "target_port": "K8STargetPortMisconfig",
+        "train_ticket_f22": "TrainTicketF22",
+        "trainticket_f17": "TrainTicketF17",
+        "valkey_memory_disruption": "ValkeyMemoryDisruption",
         "wrong_dns_policy": "WrongDNSPolicy",
         "wrong_service_selector": "WrongServiceSelector",
     }
@@ -83,7 +107,51 @@ def _ensure_problem_class_stubs():
         if fqn not in sys.modules:
             stub = type(sys)(fqn)
             setattr(stub, cls_name, type(cls_name, (_FakeProblemClass,), {}))
+            if mod_name == "resource_request":
+                stub.ResourceRequestTooSmall = type("ResourceRequestTooSmall", (_FakeProblemClass,), {})
             sys.modules[fqn] = stub
+
+    from enum import StrEnum
+
+    fault_module = "sregym.conductor.problems.khaos_faults"
+    if fault_module not in sys.modules:
+        stub = type(sys)(fault_module)
+        fault_names = {
+            name: name
+            for name in (
+                "clock_drift",
+                "bind_enetdown",
+                "force_connect_econnrefused",
+                "force_open_enoent",
+                "force_openat_enoent",
+                "fork_fail",
+                "fsync_error",
+                "gettimeofday_fail",
+                "latent_sector_error",
+                "mmap_fail",
+                "mmap_oom",
+                "oom_memchunk",
+                "packet_loss_recvfrom",
+                "packet_loss_sendto",
+                "pread_error",
+                "pwrite_error",
+                "read_error",
+                "socket_block",
+                "write_error",
+            )
+        }
+        stub.KhaosFaultName = StrEnum("KhaosFaultName", fault_names)
+        stub.KhaosFaultProblem = type("KhaosFaultProblem", (_FakeProblemClass,), {})
+        stub.KhaosCompoundFaultProblem = type("KhaosCompoundFaultProblem", (_FakeProblemClass,), {})
+        for name in (
+            "_HW_CPU_CLOCKSOURCE_FAILURE",
+            "_HW_DRAM_MODULE_FAILURE",
+            "_HW_NIC_PACKET_CORRUPTION",
+            "_HW_STORAGE_READ_FAILURE",
+            "_HW_STORAGE_WRITE_FAILURE",
+        ):
+            setattr(stub, name, name)
+        sys.modules[fault_module] = stub
 
 
 # Load our modules
@@ -382,8 +450,33 @@ class TestVariantSpecs:
         assert "social_network" in SERVICES_BY_APP
         assert "hotel_reservation" in SERVICES_BY_APP
         assert "astronomy_shop" in SERVICES_BY_APP
+        assert "train_ticket" in SERVICES_BY_APP
         for app, services in SERVICES_BY_APP.items():
             assert len(services) > 0, f"No services for {app}"
+
+    def test_train_ticket_variants_generated(self):
+        specs = get_all_variant_specs()
+        all_variants = generate_all_variants(specs)
+        tt_variants = [vid for vid in all_variants if "_train_ticket_" in vid]
+        assert len(tt_variants) > 100, f"Expected 100+ train_ticket variants, got {len(tt_variants)}"
+
+    def test_new_problem_class_specs_present(self):
+        specs = get_all_variant_specs()
+        base_names = {s.base_name for s in specs}
+        expected_new_specs = {
+            "admission_webhook_outage",
+            "admission_webhook_tls_mismatch",
+            "psa_restricted_blocks_recreation",
+            "network_policy_block",
+            "configmap_drift",
+            "env_variable_shadowing",
+            "resource_request_too_large",
+            "resource_request_too_small",
+            "revoke_auth_mongodb",
+            "storage_user_unregistered",
+        }
+        for name in expected_new_specs:
+            assert name in base_names, f"Expected spec '{name}' missing from get_all_variant_specs()"
 
     def test_variant_count_breakdown(self):
         """Verify each spec produces a reasonable number of variants."""
@@ -395,8 +488,83 @@ class TestVariantSpecs:
             total += count
             # Every spec should produce at least 1 variant
             assert count >= 1, f"{spec.base_name} produced {count} variants"
-        # Total should be substantial
-        assert total >= 300, f"Only {total} total variants (expected 300+)"
+        # Total should be substantial (1200+ after adding probe_error_mode, resource_type, replica_count axes)
+        assert total >= 1200, f"Only {total} total variants (expected 1200+)"
+
+    def test_probe_error_mode_axis_multiplies_variants(self):
+        """probe_error_mode axis should produce 4x variants for probe specs."""
+        specs = get_all_variant_specs()
+        for spec in specs:
+            if spec.base_name in ("readiness_probe_misconfiguration", "liveness_probe_misconfiguration"):
+                variants = generate_variants(spec)
+                # 35 base (app x service) * 4 modes * 2 replica counts = 280
+                assert len(variants) == 280, f"{spec.base_name} should have 280 variants, got {len(variants)}"
+                # Verify all 4 modes appear in variant IDs
+                ids = set(variants.keys())
+                for mode in ("wrong_path", "wrong_port", "wrong_protocol", "exec_false"):
+                    matching = [v for v in ids if f"_{mode}_" in v]
+                    assert len(matching) > 0, f"No variants with mode {mode} in {spec.base_name}"
+
+    def test_resource_type_axis_doubles_variants(self):
+        """resource_type axis should double variants for resource request specs.
+
+        (The resource_target axis was removed: for TooLarge its values were
+        degenerate/inverted, and for TooSmall limits_only was degenerate or
+        produced requests>limits invalid specs. Only the class default "both"
+        remains.)
+        """
+        specs = get_all_variant_specs()
+        for spec in specs:
+            if spec.base_name == "resource_request_too_large":
+                variants = generate_variants(spec)
+                # 35 base (app x service) * 2 resource types = 70
+                assert len(variants) == 70, f"{spec.base_name} should have 70 variants, got {len(variants)}"
+                ids = set(variants.keys())
+                cpu_variants = [v for v in ids if "_cpu" in v]
+                memory_variants = [v for v in ids if "_memory" in v]
+                assert len(cpu_variants) == 35, f"Expected 35 cpu variants, got {len(cpu_variants)}"
+                assert len(memory_variants) == 35, f"Expected 35 memory variants, got {len(memory_variants)}"
+            elif spec.base_name == "resource_request_too_small":
+                variants = generate_variants(spec)
+                # 35 base (app x service) * 1 resource type (memory) = 35.
+                # "cpu" was dropped: a 5m CPU throttle leaves probe-less
+                # DeathStarBench pods Running+Ready, so it is undetectable by the
+                # readiness-based oracle (degenerate). Memory (10Mi -> OOMKilled)
+                # is detectable on every app.
+                assert len(variants) == 35, f"{spec.base_name} should have 35 variants, got {len(variants)}"
+                ids = set(variants.keys())
+                cpu_variants = [v for v in ids if "_cpu" in v]
+                memory_variants = [v for v in ids if "_memory" in v]
+                assert len(cpu_variants) == 0, f"Expected 0 cpu variants, got {len(cpu_variants)}"
+                assert len(memory_variants) == 35, f"Expected 35 memory variants, got {len(memory_variants)}"
+
+    def test_replica_count_axis_on_wrong_service_selector(self):
+        """replica_count axis should multiply wrong_service_selector variants.
+
+        (selector_mutation="swap_to_other_service" was removed — its fault is
+        undetectable by the endpoint-presence oracle — leaving one mutation.)
+        """
+        specs = get_all_variant_specs()
+        for spec in specs:
+            if spec.base_name == "wrong_service_selector":
+                variants = generate_variants(spec)
+                # 35 base * 2 replica counts * 1 selector mutation = 70
+                assert len(variants) == 70, f"wrong_service_selector should have 70 variants, got {len(variants)}"
+                ids = set(variants.keys())
+                r1 = [v for v in ids if "_1_" in v]
+                r3 = [v for v in ids if "_3_" in v]
+                assert len(r1) == 35, f"Expected 35 replica_count=1 variants, got {len(r1)}"
+                assert len(r3) == 35, f"Expected 35 replica_count=3 variants, got {len(r3)}"
+
+    def test_new_axis_variant_ids_encode_parameters(self):
+        """Variant IDs should encode the new axis values."""
+        specs = get_all_variant_specs()
+        all_variants = generate_all_variants(specs)
+        # Check a specific expected variant ID exists
+        expected = "readiness_probe_misconfiguration__v_hotel_reservation_frontend_wrong_port_1"
+        assert expected in all_variants, f"Expected variant '{expected}' not found"
+        expected2 = "resource_request_too_large__v_hotel_reservation_geo_cpu"
+        assert expected2 in all_variants, f"Expected variant '{expected2}' not found"
 
     def test_no_duplicate_base_names(self):
         """Each spec should have a unique base_name."""

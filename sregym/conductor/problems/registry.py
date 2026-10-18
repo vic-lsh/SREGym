@@ -126,6 +126,7 @@ class ProblemRegistry:
             "update_incompatible_correlated": UpdateIncompatibleCorrelated,
             # --- REGULAR APPLICATION PROBLEMS ---
             "incorrect_image": IncorrectImage,
+            "incorrect_image_geo_hotel_reservation": lambda: IncorrectImage(app_name="hotel_reservation", faulty_service="geo"),
             "incorrect_port_assignment": IncorrectPortAssignment,
             "unschedulable_incorrect_port_assignment": lambda: IncorrectPortAssignment(unschedulable=True),
             "misconfig_app_hotel_res": MisconfigAppHotelRes,
@@ -156,6 +157,7 @@ class ProblemRegistry:
             "env_variable_shadowing_astronomy_shop": lambda: EnvVariableShadowing(),
             "file_descriptor_exhaustion": lambda: FileDescriptorExhaustion(),
             "k8s_target_port-misconfig": lambda: K8STargetPortMisconfig(faulty_service="user-service"),
+            "k8s_target_port_user_hotel_reservation": lambda: K8STargetPortMisconfig(app_name="hotel_reservation", faulty_service="user"),
             "liveness_probe_misconfiguration_astronomy_shop": lambda: LivenessProbeMisconfiguration(app_name="astronomy_shop", faulty_service="frontend"),
             "liveness_probe_misconfiguration_hotel_reservation": lambda: LivenessProbeMisconfiguration(app_name="hotel_reservation", faulty_service="recommendation"),
             "liveness_probe_misconfiguration_social_network": lambda: LivenessProbeMisconfiguration(app_name="social_network", faulty_service="user-service"),

@@ -8,25 +8,64 @@ from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
 SYSCTL_NAME = "net.ipv4.ip_local_port_range"
-BAD_RANGE = "32000 32003"
 DEFAULT_RANGE = "32768 60999"
+
+_PORT_RANGE_SEVERITIES = {
+    "critical": {
+        "range": "32000 32003",
+        "description": (
+            "narrows the ephemeral port range to 4 ports. The frontend "
+            "cannot establish outbound TCP connections to all gRPC backends; "
+            "at least one backend is always unreachable with EADDRNOTAVAIL "
+            "even though pods remain Running."
+        ),
+    },
+    "degraded": {
+        "range": "32000 32015",
+        "description": (
+            "narrows the ephemeral port range to 16 ports, causing "
+            "intermittent connection failures under load as ephemeral ports "
+            "are exhausted when multiple gRPC backends are called concurrently."
+        ),
+    },
+}
+
+_SYSCTL_SCOPES = {
+    "all_deployments": {
+        "component": "all hotel-reservation deployments",
+        "faulty_service": "all",
+        "subject": "All hotel-reservation pods",
+    },
+    "frontend_only": {
+        "component": "hotel-reservation frontend deployment",
+        "faulty_service": "frontend",
+        "subject": "The frontend pod",
+    },
+}
 
 
 class EphemeralPortRangeHotelReservation(Problem):
-    def __init__(self):
+    def __init__(
+        self,
+        port_range_severity: str = "critical",
+        sysctl_scope: str = "all_deployments",
+    ):
         super().__init__(app=HotelReservation())
         self.kubectl = KubeCtl()
-        self.faulty_service = "all"
+
+        severity_config = _PORT_RANGE_SEVERITIES[port_range_severity]
+        self.bad_range = severity_config["range"]
+
+        scope_config = _SYSCTL_SCOPES[sysctl_scope]
+        self.sysctl_scope = sysctl_scope
+        self.faulty_service = scope_config["faulty_service"]
 
         self.root_cause = self.build_structured_root_cause(
-            component="all hotel-reservation deployments",
+            component=scope_config["component"],
             namespace=self.namespace,
             description=(
-                f"All hotel-reservation pods set {SYSCTL_NAME} to '{BAD_RANGE}', "
-                "which narrows the ephemeral port range to 4 ports. The frontend "
-                "cannot establish outbound TCP connections to all gRPC backends; "
-                "at least one backend is always unreachable with EADDRNOTAVAIL "
-                "even though pods remain Running."
+                f"{scope_config['subject']} set {SYSCTL_NAME} to "
+                f"'{self.bad_range}', which {severity_config['description']}"
             ),
         )
 
@@ -40,12 +79,19 @@ class EphemeralPortRangeHotelReservation(Problem):
     # service registrations on restart, breaking discovery for app services.
     _SYSCTL_EXCLUDE = frozenset({"consul", "jaeger"})
 
+    def _filter_deployments(self, deployments):
+        """Filter deployments based on the sysctl_scope."""
+        if self.sysctl_scope == "frontend_only":
+            return [d for d in deployments if d.metadata.name == "frontend"]
+        return deployments
+
     def _patch_sysctl(self, value: str | None):
         deployments = [
             d
             for d in self.kubectl.list_deployments(self.namespace).items
             if d.metadata.name not in self._SYSCTL_EXCLUDE
         ]
+        deployments = self._filter_deployments(deployments)
         if not deployments:
             raise RuntimeError("No deployments found to patch sysctl.")
 
@@ -88,6 +134,7 @@ class EphemeralPortRangeHotelReservation(Problem):
 
     def _wait_for_rollouts(self):
         deployments = self.kubectl.list_deployments(self.namespace).items
+        deployments = self._filter_deployments(deployments)
         for dep in deployments:
             name = dep.metadata.name
             self.kubectl.exec_command(f"kubectl -n {self.namespace} rollout status deployment/{name} --timeout=300s")
@@ -95,7 +142,7 @@ class EphemeralPortRangeHotelReservation(Problem):
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
-        self._patch_sysctl(BAD_RANGE)
+        self._patch_sysctl(self.bad_range)
         self._wait_for_rollouts()
 
     @mark_fault_injected

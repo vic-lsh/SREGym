@@ -1,5 +1,5 @@
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
-from sregym.conductor.oracles.mitigation import MitigationOracle
+from sregym.conductor.oracles.missing_service_mitigation import MissingServiceMitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
@@ -37,7 +37,7 @@ class MissingService(Problem):
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.app.create_workload()
-        self.mitigation_oracle = MitigationOracle(problem=self)
+        self.mitigation_oracle = MissingServiceMitigationOracle(problem=self)
 
     @mark_fault_injected
     def inject_fault(self):

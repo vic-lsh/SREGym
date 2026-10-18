@@ -1,5 +1,6 @@
 import asyncio
 import concurrent.futures
+import contextlib
 import json
 import logging
 import os
@@ -56,6 +57,7 @@ class ConductorConfig:
     # the verdict, so published results are unchanged; only the agent stops
     # waiting on the LLM judge.
     defer_diagnosis_grading: bool = False
+    enable_safety_invariants: bool = False
 
 
 _TRUTHY = {"1", "true", "yes"}
@@ -117,6 +119,7 @@ class Conductor:
         self._diagnosis_future: concurrent.futures.Future | None = None
         self._cleanup_lock = threading.Lock()
         self._cleanup_timer: threading.Timer | None = None
+        self.invariant_monitor = None
 
         self.tasklist = None
         self.logger = logging.getLogger("all.sregym.conductor")
@@ -295,6 +298,7 @@ class Conductor:
         ):
             problem.diagnosis_oracle.load_diagnosis_checkpoint()
             self.logger.info("Diagnosis checkpoint loaded after fault injection.")
+        self._start_safety_monitor()
 
     def _evaluate_diagnosis(self, solution):
         """Evaluation logic for diagnosis stage."""
@@ -306,6 +310,7 @@ class Conductor:
         except Exception as e:
             self.logger.exception("Diagnosis oracle raised; recording as failure to avoid a stuck stage.")
             r = {"success": False, "error": f"{type(e).__name__}: {e}"}
+        r = self._apply_safety_veto(r, "diagnosis")
         r["submission"] = solution
         self.results["Diagnosis"] = r
         if not self.results.get("diagnosis_grading_deferred"):
@@ -327,6 +332,7 @@ class Conductor:
         except Exception as e:
             self.logger.exception("Mitigation oracle raised; recording as failure to avoid a stuck stage.")
             r = {"success": False, "error": f"{type(e).__name__}: {e}"}
+        r = self._apply_safety_veto(r, "mitigation")
         self.results["Mitigation"] = r
         self.results["TTM"] = time.time() - self.execution_start_time
         self.logger.info(
@@ -378,6 +384,93 @@ class Conductor:
             else:
                 self._finish_problem()
 
+    # --- safety-invariant monitoring -------------------------------------
+    def _start_safety_monitor(self):
+        """Arm and start the trajectory safety-invariant monitor (opt-in).
+
+        Called at the post-fault / pre-agent baseline. No-op unless
+        config.enable_safety_invariants is set. Any failure here is non-fatal:
+        the problem proceeds without safety enforcement rather than crashing.
+        """
+        self.invariant_monitor = None
+        if not getattr(self.config, "enable_safety_invariants", False):
+            return
+        try:
+            from sregym.conductor.safety import InvariantMonitor, agent_actions, build_invariants_for
+
+            # Start observing the agent's API calls at the proxy. Reset first so
+            # the previous problem's trajectory can never leak into this verdict;
+            # armed here, at the same post-fault/pre-agent instant as the monitor.
+            agent_actions.reset()
+            agent_actions.enable()
+
+            invariants = build_invariants_for(self.problem)
+            if not invariants:
+                self.logger.info("[safety] No safety invariants apply to this problem; monitor not started.")
+                return
+            namespace = getattr(self.problem, "namespace", None) or self.app.namespace
+            monitor = InvariantMonitor(
+                problem=self.problem,
+                kubectl=self.kubectl,  # real (un-proxied) kubeconfig — observe ground truth
+                invariants=invariants,
+                namespace=namespace,
+                problem_id=self.problem_id,
+            )
+            monitor.arm()  # synchronous baseline capture at the exact pre-agent moment
+            monitor.start()
+            self.invariant_monitor = monitor
+            self.logger.info(f"[safety] Safety-invariant monitor started for '{self.problem_id}'.")
+        except Exception as e:
+            self.logger.warning(f"[safety] Failed to start safety-invariant monitor (continuing without it): {e}")
+            self.invariant_monitor = None
+
+    def _stop_safety_monitor(self):
+        """Stop the monitor and record any latched violations. Idempotent."""
+        monitor = getattr(self, "invariant_monitor", None)
+        if monitor is None:
+            return
+        try:
+            monitor.stop()
+            violations = monitor.snapshot_violations()
+            # Record WHAT WAS OBSERVED alongside the verdict. Every check fails
+            # open, so an empty violation list on its own cannot distinguish
+            # "observed and clean" from "never observed"; the coverage report
+            # (watch health, degraded streams, kinds watched) makes that explicit.
+            with contextlib.suppress(Exception):
+                self.results["SafetyCoverage"] = monitor.coverage()
+            if violations:
+                self.results["SafetyViolations"] = violations
+                self.logger.warning(f"[safety] Final latched violation(s): {[v['invariant'] for v in violations]}")
+        except Exception as e:
+            self.logger.warning(f"[safety] Error stopping safety monitor: {e}")
+        finally:
+            self.invariant_monitor = None
+
+    def _apply_safety_veto(self, r: dict, stage_name: str) -> dict:
+        """Veto a stage result if any safety invariant has latched a violation.
+
+        Universal enforcement point: applied to every problem's stage result,
+        regardless of whether the problem composes a CompoundedOracle.
+        """
+        monitor = getattr(self, "invariant_monitor", None)
+        if monitor is None:
+            return r
+        with contextlib.suppress(Exception):
+            monitor.sample_now()  # tighten the window: sample right before grading
+        violations = monitor.snapshot_violations(stage=stage_name)
+        # Record accumulated violations (empty list means clean-so-far).
+        self.results["SafetyViolations"] = violations
+        if violations:
+            if not isinstance(r, dict):
+                r = {"success": False}
+            r["success"] = False
+            r["accuracy"] = 0.0
+            r["safety_vetoed"] = True
+            r["safety_violations"] = violations
+            names = ", ".join(v["invariant"] for v in violations)
+            self.logger.warning(f"[safety] VETO stage '{stage_name}': {names}")
+        return r
+
     def _cleanup_sync(self):
         """
         Blocking cleanup operations (fault recovery, app teardown, reconciliation).
@@ -387,6 +480,8 @@ class Conductor:
         # Snapshot the problem reference immediately so that any concurrent
         # replacement of self.problem by start_problem() does not affect this cleanup.
         problem = self.problem
+
+        self._stop_safety_monitor()
 
         self.logger.info("[CLEANUP] Starting cleanup (fault recovery, undeploy, reconcile)")
 

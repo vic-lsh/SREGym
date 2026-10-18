@@ -557,6 +557,12 @@ class KubernetesAPIProxy:
                     return
 
                 if pod_upgrade_target(path) is not None or self.headers.get("Upgrade"):
+                    try:
+                        from sregym.conductor.safety import agent_actions
+
+                        agent_actions.record(method, path)
+                    except Exception:
+                        pass
                     self._proxy_upgrade(method, path)
                     return
                 stream = streaming_kind(path) if method == "GET" else None
@@ -564,6 +570,13 @@ class KubernetesAPIProxy:
                 # Read request body if present
                 content_length = int(self.headers.get("Content-Length", 0))
                 body = self.rfile.read(content_length) if content_length > 0 else None
+
+                try:
+                    from sregym.conductor.safety import agent_actions
+
+                    agent_actions.record(method, path, body)
+                except Exception:
+                    pass
 
                 # Forward request to upstream
                 try:

@@ -9,6 +9,7 @@ fork's isolated parallel scheduling and resumable experiment directories.
 from __future__ import annotations
 
 import csv
+import hashlib
 import os
 import queue
 import random
@@ -190,6 +191,8 @@ def _child_command(args: Any, task: RunTask) -> list[str]:
         command.append("--use-external-harness")
     if args.deploy_from_source:
         command.append("--deploy-from-source")
+    if getattr(args, "enable_safety_invariants", False):
+        command.append("--enable-safety-invariants")
     if args.app_filter:
         command.extend(["--app-filter", args.app_filter])
     if args.application_workspace:
@@ -242,6 +245,43 @@ def cluster_worker_id(worker_id: int) -> int:
     if offset < 0:
         raise ValueError(f"SREGYM_WORKER_ID_OFFSET must be non-negative, got {offset}")
     return worker_id + offset
+
+
+def remote_worker_clusters(args: Any) -> list[tuple[str, str]]:
+    """Resolve one existing Kubernetes cluster per worker.
+
+    Separate API servers keep benchmark infrastructure and application cleanup
+    isolated without requiring a cluster creation step on this host.
+    """
+    paths = getattr(args, "worker_kubeconfig", None) or []
+    if not paths:
+        return []
+    if len(paths) != args.parallel:
+        raise ValueError("--worker-kubeconfig must be specified once for each parallel worker")
+    if getattr(args, "deploy_from_source", False):
+        raise ValueError("--deploy-from-source requires local worker clusters")
+
+    workers: list[tuple[str, str]] = []
+    servers: set[str] = set()
+    for raw_path in paths:
+        path = Path(raw_path).expanduser().resolve()
+        if not path.is_file():
+            raise ValueError(f"worker kubeconfig is not a file: {path}")
+        config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if not isinstance(config, dict):
+            raise ValueError(f"worker kubeconfig must contain a mapping: {path}")
+        context_name = config.get("current-context")
+        contexts = {item.get("name"): item.get("context", {}) for item in config.get("contexts", [])}
+        clusters = {item.get("name"): item.get("cluster", {}) for item in config.get("clusters", [])}
+        cluster_name = contexts.get(context_name, {}).get("cluster")
+        server = clusters.get(cluster_name, {}).get("server")
+        if not isinstance(server, str) or not server:
+            raise ValueError(f"worker kubeconfig has no active cluster API server: {path}")
+        if server in servers:
+            raise ValueError("worker kubeconfigs point to the same cluster API server")
+        servers.add(server)
+        workers.append((str(path), f"remote-{hashlib.sha256(server.encode()).hexdigest()[:12]}"))
+    return workers
 
 
 def _run_child(
@@ -321,9 +361,14 @@ def _worker(
 ) -> None:
     cluster_name = ""
     try:
-        with cluster_lock(f"{KIND_CLUSTER_PREFIX}{cluster_worker_id(worker_id)}"):
+        remote = remote_worker_clusters(args)
+        lock_name = remote[worker_id][1] if remote else f"{KIND_CLUSTER_PREFIX}{cluster_worker_id(worker_id)}"
+        with cluster_lock(lock_name):
             try:
-                cluster_name, kubeconfig = create_worker_cluster(cluster_worker_id(worker_id), str(root))
+                if remote:
+                    kubeconfig, cluster_name = remote[worker_id]
+                else:
+                    cluster_name, kubeconfig = create_worker_cluster(cluster_worker_id(worker_id), str(root))
                 while not stop.is_set():
                     task = tasks.get()
                     if task is None:
@@ -331,7 +376,8 @@ def _worker(
                     results.put(_run_child(args, task, worker_id, root, kubeconfig, cluster_name))
                     acknowledgement.get()
             finally:
-                delete_worker_cluster(cluster_name)
+                if not remote:
+                    delete_worker_cluster(cluster_name)
     except Exception as exc:
         results.put(("worker_error", worker_id, str(exc)))
 
@@ -444,6 +490,7 @@ def _adaptive_scheduler(args: Any, completed: list[dict[str, str]]) -> AdaptiveS
 
 
 def run_parallel(args: Any) -> int:
+    remote_worker_clusters(args)
     root = _experiment_root(args)
     root.mkdir(parents=True, exist_ok=True)
     if args.application_workspace:
@@ -458,9 +505,7 @@ def run_parallel(args: Any) -> int:
         shutil.copy2(args.seed_summary, memory_path)
     manifest_path = root / "parallel_results.csv"
     manifest = _load_manifest(manifest_path)
-    completed_keys = {
-        (int(row["sequence"]), row["problem_id"]) for row in manifest if _manifest_row_is_complete(row)
-    }
+    completed_keys = {(int(row["sequence"]), row["problem_id"]) for row in manifest if _manifest_row_is_complete(row)}
 
     task_queue: queue.Queue[RunTask | None] = queue.Queue()
     result_queue: queue.Queue[RunResult | tuple[str, int, str]] = queue.Queue()
@@ -584,6 +629,7 @@ def _args_for_tests(**overrides: Any) -> SimpleNamespace:
         "deploy_from_source": False,
         "app_filter": None,
         "application_workspace": False,
+        "worker_kubeconfig": None,
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)

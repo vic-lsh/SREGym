@@ -30,10 +30,8 @@ patched onto a real application microservice.
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
+from sregym.conductor.problems.variant_utils import create_app
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
-from sregym.service.apps.astronomy_shop import AstronomyShop
-from sregym.service.apps.hotel_reservation import HotelReservation
-from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
@@ -46,32 +44,53 @@ class InitContainerDependencyHang(Problem):
     pointing it at a real (or always-resolvable) dependency.
     """
 
-    def __init__(self, app_name: str = "hotel_reservation", faulty_service: str = "frontend"):
+    # Maps init_hang_mechanism values to (check_command for injector, human description).
+    _MECHANISM_INFO = {
+        "dns_lookup_loop": (
+            "dns_lookup_loop",
+            "nslookup loop",
+            "runs `until nslookup {fqdn}; do sleep 5; done`",
+        ),
+        "tcp_connect_loop": (
+            "tcp_connect_loop",
+            "TCP connect loop",
+            "runs `until nc -z {svc} 80; do sleep 2; done`",
+        ),
+        "http_ready_check": (
+            "http_ready_check",
+            "HTTP readiness check loop",
+            "runs `until wget -q -O- http://{svc}:80/ready; do sleep 2; done`",
+        ),
+    }
+
+    def __init__(
+        self,
+        app_name: str = "hotel_reservation",
+        faulty_service: str = "frontend",
+        init_hang_mechanism: str = "dns_lookup_loop",
+    ):
         self.app_name = app_name
         self.faulty_service = faulty_service
+        self.init_hang_mechanism = init_hang_mechanism
 
-        if app_name == "hotel_reservation":
-            app = HotelReservation()
-        elif app_name == "social_network":
-            app = SocialNetwork()
-        elif app_name == "astronomy_shop":
-            app = AstronomyShop()
-        else:
-            raise ValueError(f"Unsupported app name: {app_name}")
-
+        app = create_app(app_name)
         super().__init__(app=app)
 
         self.kubectl = KubeCtl()
+        _cmd_kind, mechanism_label, mechanism_detail = self._MECHANISM_INFO[self.init_hang_mechanism]
+        target_svc = "legacy-config-service"
+        target_fqdn = f"{target_svc}.{self.namespace}.svc.cluster.local"
+        mechanism_desc = mechanism_detail.format(fqdn=target_fqdn, svc=target_svc)
+
         self.root_cause = self.build_structured_root_cause(
             component=f"deployment/{self.faulty_service}",
             namespace=self.namespace,
             description=(
                 f"Deployment `{self.faulty_service}` in namespace `{self.namespace}` has an "
-                f"init container `wait-for-legacy-config` that runs "
-                f"`until nslookup legacy-config-service.{self.namespace}.svc.cluster.local; "
-                f"do sleep 5; done`. The Service `legacy-config-service` does not exist in "
+                f"init container `wait-for-legacy-config` that {mechanism_desc}. "
+                f"The Service `{target_svc}` does not exist in "
                 f"the cluster (it was removed/renamed in a prior refactor), so the init "
-                f"container's nslookup loop never succeeds. Every new pod of "
+                f"container's {mechanism_label} never succeeds. Every new pod of "
                 f"`{self.faulty_service}` is therefore stuck in `Init:0/1` and the rollout "
                 f"stalls indefinitely — the deployment shows zero updated/ready replicas "
                 f"for the new ReplicaSet while the old ReplicaSet's pods continue serving "
@@ -94,7 +113,10 @@ class InitContainerDependencyHang(Problem):
     def inject_fault(self):
         print("== Fault Injection ==")
         injector = VirtualizationFaultInjector(namespace=self.namespace)
-        injector.inject_init_container_dependency_hang(microservices=[self.faulty_service])
+        injector.inject_init_container_dependency_hang(
+            microservices=[self.faulty_service],
+            check_command=self._MECHANISM_INFO[self.init_hang_mechanism][0],
+        )
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
 
     @mark_fault_injected

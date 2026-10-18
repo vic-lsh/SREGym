@@ -53,6 +53,9 @@ class KhaosFaultName(StrEnum):
     force_mlock_eperm = "force_mlock_eperm"
     force_mprotect_eacces = "force_mprotect_eacces"
     force_swapon_einval = "force_swapon_einval"
+    force_connect_econnrefused = "force_connect_econnrefused"
+    force_open_enoent = "force_open_enoent"
+    force_openat_enoent = "force_openat_enoent"
     # memory corruption faults
     oom_memchunk = "oom_memchunk"
     oom_heapspace = "oom_heapspace"
@@ -84,6 +87,19 @@ _NEEDS_CACHE_DROP: frozenset[str] = frozenset(
 
 # Backwards-compatible alias; older code (and the reinjection monitor) reads this.
 _DISK_FAULTS: frozenset[str] = _NEEDS_CACHE_DROP
+
+# Severity rates for rate-parameterized faults (percentage failure rate).
+_SEVERITY_RATES: dict[str, int] = {
+    "low": 10,
+    "moderate": 30,
+    "severe": 80,
+}
+
+_SEVERITY_DESCRIPTIONS: dict[str, str] = {
+    "low": " (at ~10% failure rate, causing intermittent errors)",
+    "moderate": " (at ~30% failure rate, causing frequent errors)",
+    "severe": " (at ~80% failure rate, causing pervasive errors)",
+}
 
 
 class _FaultReinjectionMonitor:
@@ -205,6 +221,7 @@ class KhaosFaultProblem(Problem):
         fault_name: KhaosFaultName | str,
         target_node: str | None = None,
         inject_args: list[int | str] | None = None,
+        fault_severity: str = "moderate",
     ):
         super().__init__(app=HotelReservation())
         self.kubectl = self.app.kubectl if hasattr(self.app, "kubectl") else None
@@ -217,17 +234,27 @@ class KhaosFaultProblem(Problem):
         except Exception as e:
             raise ValueError(f"Fault name or config is missing for fault_name '{fault_name}'. Error: {e}") from e
 
-        # Pick default args if none provided; caller can override via inject_args
-        self.inject_args = inject_args if inject_args is not None else list(cfg.default_args)
+        # Pick default args if none provided; caller can override via inject_args.
+        # For rate-parameterized faults, apply the severity-based rate when
+        # inject_args was not explicitly overridden.
+        if inject_args is not None:
+            self.inject_args = inject_args
+        elif cfg.default_args:
+            self.inject_args = [_SEVERITY_RATES[fault_severity]]
+        else:
+            self.inject_args = list(cfg.default_args)
 
         # (Optional) pick a request mix payload
         self.app.payload_script = (
-            TARGET_MICROSERVICES / "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
+            TARGET_MICROSERVICES
+            / "DeathStarBench/hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
         )
 
         self._reinjection_monitor: _FaultReinjectionMonitor | None = None
 
         self.root_cause = cfg.description
+        if cfg.default_args:
+            self.root_cause += _SEVERITY_DESCRIPTIONS[fault_severity]
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = AlertOracle(problem=self)
@@ -320,6 +347,17 @@ _FAULT_CONFIG_ENTRIES: Sequence[tuple[KhaosFaultName, str, list[int | str]]] = [
     (KhaosFaultName.force_mlock_eperm, "mlock() returns EPERM, disallowing memory pinning.", []),
     (KhaosFaultName.force_mprotect_eacces, "mprotect() returns EACCES, blocking permission changes.", []),
     (KhaosFaultName.force_swapon_einval, "swapon() returns EINVAL, blocking swap activation.", []),
+    (
+        KhaosFaultName.force_connect_econnrefused,
+        "connect() returns ECONNREFUSED, preventing outbound TCP connections.",
+        [],
+    ),
+    (KhaosFaultName.force_open_enoent, "open() returns ENOENT, making files appear missing.", []),
+    (
+        KhaosFaultName.force_openat_enoent,
+        "openat() returns ENOENT, making files appear missing via directory-relative opens.",
+        [],
+    ),
     # memory corruption faults
     (KhaosFaultName.oom_memchunk, "Memory chunk allocation fails with ENOMEM, causing out-of-memory pressure.", []),
     (KhaosFaultName.oom_heapspace, "brk() returns ENOMEM, exhausting heap space.", []),
@@ -382,6 +420,7 @@ class KhaosCompoundFaultProblem(Problem):
         fault_specs: list[tuple[KhaosFaultName | str, list[int | str] | None]],
         root_cause: str,
         target_node: str | None = None,
+        compound_hw_failure_type: str | None = None,
     ):
         if not fault_specs:
             raise ValueError("KhaosCompoundFaultProblem requires at least one fault_spec")
@@ -404,7 +443,8 @@ class KhaosCompoundFaultProblem(Problem):
             self.fault_specs.append((name, args))
 
         self.app.payload_script = (
-            TARGET_MICROSERVICES / "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
+            TARGET_MICROSERVICES
+            / "DeathStarBench/hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
         )
 
         self._reinjection_monitors: list[_FaultReinjectionMonitor] = []
