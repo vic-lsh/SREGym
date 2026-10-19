@@ -101,12 +101,21 @@ def _node_image_ref(image: str) -> str:
     return f"docker.io/library/{image}"
 
 
+def _containerd_image_name(image: str) -> str:
+    """The fully qualified name containerd stores for ``image`` (ctr does not expand short names)."""
+    if "/" not in image:
+        return f"docker.io/library/{image}"
+    if "." not in image.split("/", 1)[0] and ":" not in image.split("/", 1)[0]:
+        return f"docker.io/{image}"
+    return image
+
+
 def _node_digests(node: str, image: str) -> set[str]:
     ref = _node_image_ref(image)
     result = _run(["docker", "exec", node, "crictl", "inspecti", ref])
     digests = set(re.findall(r"sha256:[0-9a-f]{64}", result.stdout))
     # containerd 2.x leaves the CRI repoDigests empty for an imported manifest list; ctr lists its target digest.
-    listed = _run(["docker", "exec", node, "ctr", "--namespace=k8s.io", "images", "ls", f"name=={ref}"])
+    listed = _run(["docker", "exec", node, "ctr", "--namespace=k8s.io", "images", "ls", f"name=={_containerd_image_name(image)}"])
     return digests | set(re.findall(r"sha256:[0-9a-f]{64}", listed.stdout))
 
 

@@ -50,12 +50,18 @@ def test_node_digests_include_containerd_index_digest_when_cri_reports_no_repo_d
     cri = '{"status":{"id":"sha256:' + "1" * 64 + '","repoDigests":[]}}'
     ctr = "docker.io/library/image:tag application/vnd.docker.distribution.manifest.list.v2+json sha256:" + "3" * 64 + " 5.0 MiB linux/amd64"
 
+    commands = []
+
     def run(command):
+        commands.append(command)
         return type("Result", (), {"stdout": ctr if "ctr" in command else cri})()
 
     monkeypatch.setattr(worker_infra, "_run", run)
 
     assert "sha256:" + "3" * 64 in worker_infra._node_digests("node", "image:tag")
+    assert worker_infra._containerd_image_name("calico/cni:v3.27.4") == "docker.io/calico/cni:v3.27.4"
+    assert worker_infra._containerd_image_name("registry.k8s.io/pause:3") == "registry.k8s.io/pause:3"
+    assert any("name==docker.io/library/image:tag" in command for command in commands)
 
 
 def test_existing_cluster_reuse_requires_stable_kubeconfig(tmp_path):
