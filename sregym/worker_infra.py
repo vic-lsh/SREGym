@@ -102,8 +102,12 @@ def _node_image_ref(image: str) -> str:
 
 
 def _node_digests(node: str, image: str) -> set[str]:
-    result = _run(["docker", "exec", node, "crictl", "inspecti", _node_image_ref(image)])
-    return set(re.findall(r"sha256:[0-9a-f]{64}", result.stdout))
+    ref = _node_image_ref(image)
+    result = _run(["docker", "exec", node, "crictl", "inspecti", ref])
+    digests = set(re.findall(r"sha256:[0-9a-f]{64}", result.stdout))
+    # containerd 2.x leaves the CRI repoDigests empty for an imported manifest list; ctr lists its target digest.
+    listed = _run(["docker", "exec", node, "ctr", "--namespace=k8s.io", "images", "ls", f"name=={ref}"])
+    return digests | set(re.findall(r"sha256:[0-9a-f]{64}", listed.stdout))
 
 
 def ensure_kind_images(cluster_name: str, images: list[str]) -> dict[str, dict[str, str]]:

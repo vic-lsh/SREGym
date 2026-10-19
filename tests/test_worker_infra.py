@@ -45,6 +45,19 @@ def test_node_digests_include_imported_repo_digest(monkeypatch):
     }
 
 
+def test_node_digests_include_containerd_index_digest_when_cri_reports_no_repo_digests(monkeypatch):
+    """containerd 2.x CRI leaves repoDigests empty for an imported manifest list; ctr still lists its digest."""
+    cri = '{"status":{"id":"sha256:' + "1" * 64 + '","repoDigests":[]}}'
+    ctr = "docker.io/library/image:tag application/vnd.docker.distribution.manifest.list.v2+json sha256:" + "3" * 64 + " 5.0 MiB linux/amd64"
+
+    def run(command):
+        return type("Result", (), {"stdout": ctr if "ctr" in command else cri})()
+
+    monkeypatch.setattr(worker_infra, "_run", run)
+
+    assert "sha256:" + "3" * 64 in worker_infra._node_digests("node", "image:tag")
+
+
 def test_existing_cluster_reuse_requires_stable_kubeconfig(tmp_path):
     missing = tmp_path / "missing-kubeconfig"
     reusable, reason = worker_infra.existing_cluster_is_reusable("sregym-w0", str(missing))
