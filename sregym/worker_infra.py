@@ -11,6 +11,7 @@ import platform
 import re
 import shutil
 import subprocess
+import tarfile
 import tempfile
 from contextlib import suppress
 from pathlib import Path
@@ -47,12 +48,16 @@ def cluster_lock(cluster_name: str):
         except BlockingIOError as exc:
             handle.seek(0)
             owner = handle.read().strip() or "unknown"
-            raise ClusterInUseError(f"cluster {cluster_name} is already in use by another experiment ({owner})") from exc
+            raise ClusterInUseError(
+                f"cluster {cluster_name} is already in use by another experiment ({owner})"
+            ) from exc
         handle.seek(0)
         handle.truncate()
         handle.write(f"pid {os.getpid()}")
         handle.flush()
         yield
+
+
 _REUSE_BOOL_TRUE = {"1", "true", "yes", "on"}
 _CALICO_URL = "https://raw.githubusercontent.com/projectcalico/calico/v3.27.4/manifests/calico.yaml"
 _CALICO_SHA256 = ""
@@ -66,6 +71,7 @@ _CALICO_IMAGE_MIRRORS = [
 def container_platform() -> str:
     arch = platform.machine().lower()
     return "linux/arm64" if ("arm" in arch or "aarch" in arch) else "linux/amd64"
+
 
 logger = logging.getLogger(__name__)
 
@@ -85,9 +91,23 @@ def _digest_from_output(output: str) -> str:
     return match.group(0)
 
 
-def _image_digest(image: str) -> str:
-    result = _run(["docker", "image", "inspect", image, "--format", "{{index .RepoDigests 0}}"])
+def _local_config_digest(image: str) -> str:
+    result = _run(["docker", "image", "inspect", image, "--format", "{{.Id}}"])
     return _digest_from_output(result.stdout)
+
+
+def _archive_config_digest(archive: str, image: str) -> str:
+    with tarfile.open(archive) as saved:
+        manifest_file = saved.extractfile("manifest.json")
+        if manifest_file is None:
+            raise RuntimeError(f"docker archive for {image} has no manifest.json")
+        manifest = json.load(manifest_file)
+    if not isinstance(manifest, list) or len(manifest) != 1 or not isinstance(manifest[0], dict):
+        raise RuntimeError(f"docker archive for {image} has an unexpected manifest")
+    config_name = Path(str(manifest[0].get("Config", ""))).name.removesuffix(".json")
+    if re.fullmatch(r"[0-9a-f]{64}", config_name) is None:
+        raise RuntimeError(f"docker archive for {image} has an invalid config digest")
+    return f"sha256:{config_name}"
 
 
 def _kind_nodes(cluster_name: str) -> list[str]:
@@ -107,7 +127,7 @@ def _node_digests(node: str, image: str) -> set[str]:
 
 
 def ensure_kind_images(cluster_name: str, images: list[str]) -> dict[str, dict[str, str]]:
-    expected = {image: _image_digest(image) for image in images}
+    expected = {image: _local_config_digest(image) for image in images}
     if images:
         _run(["kind", "load", "docker-image", "--name", cluster_name, *images])
     evidence: dict[str, dict[str, str]] = {}
@@ -116,7 +136,9 @@ def ensure_kind_images(cluster_name: str, images: list[str]) -> dict[str, dict[s
         for image, digest in expected.items():
             observed = _node_digests(node, image)
             if digest not in observed:
-                raise RuntimeError(f"{node} image {image} digest mismatch: expected {digest}, observed {sorted(observed)}")
+                raise RuntimeError(
+                    f"{node} image {image} digest mismatch: expected {digest}, observed {sorted(observed)}"
+                )
             node_evidence[image] = digest
         evidence[node] = node_evidence
     return evidence
@@ -127,7 +149,7 @@ def platform_image_archive(image: str, platform_name: str) -> tuple[str, str]:
     with tempfile.NamedTemporaryFile(prefix="sregym-image-", suffix=".tar", delete=False) as handle:
         archive = handle.name
     _run(["docker", "save", "--output", archive, image])
-    return archive, _image_digest(image)
+    return archive, _archive_config_digest(archive, image)
 
 
 def _import_image_archive(node: str, archive: str) -> None:
@@ -176,7 +198,9 @@ def ensure_kind_platform_images(
         for image, digest in expected.items():
             observed = _node_digests(node, image)
             if digest not in observed:
-                raise RuntimeError(f"{node} image {image} digest mismatch: expected {digest}, observed {sorted(observed)}")
+                raise RuntimeError(
+                    f"{node} image {image} digest mismatch: expected {digest}, observed {sorted(observed)}"
+                )
             node_evidence[image] = digest
         evidence[node] = node_evidence
     return evidence

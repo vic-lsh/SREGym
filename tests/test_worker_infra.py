@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import json
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -43,6 +45,32 @@ def test_node_digests_include_imported_repo_digest(monkeypatch):
         "sha256:" + "1" * 64,
         "sha256:" + "2" * 64,
     }
+
+
+def test_local_config_digest_uses_docker_image_id(monkeypatch):
+    commands = []
+    digest = "sha256:" + "3" * 64
+
+    def fake_run(command):
+        commands.append(command)
+        return type("Result", (), {"stdout": digest})()
+
+    monkeypatch.setattr(worker_infra, "_run", fake_run)
+
+    assert worker_infra._local_config_digest("image:tag") == digest
+    assert commands == [["docker", "image", "inspect", "image:tag", "--format", "{{.Id}}"]]
+
+
+def test_archive_config_digest_accepts_legacy_json_config_name(tmp_path):
+    digest = "4" * 64
+    payload = json.dumps([{"Config": f"{digest}.json"}]).encode()
+    archive = tmp_path / "image.tar"
+    with tarfile.open(archive, "w") as saved:
+        info = tarfile.TarInfo("manifest.json")
+        info.size = len(payload)
+        saved.addfile(info, io.BytesIO(payload))
+
+    assert worker_infra._archive_config_digest(str(archive), "image:tag") == f"sha256:{digest}"
 
 
 def test_existing_cluster_reuse_requires_stable_kubeconfig(tmp_path):
@@ -112,9 +140,7 @@ def test_install_calico_loads_locally_selected_images(tmp_path, monkeypatch):
 
     worker_infra.install_calico("cluster", str(tmp_path / "kubeconfig"))
 
-    assert loaded == [
-        ("cluster", [target for _, target in worker_infra._CALICO_IMAGE_MIRRORS], "linux/amd64")
-    ]
+    assert loaded == [("cluster", [target for _, target in worker_infra._CALICO_IMAGE_MIRRORS], "linux/amd64")]
     assert all("--platform" in command for command in commands if command[:2] == ["docker", "pull"])
 
 
