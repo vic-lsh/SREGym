@@ -25,6 +25,21 @@ def test_prepare_kind_config_adds_registry_auth_and_network_policy(tmp_path, mon
         generated.unlink()
 
 
+def test_prepare_kind_config_enables_containerd_certs_d_for_registry_hosts(tmp_path):
+    """SDO's in-cluster registry is wired through /etc/containerd/certs.d, which node images may not load."""
+    base = tmp_path / "kind.yml"
+    base.write_text("kind: Cluster\napiVersion: kind.x-k8s.io/v1alpha4\n", encoding="utf-8")
+
+    generated = Path(worker_infra.prepare_kind_config(str(base), None, None))
+    try:
+        config = yaml.safe_load(generated.read_text(encoding="utf-8"))
+        patches = "\n".join(config["containerdConfigPatches"])
+        for plugin in ("io.containerd.grpc.v1.cri", "io.containerd.cri.v1.images"):
+            assert f'[plugins."{plugin}".registry]\n  config_path = "/etc/containerd/certs.d"' in patches
+    finally:
+        generated.unlink()
+
+
 def test_required_images_validates_json_shape(monkeypatch):
     monkeypatch.setenv("SREGYM_KIND_REQUIRED_IMAGES", json.dumps({"image": "not-a-list"}))
     with pytest.raises(RuntimeError, match="JSON array"):

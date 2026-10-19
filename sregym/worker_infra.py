@@ -263,6 +263,11 @@ def prepare_kind_config(
             f'  password = "{docker_password}"\n'
         )
         config.setdefault("containerdConfigPatches", []).append(auth_patch)
+    # containerd 1.x reads the v2 key, 2.x the images plugin key; each version ignores the other.
+    for plugin in ("io.containerd.grpc.v1.cri", "io.containerd.cri.v1.images"):
+        config.setdefault("containerdConfigPatches", []).append(
+            f'[plugins."{plugin}".registry]\n  config_path = "/etc/containerd/certs.d"\n'
+        )
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as handle:
         yaml.safe_dump(config, handle)
     return handle.name
