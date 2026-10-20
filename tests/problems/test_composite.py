@@ -309,6 +309,33 @@ def test_the_registry_merges_every_composite_and_each_component_is_registered(mo
                 assert component.decoy in composite_module.DECOY_FACTORIES
 
 
+@pytest.mark.parametrize(
+    ("short_name", "services"),
+    [
+        ("repeat05", ("profile", "user")),
+        ("repeat08", ("search", "geo")),
+        ("compose03", ("profile", "search")),
+        ("compose05", ("rate", "geo")),
+        ("compose06", ("reservation", "search")),
+        ("compose08", ("user", "recommendation")),
+        ("compose09", ("geo", "rate")),
+        ("compose10", ("search", "reservation")),
+    ],
+)
+def test_pbprog_composites_resolve_with_distinct_services(monkeypatch, short_name, services) -> None:
+    problem_id = f"composite_pbprog_{short_name}_hotel_reservation"
+
+    problem = _registry(monkeypatch).get_problem_instance(problem_id)
+
+    assert isinstance(problem, CompositeFaultProblem)
+    targets = tuple(
+        component.faulty_service[0] if isinstance(component.faulty_service, list) else component.faulty_service
+        for component in problem.components
+    )
+    assert targets == services
+    assert len(set(targets)) == len(targets)
+
+
 def test_the_registry_builds_components_through_its_own_factories(monkeypatch) -> None:
     registry = _registry(monkeypatch)
     events: list[str] = []
