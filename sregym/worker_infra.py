@@ -17,7 +17,6 @@ from pathlib import Path
 
 import yaml
 
-KIND_CLUSTER_PREFIX = os.getenv("SREGYM_KIND_CLUSTER_PREFIX", "sregym-w")
 #: Optional worker-node count for a worker cluster; unset keeps the base
 #: kind config's topology (1 control plane + 3 workers).
 KIND_WORKER_NODES_ENV = "SREGYM_KIND_WORKER_NODES"
@@ -72,6 +71,10 @@ logger = logging.getLogger(__name__)
 
 def _truthy_env(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in _REUSE_BOOL_TRUE
+
+
+def kind_cluster_prefix() -> str:
+    return os.environ.get("SREGYM_KIND_CLUSTER_PREFIX", "").strip() or "sregym-w"
 
 
 def _run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -379,7 +382,7 @@ def create_kind_cluster(cluster_name: str, kubeconfig_path: str) -> tuple[str, s
 
 def stable_kubeconfig_path(worker_id: int) -> str:
     os.makedirs(_REUSE_KUBECONFIG_DIR, exist_ok=True)
-    return os.path.join(_REUSE_KUBECONFIG_DIR, f"{KIND_CLUSTER_PREFIX}{worker_id}.kubeconfig")
+    return os.path.join(_REUSE_KUBECONFIG_DIR, f"{kind_cluster_prefix()}{worker_id}.kubeconfig")
 
 
 def existing_cluster_is_reusable(cluster_name: str, kubeconfig_path: str) -> tuple[bool, str]:
@@ -423,7 +426,7 @@ def _attach_existing_cluster(worker_id: int, experiment_log_dir: str, cluster_na
 
 
 def create_worker_cluster(worker_id: int, experiment_log_dir: str) -> tuple[str, str]:
-    cluster_name = f"{KIND_CLUSTER_PREFIX}{worker_id}"
+    cluster_name = f"{kind_cluster_prefix()}{worker_id}"
     if _truthy_env("SREGYM_REUSE_CLUSTER") and not _truthy_env("SREGYM_FORCE_RECREATE_CLUSTER"):
         stable_path = stable_kubeconfig_path(worker_id)
         ok, reason = existing_cluster_is_reusable(cluster_name, stable_path)

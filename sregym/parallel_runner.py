@@ -45,7 +45,7 @@ from sregym.service.app_workspace import (
     application_workspace_seed_override,
     prepare_application_workspace,
 )
-from sregym.worker_infra import KIND_CLUSTER_PREFIX, cluster_lock, create_worker_cluster, delete_worker_cluster
+from sregym.worker_infra import cluster_lock, create_worker_cluster, delete_worker_cluster, kind_cluster_prefix
 
 
 @dataclass(frozen=True)
@@ -404,7 +404,7 @@ def _worker(
     cluster_name = ""
     try:
         remote = remote_worker_clusters(args)
-        lock_name = remote[worker_id][1] if remote else f"{KIND_CLUSTER_PREFIX}{cluster_worker_id(worker_id)}"
+        lock_name = remote[worker_id][1] if remote else f"{kind_cluster_prefix()}{cluster_worker_id(worker_id)}"
         with cluster_lock(lock_name):
             try:
                 if remote:
