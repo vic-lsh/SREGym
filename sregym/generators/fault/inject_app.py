@@ -302,7 +302,10 @@ class ApplicationFaultInjector(FaultInjector):
         found = False
         for e in current_env:
             if e.name == env_var:
-                updated_env.append(client.V1EnvVar(name=env_var, value=f"{e.value.split(':')[0]}:{incorrect_port}"))
+                # rsplit on the LAST colon so scheme-prefixed hosts survive
+                # (e.g. "http://shipping:8080" -> "http://shipping:8082", not
+                # "http:8082"). Plain "host:port" values are unaffected.
+                updated_env.append(client.V1EnvVar(name=env_var, value=f"{e.value.rsplit(':', 1)[0]}:{incorrect_port}"))
                 found = True
             else:
                 updated_env.append(e)
@@ -345,7 +348,8 @@ class ApplicationFaultInjector(FaultInjector):
         found = False
         for e in current_env:
             if e.name == env_var:
-                base_host = e.value.split(":")[0]
+                # rsplit on the LAST colon so scheme-prefixed hosts are restored
+                base_host = e.value.rsplit(":", 1)[0]
                 updated_env.append(client.V1EnvVar(name=env_var, value=f"{base_host}:{correct_port}"))
                 found = True
             else:
