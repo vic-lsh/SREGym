@@ -39,3 +39,28 @@ def test_gc_shares_remaining_budget_after_a_successful_node(monkeypatch):
     assert elapsed == 180
     assert calls == [("control-plane", 180), ("worker", 170)]
     assert result == {"control-plane": 2, "worker": -1}
+
+
+def test_gc_node_budget_includes_pod_creation_latency(monkeypatch):
+    import pytest
+
+    clock = [0.0]
+    ctl = kubectl.KubeCtl.__new__(kubectl.KubeCtl)
+
+    def create(**kwargs):
+        clock[0] += 2
+
+    def read(**kwargs):
+        clock[0] += 3
+        return SimpleNamespace(status=SimpleNamespace(phase="Running"))
+
+    ctl.core_v1_api = SimpleNamespace(
+        delete_namespaced_pod=lambda **kwargs: None,
+        create_namespaced_pod=create,
+        read_namespaced_pod=read,
+    )
+    monkeypatch.setattr(kubectl.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(kubectl.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    with pytest.raises(TimeoutError, match="phase=Running"):
+        ctl._run_localpv_gc_pod_on_node("control-plane", "default", "echo GC_REMOVED=0", "", timeout=5)
+    assert clock[0] == 5

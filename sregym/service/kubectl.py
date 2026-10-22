@@ -620,6 +620,7 @@ class KubeCtl:
         control-plane nodes. Returns the integer parsed from the
         ``GC_REMOVED=<n>`` line in pod stdout.
         """
+        deadline = time.monotonic() + timeout
         # Pod name must be DNS-1123: lowercase, <=63 chars. Use first label of
         # the node hostname plus a short suffix.
         short_node = node_name.split(".")[0].lower().replace("_", "-")[:40]
@@ -668,7 +669,6 @@ class KubeCtl:
 
         try:
             # Wait for the pod to reach a terminal phase.
-            deadline = time.monotonic() + timeout
             sleep_s = 2
             phase = "Pending"
             while time.monotonic() < deadline:
