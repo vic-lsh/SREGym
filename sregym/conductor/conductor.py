@@ -1159,6 +1159,8 @@ class Conductor:
 
         if warm_infrastructure:
             self.logger.info("[DEPLOY] Reusing preserved benchmark infrastructure")
+            # Khaos is per problem: a reused stack has it only if an earlier problem needed it.
+            self._deploy_khaos(problem)
         else:
             self._deploy_shared_infrastructure(problem)
             if self.config.preserve_infrastructure:
@@ -1200,6 +1202,12 @@ class Conductor:
         result = self.kubectl.exec_command("kubectl get configmap sregym-warm-infrastructure -n default -o name")
         return marker_is_ready(result)
 
+    def _deploy_khaos(self, problem):
+        # Only deploy Khaos if the problem requires it
+        if problem.requires_khaos():
+            self.logger.info("[DEPLOY] Deploying Khaos DaemonSet...")
+            self.khaos.ensure_deployed()
+
     def _deploy_shared_infrastructure(self, problem):
         self.logger.info("[DEPLOY] Setting up metrics-server…")
         self.kubectl.exec_command(
@@ -1215,10 +1223,7 @@ class Conductor:
         )
         self.kubectl.wait_for_ready("kube-system")
 
-        # Only deploy Khaos if the problem requires it
-        if problem.requires_khaos():
-            self.logger.info("[DEPLOY] Deploying Khaos DaemonSet...")
-            self.khaos.ensure_deployed()
+        self._deploy_khaos(problem)
 
         self.logger.info("[DEPLOY] Setting up OpenEBS…")
         self._preflight_openebs_udev_mount()
