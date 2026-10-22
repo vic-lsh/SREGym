@@ -118,14 +118,20 @@ def test_agent_containers_get_the_auth_env_and_only_the_credentials_mount(tmp_pa
     ("model", "environ", "vertex_model"),
     [
         ("claude-opus-5-5", VERTEX, "claude-opus-5-5"),
-        ("anthropic/claude-opus-5-5", VERTEX, "claude-opus-5-5"),
+        ("vertex_ai/claude-opus-5-5", VERTEX, "claude-opus-5-5"),
+        ("vertex_ai/claude-opus-5-5", {"GOOGLE_CLOUD_PROJECT": "proj"}, "claude-opus-5-5"),
+        ("anthropic/claude-opus-5-5", VERTEX, None),
         ("claude-opus-5-5", {"ANTHROPIC_API_KEY": "k"}, None),
+        # A project for other agents (geminicli, opencode) is not Claude Code's Vertex switch.
+        ("claude-opus-5-5", {"GOOGLE_CLOUD_PROJECT": "proj", "ANTHROPIC_API_KEY": "k"}, None),
+        ("claude-opus-5-5", {"ANTHROPIC_VERTEX_PROJECT_ID": "proj", "CLOUD_ML_REGION": "global"}, None),
+        ("claude-opus-5-5", {"CLAUDE_CODE_USE_VERTEX": "1"}, None),
         ("claude-opus-5-5", {**VERTEX, "JUDGE_API_BASE": "http://proxy"}, None),
         ("gpt-5", VERTEX, None),
         ("openrouter/claude-opus-5-5", VERTEX, None),
     ],
 )
-def test_a_claude_judge_uses_vertex_when_a_vertex_project_is_configured(monkeypatch, model, environ, vertex_model):
+def test_a_claude_judge_uses_vertex_when_claude_code_would(monkeypatch, model, environ, vertex_model):
     for key in (*AUTH_KEYS, "JUDGE_API_BASE", "CLAUDE_CONFIG_DIR", "SREGYM_CLAUDE_AUTH_CONFIG_DIR"):
         monkeypatch.delenv(key, raising=False)
     for key, value in environ.items():

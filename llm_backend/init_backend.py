@@ -1,6 +1,6 @@
 import os
 
-from clients.harness.claude_auth import auth_env, vertex_project
+from clients.harness.claude_auth import auth_env, uses_vertex, vertex_project
 from llm_backend.codex_cli_backend import CODEX_JUDGE_PREFIX, DEFAULT_JUDGE_REASONING_EFFORT, CodexCLIBackend
 from llm_backend.get_llm_backend import LiteLLMBackend
 
@@ -31,14 +31,19 @@ def get_llm_backend_for_agent() -> LiteLLMBackend:
 def _vertex_claude_model(model_id: str) -> str | None:
     """The bare Claude model name when the judge should use Claude on Vertex, else None.
 
-    A Claude model (no provider prefix, or ``anthropic/`` or ``vertex_ai/``) goes to Vertex when a
-    Vertex project is configured, in the environment or the Claude settings fallback. Otherwise
-    the model stays on LiteLLM (e.g. Anthropic's API with ANTHROPIC_API_KEY).
+    A bare Claude model goes to Vertex when Claude Code would: ``CLAUDE_CODE_USE_VERTEX`` is on and
+    a Vertex project is configured, in the environment or the Claude settings fallback. A
+    ``vertex_ai/`` model asks for Vertex explicitly and needs only the project. A Vertex project
+    alone (``GOOGLE_CLOUD_PROJECT`` serves other agents too) does not move a bare model off
+    LiteLLM, and an ``anthropic/`` model always stays there (Anthropic's API, ANTHROPIC_API_KEY).
     """
     provider, _, bare = model_id.rpartition("/")
-    if provider not in ("", "anthropic", "vertex_ai") or not bare.lower().startswith("claude"):
+    if provider not in ("", "vertex_ai") or not bare.lower().startswith("claude"):
         return None
-    if os.environ.get("JUDGE_API_BASE") or not vertex_project(auth_env(os.environ)):
+    if os.environ.get("JUDGE_API_BASE"):
+        return None
+    auth = auth_env(os.environ)
+    if not vertex_project(auth) or (provider == "" and not uses_vertex(auth)):
         return None
     return bare
 
