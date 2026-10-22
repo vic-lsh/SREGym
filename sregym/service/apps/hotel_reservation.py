@@ -1,5 +1,4 @@
 import logging
-import time
 
 from sregym.generators.workload.wrk2 import Wrk2, Wrk2WorkloadManager
 from sregym.paths import FAULT_SCRIPTS, HOTEL_RES_METADATA
@@ -159,7 +158,9 @@ class HotelReservation(Application):
             delete_command = f"kubectl delete pv {pv}"
             delete_result = self.kubectl.exec_command(delete_command)
             logger.info(f"Deleted PersistentVolume {pv}: {delete_result.strip()}")
-        time.sleep(5)
+        for pv in pvs:
+            # Wait for the volumes to disappear instead of a fixed pause; nothing to wait for on a clean cluster.
+            self.kubectl.exec_command(f"kubectl wait --for=delete pv/{pv} --timeout=60s")
 
         if hasattr(self, "wrk"):
             # self.wrk.stop()

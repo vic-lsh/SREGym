@@ -40,5 +40,61 @@
       {"role": "fault", "problem": "k8s_target_port_user_hotel_reservation"},
       {"role": "fault", "problem": "missing_service_hotel_reservation"}
     ]
+  },
+  "composite_pbprog_repeat05_hotel_reservation": {
+    "description": "Target-port mismatch on profile and an unavailable image on user.",
+    "components": [
+      {"role": "fault", "problem": "k8s_target_port_misconfig_hotel_reservation__v_profile_9999"},
+      {"role": "fault", "problem": "incorrect_image__v_hotel_reservation_user_nonexistent_tag"}
+    ]
+  },
+  "composite_pbprog_repeat08_hotel_reservation": {
+    "description": "Target-port mismatch on search and an unavailable image on geo.",
+    "components": [
+      {"role": "fault", "problem": "k8s_target_port_misconfig_hotel_reservation__v_search_9999"},
+      {"role": "fault", "problem": "incorrect_image__v_hotel_reservation_geo_nonexistent_tag"}
+    ]
+  },
+  "composite_pbprog_compose03_hotel_reservation": {
+    "description": "Target-port mismatch on profile and an unavailable image on search.",
+    "components": [
+      {"role": "fault", "problem": "k8s_target_port_misconfig_hotel_reservation__v_profile_9999"},
+      {"role": "fault", "problem": "incorrect_image__v_hotel_reservation_search_nonexistent_tag"}
+    ]
+  },
+  "composite_pbprog_compose05_hotel_reservation": {
+    "description": "Target-port mismatch on rate and a failing readiness probe on geo.",
+    "components": [
+      {"role": "fault", "problem": "k8s_target_port_misconfig_hotel_reservation__v_rate_9999"},
+      {"role": "fault", "problem": "readiness_probe_misconfiguration__v_hotel_reservation_geo_wrong_path_1"}
+    ]
+  },
+  "composite_pbprog_compose06_hotel_reservation": {
+    "description": "Unavailable image on reservation and a failing readiness probe on search.",
+    "components": [
+      {"role": "fault", "problem": "incorrect_image__v_hotel_reservation_reservation_nonexistent_tag"},
+      {"role": "fault", "problem": "readiness_probe_misconfiguration__v_hotel_reservation_search_wrong_path_1"}
+    ]
+  },
+  "composite_pbprog_compose08_hotel_reservation": {
+    "description": "Target-port mismatch on user and an unmatched Service selector on recommendation.",
+    "components": [
+      {"role": "fault", "problem": "k8s_target_port_misconfig_hotel_reservation__v_user_9999"},
+      {"role": "fault", "problem": "wrong_service_selector__v_hotel_reservation_recommendation_1_add_extra_label"}
+    ]
+  },
+  "composite_pbprog_compose09_hotel_reservation": {
+    "description": "Unavailable image on geo and an unmatched Service selector on rate.",
+    "components": [
+      {"role": "fault", "problem": "incorrect_image__v_hotel_reservation_geo_nonexistent_tag"},
+      {"role": "fault", "problem": "wrong_service_selector__v_hotel_reservation_rate_1_add_extra_label"}
+    ]
+  },
+  "composite_pbprog_compose10_hotel_reservation": {
+    "description": "A network policy blocks search while reservation has a target-port mismatch.",
+    "components": [
+      {"role": "fault", "problem": "network_policy_block__v_hotel_reservation_search_both_descriptive"},
+      {"role": "fault", "problem": "k8s_target_port_misconfig_hotel_reservation__v_reservation_9999"}
+    ]
   }
 }

@@ -119,7 +119,7 @@ _REPRESENTATIVE_SERVICES = {
 # All representative services flattened (for single-app problems)
 _ALL_REPRESENTATIVE = sorted(set(svc for svcs in _REPRESENTATIVE_SERVICES.values() for svc in svcs))
 
-# Social network services only (for K8STargetPortMisconfig which only supports SocialNetwork)
+# Social network services for the existing target-port variant IDs.
 _SOCIAL_NETWORK_SERVICES = _REPRESENTATIVE_SERVICES["social_network"]
 
 
@@ -375,6 +375,15 @@ VARIANT_SPECS: list[VariantSpec] = [
             VariantDimension("faulty_service", _SOCIAL_NETWORK_SERVICES),
             VariantDimension("bad_port", [9999, 8888, 7777, 6666]),
         ],
+    ),
+    VariantSpec(
+        problem_class=K8STargetPortMisconfig,
+        base_name="k8s_target_port_misconfig_hotel_reservation",
+        dimensions=[
+            VariantDimension("faulty_service", _REPRESENTATIVE_SERVICES["hotel_reservation"]),
+            VariantDimension("bad_port", [9999]),
+        ],
+        derived_params=lambda _: {"app_name": "hotel_reservation"},
     ),
     # --- Rolling Update / CoreDNS ---
     VariantSpec(

@@ -62,6 +62,8 @@ class WrongServiceSelector(Problem):
     def inject_fault(self):
         print("== Fault Injection ==")
         self._scale_if_needed()
+        service = self.kubectl.get_service_json(self.faulty_service, self.namespace)
+        self.expected_service_port = service["spec"]["ports"][0]["port"]
         injector = VirtualizationFaultInjector(namespace=self.namespace)
         if self.selector_mutation == "swap_to_other_service":
             if not self.wrong_target_deployment:

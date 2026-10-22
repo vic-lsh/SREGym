@@ -18,7 +18,6 @@ from pathlib import Path
 
 import yaml
 
-KIND_CLUSTER_PREFIX = os.getenv("SREGYM_KIND_CLUSTER_PREFIX", "sregym-w")
 #: Optional worker-node count for a worker cluster; unset keeps the base
 #: kind config's topology (1 control plane + 3 workers).
 KIND_WORKER_NODES_ENV = "SREGYM_KIND_WORKER_NODES"
@@ -80,6 +79,10 @@ def _truthy_env(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in _REUSE_BOOL_TRUE
 
 
+def kind_cluster_prefix() -> str:
+    return os.environ.get("SREGYM_KIND_CLUSTER_PREFIX", "").strip() or "sregym-w"
+
+
 def _run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, check=True, capture_output=True, text=True, **kwargs)
 
@@ -94,6 +97,23 @@ def _digest_from_output(output: str) -> str:
 def _local_config_digest(image: str) -> str:
     result = _run(["docker", "image", "inspect", image, "--format", "{{.Id}}"])
     return _digest_from_output(result.stdout)
+
+
+def _local_image_digests(image: str) -> set[str]:
+    # Locally built images may have no RepoDigests. Imported images can instead
+    # expose the registry target through containerd, so accept either identity.
+    result = _run(
+        [
+            "docker",
+            "image",
+            "inspect",
+            image,
+            "--format",
+            "{{.Id}} {{range .RepoDigests}}{{.}} {{end}}",
+        ]
+    )
+    _digest_from_output(result.stdout)  # Reject empty or malformed inspect output.
+    return set(re.findall(r"sha256:[0-9a-f]{64}", result.stdout))
 
 
 def _archive_config_digest(archive: str, image: str) -> str:
@@ -121,25 +141,65 @@ def _node_image_ref(image: str) -> str:
     return f"docker.io/library/{image}"
 
 
+def _containerd_image_name(image: str) -> str:
+    """The fully qualified name containerd stores for ``image`` (ctr does not expand short names)."""
+    if "/" not in image:
+        return f"docker.io/library/{image}"
+    if "." not in image.split("/", 1)[0] and ":" not in image.split("/", 1)[0]:
+        return f"docker.io/{image}"
+    return image
+
+
 def _node_digests(node: str, image: str) -> set[str]:
-    result = _run(["docker", "exec", node, "crictl", "inspecti", _node_image_ref(image)])
-    return set(re.findall(r"sha256:[0-9a-f]{64}", result.stdout))
+    ref = _node_image_ref(image)
+    result = _run(["docker", "exec", node, "crictl", "inspecti", ref])
+    digests = set(re.findall(r"sha256:[0-9a-f]{64}", result.stdout))
+    # containerd 2.x leaves the CRI repoDigests empty for an imported manifest list; ctr lists its target digest.
+    listed = _run(
+        ["docker", "exec", node, "ctr", "--namespace=k8s.io", "images", "ls", f"name=={_containerd_image_name(image)}"]
+    )
+    return digests | set(re.findall(r"sha256:[0-9a-f]{64}", listed.stdout))
+
+
+def _node_has_digest(node: str, image: str, digests: set[str]) -> bool:
+    try:
+        return bool(digests & _node_digests(node, image))
+    except subprocess.CalledProcessError:
+        return False
+
+
+def kind_nodes_hold_image(cluster_name: str, image_ref: str) -> bool:
+    """Whether every node of the kind cluster already holds the local ``image_ref`` at its current image id."""
+    try:
+        local = _run(["docker", "image", "inspect", "--format", "{{.Id}}", image_ref]).stdout.strip()
+        nodes = _kind_nodes(cluster_name)
+    except (subprocess.CalledProcessError, OSError):
+        return False
+    return bool(local) and bool(nodes) and all(_node_has_digest(node, image_ref, {local}) for node in nodes)
 
 
 def ensure_kind_images(cluster_name: str, images: list[str]) -> dict[str, dict[str, str]]:
-    expected = {image: _local_config_digest(image) for image in images}
-    if images:
-        _run(["kind", "load", "docker-image", "--name", cluster_name, *images])
+    expected = {image: _local_image_digests(image) for image in images}
+    nodes = _kind_nodes(cluster_name)
+    # `kind load` streams every image into every node (about 60 s for the SDO images), so load only the
+    # images a node lacks or holds at another digest. The verification below still covers every image.
+    stale = [
+        image for image, digest in expected.items() if not all(_node_has_digest(node, image, digest) for node in nodes)
+    ]
+    if stale:
+        logger.info("loading %d of %d kind images with missing or stale digests: %s", len(stale), len(images), stale)
+        _run(["kind", "load", "docker-image", "--name", cluster_name, *stale])
     evidence: dict[str, dict[str, str]] = {}
-    for node in _kind_nodes(cluster_name):
+    for node in nodes:
         node_evidence: dict[str, str] = {}
-        for image, digest in expected.items():
+        for image, digests in expected.items():
             observed = _node_digests(node, image)
-            if digest not in observed:
+            matched = digests & observed
+            if not matched:
                 raise RuntimeError(
-                    f"{node} image {image} digest mismatch: expected {digest}, observed {sorted(observed)}"
+                    f"{node} image {image} digest mismatch: expected one of {sorted(digests)}, observed {sorted(observed)}"
                 )
-            node_evidence[image] = digest
+            node_evidence[image] = sorted(matched)[0]
         evidence[node] = node_evidence
     return evidence
 
@@ -274,6 +334,11 @@ def prepare_kind_config(
             f'  password = "{docker_password}"\n'
         )
         config.setdefault("containerdConfigPatches", []).append(auth_patch)
+    # containerd 1.x reads the v2 key, 2.x the images plugin key; each version ignores the other.
+    for plugin in ("io.containerd.grpc.v1.cri", "io.containerd.cri.v1.images"):
+        config.setdefault("containerdConfigPatches", []).append(
+            f'[plugins."{plugin}".registry]\n  config_path = "/etc/containerd/certs.d"\n'
+        )
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as handle:
         yaml.safe_dump(config, handle)
     return handle.name
@@ -385,7 +450,7 @@ def create_kind_cluster(cluster_name: str, kubeconfig_path: str) -> tuple[str, s
 
 def stable_kubeconfig_path(worker_id: int) -> str:
     os.makedirs(_REUSE_KUBECONFIG_DIR, exist_ok=True)
-    return os.path.join(_REUSE_KUBECONFIG_DIR, f"{KIND_CLUSTER_PREFIX}{worker_id}.kubeconfig")
+    return os.path.join(_REUSE_KUBECONFIG_DIR, f"{kind_cluster_prefix()}{worker_id}.kubeconfig")
 
 
 def existing_cluster_is_reusable(cluster_name: str, kubeconfig_path: str) -> tuple[bool, str]:
@@ -399,7 +464,7 @@ def existing_cluster_is_reusable(cluster_name: str, kubeconfig_path: str) -> tup
             timeout=10,
         ).splitlines()
     except (subprocess.SubprocessError, OSError) as exc:
-        return False, f"`kind get clusters` failed: {exc}"
+        raise RuntimeError(f"cannot inventory kind clusters; refusing to recreate {cluster_name}: {exc}") from exc
     if cluster_name not in clusters:
         return False, f"cluster {cluster_name} not registered with kind"
     workers = kind_worker_nodes()
@@ -412,7 +477,7 @@ def existing_cluster_is_reusable(cluster_name: str, kubeconfig_path: str) -> tup
                 timeout=10,
             ).split()
         except (subprocess.SubprocessError, OSError) as exc:
-            return False, f"`kind get nodes` failed: {exc}"
+            raise RuntimeError(f"cannot inventory kind nodes; refusing to recreate {cluster_name}: {exc}") from exc
         existing = sum(1 for node in nodes if re.search(r"-worker\d*$", node))
         if existing != workers:
             return False, f"cluster {cluster_name} has {existing} worker nodes, not the requested {workers}"
@@ -429,7 +494,7 @@ def _attach_existing_cluster(worker_id: int, experiment_log_dir: str, cluster_na
 
 
 def create_worker_cluster(worker_id: int, experiment_log_dir: str) -> tuple[str, str]:
-    cluster_name = f"{KIND_CLUSTER_PREFIX}{worker_id}"
+    cluster_name = f"{kind_cluster_prefix()}{worker_id}"
     if _truthy_env("SREGYM_REUSE_CLUSTER") and not _truthy_env("SREGYM_FORCE_RECREATE_CLUSTER"):
         stable_path = stable_kubeconfig_path(worker_id)
         ok, reason = existing_cluster_is_reusable(cluster_name, stable_path)

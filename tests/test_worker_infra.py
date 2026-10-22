@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
 import tarfile
 from pathlib import Path
 
@@ -11,6 +12,59 @@ import pytest
 import yaml
 
 from sregym import worker_infra
+
+
+@pytest.mark.parametrize("node_identity", ["config", "target"])
+@pytest.mark.parametrize("cached", [True, False])
+def test_image_preflight_accepts_config_or_target_and_only_loads_stale_images(monkeypatch, node_identity, cached):
+    config = "sha256:" + "a" * 64
+    target = "sha256:" + "b" * 64
+    stale = "sha256:" + "c" * 64
+    expected = config if node_identity == "config" else target
+    nodes = {"node-a": expected, "node-b": expected if cached else stale}
+    loads = []
+
+    def run(command):
+        if command[:3] == ["docker", "image", "inspect"]:
+            output = config if command[-1] == "{{.Id}}" else f"{config} image:tag@{target}"
+        elif command[:3] == ["kind", "get", "nodes"]:
+            output = "\n".join(nodes)
+        elif command[:3] == ["kind", "load", "docker-image"]:
+            loads.append(command)
+            nodes["node-b"] = expected
+            output = ""
+        elif "crictl" in command:
+            output = nodes[command[2]] if node_identity == "config" else stale
+        elif "ctr" in command:
+            output = f"image:tag @{nodes[command[2]]}" if node_identity == "target" else ""
+        else:
+            raise AssertionError(command)
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    monkeypatch.setattr(worker_infra, "_run", run)
+
+    assert worker_infra.ensure_kind_images("cluster", ["image:tag"]) == {
+        node: {"image:tag": expected} for node in nodes
+    }
+    assert loads == ([] if cached else [["kind", "load", "docker-image", "--name", "cluster", "image:tag"]])
+
+
+def test_image_preflight_rejects_stale_digest_after_load(monkeypatch):
+    expected = "sha256:" + "a" * 64
+    stale = "sha256:" + "b" * 64
+
+    def run(command):
+        if command[:3] == ["docker", "image", "inspect"]:
+            output = expected
+        elif command[:3] == ["kind", "get", "nodes"]:
+            output = "node-a"
+        else:
+            output = stale
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    monkeypatch.setattr(worker_infra, "_run", run)
+    with pytest.raises(RuntimeError, match="node-a image image:tag digest mismatch"):
+        worker_infra.ensure_kind_images("cluster", ["image:tag"])
 
 
 def test_prepare_kind_config_adds_registry_auth_and_network_policy(tmp_path, monkeypatch):
@@ -23,6 +77,21 @@ def test_prepare_kind_config_adds_registry_auth_and_network_policy(tmp_path, mon
         config = yaml.safe_load(generated.read_text(encoding="utf-8"))
         assert config["networking"]["disableDefaultCNI"] is True
         assert 'username = "user"' in config["containerdConfigPatches"][0]
+    finally:
+        generated.unlink()
+
+
+def test_prepare_kind_config_enables_containerd_certs_d_for_registry_hosts(tmp_path):
+    """SDO's in-cluster registry is wired through /etc/containerd/certs.d, which node images may not load."""
+    base = tmp_path / "kind.yml"
+    base.write_text("kind: Cluster\napiVersion: kind.x-k8s.io/v1alpha4\n", encoding="utf-8")
+
+    generated = Path(worker_infra.prepare_kind_config(str(base), None, None))
+    try:
+        config = yaml.safe_load(generated.read_text(encoding="utf-8"))
+        patches = "\n".join(config["containerdConfigPatches"])
+        for plugin in ("io.containerd.grpc.v1.cri", "io.containerd.cri.v1.images"):
+            assert f'[plugins."{plugin}".registry]\n  config_path = "/etc/containerd/certs.d"' in patches
     finally:
         generated.unlink()
 
@@ -73,6 +142,29 @@ def test_archive_config_digest_accepts_legacy_json_config_name(tmp_path):
     assert worker_infra._archive_config_digest(str(archive), "image:tag") == f"sha256:{digest}"
 
 
+def test_node_digests_include_containerd_index_digest_when_cri_reports_no_repo_digests(monkeypatch):
+    """containerd 2.x CRI leaves repoDigests empty for an imported manifest list; ctr still lists its digest."""
+    cri = '{"status":{"id":"sha256:' + "1" * 64 + '","repoDigests":[]}}'
+    ctr = (
+        "docker.io/library/image:tag application/vnd.docker.distribution.manifest.list.v2+json sha256:"
+        + "3" * 64
+        + " 5.0 MiB linux/amd64"
+    )
+
+    commands = []
+
+    def run(command):
+        commands.append(command)
+        return type("Result", (), {"stdout": ctr if "ctr" in command else cri})()
+
+    monkeypatch.setattr(worker_infra, "_run", run)
+
+    assert "sha256:" + "3" * 64 in worker_infra._node_digests("node", "image:tag")
+    assert worker_infra._containerd_image_name("calico/cni:v3.27.4") == "docker.io/calico/cni:v3.27.4"
+    assert worker_infra._containerd_image_name("registry.k8s.io/pause:3") == "registry.k8s.io/pause:3"
+    assert any("name==docker.io/library/image:tag" in command for command in commands)
+
+
 def test_existing_cluster_reuse_requires_stable_kubeconfig(tmp_path):
     missing = tmp_path / "missing-kubeconfig"
     reusable, reason = worker_infra.existing_cluster_is_reusable("sregym-w0", str(missing))
@@ -82,9 +174,9 @@ def test_existing_cluster_reuse_requires_stable_kubeconfig(tmp_path):
 
 def test_stable_kubeconfig_is_namespaced_by_cluster_prefix(tmp_path, monkeypatch):
     monkeypatch.setattr(worker_infra, "_REUSE_KUBECONFIG_DIR", str(tmp_path))
-    monkeypatch.setattr(worker_infra, "KIND_CLUSTER_PREFIX", "reuse-a-w")
+    monkeypatch.setenv("SREGYM_KIND_CLUSTER_PREFIX", "reuse-a-w")
     first = worker_infra.stable_kubeconfig_path(0)
-    monkeypatch.setattr(worker_infra, "KIND_CLUSTER_PREFIX", "reuse-b-w")
+    monkeypatch.setenv("SREGYM_KIND_CLUSTER_PREFIX", "reuse-b-w")
     second = worker_infra.stable_kubeconfig_path(0)
 
     assert first != second
@@ -218,3 +310,26 @@ def test_a_reused_cluster_must_have_the_requested_worker_count(tmp_path, monkeyp
     assert _reuse_candidate(tmp_path, monkeypatch, three[:2]) == (True, "")
     monkeypatch.delenv("SREGYM_KIND_WORKER_NODES")
     assert _reuse_candidate(tmp_path, monkeypatch, three) == (True, "")
+
+
+@pytest.mark.parametrize("failed_probe", ["clusters", "nodes"])
+def test_inventory_timeout_never_recreates_a_reused_cluster(tmp_path, monkeypatch, failed_probe):
+    kubeconfig = tmp_path / "stable.kubeconfig"
+    kubeconfig.write_text("apiVersion: v1\n", encoding="utf-8")
+    monkeypatch.setenv("SREGYM_REUSE_CLUSTER", "true")
+    monkeypatch.delenv("SREGYM_FORCE_RECREATE_CLUSTER", raising=False)
+    monkeypatch.setenv("SREGYM_KIND_WORKER_NODES", "1")
+    monkeypatch.setattr(worker_infra, "stable_kubeconfig_path", lambda _: str(kubeconfig))
+
+    def check_output(command, **kwargs):
+        if command[2] == failed_probe:
+            raise worker_infra.subprocess.TimeoutExpired(command, 10)
+        return "sregym-w0\n"
+
+    def create(*args):
+        raise AssertionError("inventory failure must not destroy the existing cluster")
+
+    monkeypatch.setattr(worker_infra.subprocess, "check_output", check_output)
+    monkeypatch.setattr(worker_infra, "create_kind_cluster", create)
+    with pytest.raises(RuntimeError, match="inventory"):
+        worker_infra.create_worker_cluster(0, str(tmp_path))

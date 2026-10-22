@@ -1,7 +1,32 @@
 from types import SimpleNamespace
 
+import pytest
+
 from sregym.conductor.oracles.target_port_mitigation import TargetPortMisconfigMitigationOracle
+from sregym.conductor.problems.registry import ProblemRegistry
 from sregym.conductor.problems.target_port import K8STargetPortMisconfig
+
+
+@pytest.mark.parametrize(
+    "service",
+    ("frontend", "geo", "profile", "rate", "recommendation", "search", "reservation", "user"),
+)
+def test_hotel_target_port_variant_resolves_for_each_service(service, offline_problem_dependencies):
+    problem_id = f"k8s_target_port_misconfig_hotel_reservation__v_{service}_9999"
+
+    problem = ProblemRegistry().get_problem_instance(problem_id)
+
+    assert isinstance(problem, K8STargetPortMisconfig)
+    assert (problem.app_name, problem.faulty_service, problem.bad_port) == ("hotel_reservation", service, 9999)
+
+
+def test_existing_target_port_ids_still_resolve(offline_problem_dependencies):
+    registry = ProblemRegistry()
+
+    assert registry.get_problem_instance("k8s_target_port_user_hotel_reservation").faulty_service == "user"
+    assert (
+        registry.get_problem_instance("k8s_target_port_misconfig__v_user-service_9999").faulty_service == "user-service"
+    )
 
 
 class _Kubectl:
