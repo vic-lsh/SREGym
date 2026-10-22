@@ -10,6 +10,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from clients.harness.claude_auth import auth_env, missing_auth
 from clients.harness.limits import max_turns_args, max_turns_from_env
 
 logger = logging.getLogger("all.claudecode.agent")
@@ -313,29 +314,26 @@ class ClaudeCodeAgent:
         env["FORCE_AUTO_BACKGROUND_TASKS"] = "1"
         env["ENABLE_BACKGROUND_TASKS"] = "1"
 
-        # Set API key if available
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        oauth_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
-
-        if not api_key and not oauth_token:
+        # Provider auth: an API key, an OAuth token, or Vertex (CLAUDE_CODE_USE_VERTEX with a
+        # project, region and Google credentials). Taken from the environment, else from the
+        # `env` block of the Claude settings (CLAUDE_CONFIG_DIR is replaced above, so the values
+        # are copied in explicitly).
+        auth = auth_env(os.environ)
+        problem = missing_auth(auth)
+        if problem:
             logger.error("=" * 80)
-            logger.error("ERROR: No Anthropic API authentication found")
-            logger.error("Please set one of the following environment variables:")
-            logger.error("  - ANTHROPIC_API_KEY")
-            logger.error("  - CLAUDE_CODE_OAUTH_TOKEN")
+            logger.error(f"ERROR: No usable Claude authentication: {problem}")
             logger.error("=" * 80)
             return 1
+        env.update(auth)
 
         # Prefer OAuth when explicitly set: an OAuth token in the env reflects
         # caller intent (e.g. driving the agent on a Claude Code subscription
         # while the conductor / judge separately uses an API key from
         # ANTHROPIC_API_KEY). Drop ANTHROPIC_API_KEY from the agent's env so
         # the Claude Code CLI authenticates via the OAuth path.
-        if oauth_token:
-            env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
+        if auth.get("CLAUDE_CODE_OAUTH_TOKEN"):
             env.pop("ANTHROPIC_API_KEY", None)
-        elif api_key:
-            env["ANTHROPIC_API_KEY"] = api_key
 
         # Set model name
         env["ANTHROPIC_MODEL"] = model
@@ -348,6 +346,8 @@ class ClaudeCodeAgent:
         # Build Claude Code command
         command = [
             "claude",
+            "--model",
+            model,
             "--verbose",
             "--output-format",
             "stream-json",

@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+from clients.harness.claude_auth import container_auth
+
 logger = logging.getLogger("all.sregym.container_runner")
 
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -212,6 +214,10 @@ class ContainerRunner:
             if var in os.environ and var not in env_vars and os.environ[var]:
                 env_vars[var] = os.environ[var]
 
+        # Claude provider auth (API key, OAuth or Vertex), with the Claude settings fallback.
+        auth, _ = container_auth(os.environ, Path.home())
+        env_vars.update({k: v for k, v in auth.items() if k not in self.config.env_vars})
+
         if extra_env:
             env_vars.update(extra_env)
 
@@ -268,6 +274,10 @@ class ContainerRunner:
         aws_dir = Path.home() / ".aws"
         if aws_dir.is_dir():
             args.extend(["-v", f"{aws_dir.resolve()}:/root/.aws:ro"])
+
+        # Google credentials for Claude on Vertex: only that one file, read-only.
+        for host_path, container_path in container_auth(os.environ, Path.home())[1]:
+            args.extend(["-v", f"{host_path}:{container_path}:ro"])
 
         self._mount_codex_credentials(args)
 
