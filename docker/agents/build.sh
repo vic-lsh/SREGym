@@ -8,7 +8,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-IMAGE="${SREGYM_AGENT_IMAGE:-sregym-agent-base:latest}"
+# SREGym passes a tag naming the build context's hash, and the hash for the label
+# it checks before use (sregym/service/container_runner.py).
+IMAGE="${SREGYM_AGENT_IMAGE:-sregym-agent-slim:latest}"
+CONTEXT_HASH="${SREGYM_AGENT_CONTEXT_HASH:-}"
 
 # Agent packages for the containerized agents in agents.yaml. Host-only agents
 # (demo, tierzero) stay out: demo ships a scripted answer.
@@ -46,7 +49,8 @@ trap 'rm -rf "$BUILD_CTX"' EXIT
 OLD_IMAGE_ID="$(docker images -q "$IMAGE" 2>/dev/null || true)"
 
 echo "==> Building Docker image..."
-docker build --build-arg CACHE_BUST="$(date +%s)" -t "$IMAGE" -f "$BUILD_CTX/Dockerfile" "$BUILD_CTX"
+docker build --build-arg CACHE_BUST="$(date +%s)" --label "sregym.agent-context=$CONTEXT_HASH" \
+    -t "$IMAGE" -f "$BUILD_CTX/Dockerfile" "$BUILD_CTX"
 
 echo "==> Checking image contents..."
 if ! "$SCRIPT_DIR/check_image.sh" "$IMAGE"; then

@@ -48,10 +48,7 @@ class AgentLauncher:
                 logs_path=Path("./logs"),
             )
             self._container_runner = ContainerRunner(config)
-            if force_build:
-                self._container_runner.build_image()
-            else:
-                self._container_runner.ensure_image_exists()
+            self._container_runner.ensure_image_exists(force_build=force_build)
 
     async def ensure_started(self, reg: AgentRegistration) -> AgentProcess | None:
         if not reg or not reg.kickoff_command:

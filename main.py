@@ -490,7 +490,7 @@ def driver_loop(
 
                 fieldnames = sorted({key for row in [*all_results_for_agent, snapshot] for key in row})
                 ownership_image = (
-                    LAUNCHER._container_runner.config.image
+                    LAUNCHER._container_runner.image
                     if LAUNCHER._container_runner is not None
                     else "sregym-agent-base:latest"
                 )

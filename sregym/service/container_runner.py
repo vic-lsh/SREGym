@@ -1,4 +1,7 @@
 import contextlib
+import fcntl
+import hashlib
+import json
 import logging
 import os
 import platform
@@ -15,6 +18,48 @@ from clients.harness.claude_auth import container_auth
 logger = logging.getLogger("all.sregym.container_runner")
 
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+BUILD_SCRIPT = REPO_ROOT / "docker" / "agents" / "build.sh"
+CHECK_SCRIPT = REPO_ROOT / "docker" / "agents" / "check_image.sh"
+
+#: The agent image is tagged ``<repo>:<build context hash>``: an image under that tag was built from
+#: exactly this checkout's agent code, and a build from other code (another worktree, an older
+#: branch) gets another tag instead of replacing it. The hash is also stored in this label.
+AGENT_IMAGE_REPO = "sregym-agent-slim"
+CONTEXT_LABEL = "sregym.agent-context"
+
+# Images (by ID) that passed check_image.sh in this process.
+_VERIFIED_IMAGE_IDS: set[str] = set()
+
+
+def tree_hash(root: Path) -> str:
+    """Hash of the paths, executable bits and contents of the files under *root*."""
+    digest = hashlib.sha256()
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        data = path.read_bytes()
+        rel = path.relative_to(root).as_posix().encode()
+        mode = b"x" if os.access(path, os.X_OK) else b"-"
+        digest.update(b"%d:%s:%s:%d:" % (len(rel), rel, mode, len(data)) + data)
+    return digest.hexdigest()[:16]
+
+
+def agent_context_hash() -> str:
+    """Hash of the agent image's build context as ``build.sh --context`` assembles it now."""
+    with tempfile.TemporaryDirectory(prefix="sregym-agent-context-") as tmp:
+        ctx = Path(tmp) / "ctx"
+        subprocess.run(["bash", str(BUILD_SCRIPT), "--context", str(ctx)], check=True, capture_output=True)
+        return tree_hash(ctx)
+
+
+@contextlib.contextmanager
+def _image_build_lock():
+    """Serialize image checks and builds across this user's SREGym processes (parallel workers)."""
+    lock_dir = Path.home() / ".cache" / "sregym"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    with open(lock_dir / "agent-image.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
 
 
 def _docker_uses_separate_host() -> bool:
@@ -46,7 +91,7 @@ class ExecInput:
 
 @dataclass
 class ContainerConfig:
-    image: str = "sregym-agent-base:latest"
+    image: str | None = None  # None: f"{AGENT_IMAGE_REPO}:{agent_context_hash()}"
     network_mode: str = "host"
     kubeconfig_path: Path | None = None
     workspace_path: Path | None = None  # bind-mounted to /workspace for agent output
@@ -171,6 +216,20 @@ class ContainerRunner:
     def __init__(self, config: ContainerConfig | None = None):
         self.config = config or ContainerConfig()
         self._credential_tmps: list[str] = []
+        self._context_hash: str | None = None
+        self._image_id: str | None = None  # set once the image passed the isolation check
+
+    @property
+    def context_hash(self) -> str:
+        if self._context_hash is None:
+            self._context_hash = agent_context_hash()
+        return self._context_hash
+
+    @property
+    def image(self) -> str:
+        if self.config.image is None:
+            self.config.image = f"{AGENT_IMAGE_REPO}:{self.context_hash}"
+        return self.config.image
 
     def _mount_codex_credentials(self, args: list[str]) -> None:
         """Mount Codex auth into a throwaway tempdir
@@ -284,6 +343,8 @@ class ContainerRunner:
         return args
 
     def build_docker_command(self, exec_input: ExecInput) -> list[str]:
+        if self._image_id is None:
+            raise RuntimeError("agent image not checked: call ensure_image_exists() before running agents")
         cmd = self._build_base_docker_args()
         suffix = uuid.uuid4().hex[:8]
         if exec_input.label:
@@ -291,7 +352,8 @@ class ContainerRunner:
             cmd.extend(["--name", container_name])
             exec_input.container_name = container_name
         cmd.extend(self._build_env_flags(exec_input.env))
-        cmd.append(self.config.image)
+        # By ID: the image that passed the check, even if the tag moves meanwhile.
+        cmd.append(self._image_id)
         cmd.append(exec_input.command)
         return cmd
 
@@ -358,37 +420,61 @@ class ContainerRunner:
             bufsize=1,
         )
 
-    def ensure_image_exists(self) -> None:
-        """Check if the container image exists locally; build it if not."""
-        image = self.config.image
-        result = subprocess.run(
-            ["docker", "image", "inspect", image],
-            capture_output=True,
-        )
-        if result.returncode == 0:
-            return
+    def ensure_image_exists(self, force_build: bool = False) -> None:
+        """Make the agent image ready to run, or raise.
 
-        logger.info(f"🐳 Container image '{image}' not found. Building automatically...")
-        self.build_image()
+        Builds it when missing, when its context label differs from this checkout's agent code, or
+        when *force_build*. Then runs ``check_image.sh`` against it (once per image per process):
+        an image holding answer-key material or failing to import an agent driver is never run.
+        """
+        image = self.image
+        with _image_build_lock():
+            inspected = self._inspect_image(image)
+            labels = (inspected or {}).get("Config", {}).get("Labels") or {}
+            if force_build or labels.get(CONTEXT_LABEL) != self.context_hash:
+                reason = "forced" if force_build else ("missing" if inspected is None else "stale")
+                logger.info(f"🐳 Container image '{image}' {reason}. Building...")
+                self.build_image()
+                inspected = self._inspect_image(image)
+                if inspected is None:
+                    raise RuntimeError(f"Built container image '{image}' but cannot inspect it.")
+            image_id = inspected["Id"]
+            if image_id not in _VERIFIED_IMAGE_IDS:
+                self._check_image(image, image_id)
+                _VERIFIED_IMAGE_IDS.add(image_id)
+        self._image_id = image_id
+
+    @staticmethod
+    def _inspect_image(image: str) -> dict | None:
+        result = subprocess.run(["docker", "image", "inspect", image], capture_output=True, text=True)
+        if result.returncode != 0:
+            return None
+        return json.loads(result.stdout)[0]
+
+    @staticmethod
+    def _check_image(image: str, image_id: str) -> None:
+        logger.info(f"🔍 Checking container image '{image}' ({image_id[:19]}) for isolation...")
+        result = subprocess.run(["bash", str(CHECK_SCRIPT), image_id], capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Container image '{image}' ({image_id}) failed the isolation check; refusing to run agents "
+                f"from it. Rebuild with --force-build.\n{result.stdout}{result.stderr}"
+            )
 
     def build_image(self) -> None:
         """Build (or rebuild) the container image using docker/agents/build.sh."""
-        image = self.config.image
+        image = self.image
         logger.info(f"🐳 Building container image '{image}'...")
 
-        repo_root = Path(__file__).resolve().parent.parent.parent
-        build_script = repo_root / "docker" / "agents" / "build.sh"
-
-        if not build_script.exists():
+        if not BUILD_SCRIPT.exists():
             raise FileNotFoundError(
-                f"Build script not found at {build_script}. Cannot auto-build container image '{image}'."
+                f"Build script not found at {BUILD_SCRIPT}. Cannot auto-build container image '{image}'."
             )
 
-        build_script.chmod(build_script.stat().st_mode | 0o755)
         result = subprocess.run(
-            [str(build_script)],
-            cwd=str(repo_root),
-            env={**os.environ, "SREGYM_AGENT_IMAGE": image},
+            ["bash", str(BUILD_SCRIPT)],
+            cwd=str(REPO_ROOT),
+            env={**os.environ, "SREGYM_AGENT_IMAGE": image, "SREGYM_AGENT_CONTEXT_HASH": self.context_hash},
         )
         if result.returncode != 0:
             raise RuntimeError(f"Failed to build container image '{image}'. Check the build output above for errors.")

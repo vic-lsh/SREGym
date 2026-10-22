@@ -187,6 +187,8 @@ uv run main.py --agent codex --parallel 4 --num-problems 20 --seed 17 \
 
 Agents always run in isolated Docker containers, preventing access to SREGym internals like problem definitions and grading logic. The image is built automatically on first run.
 
+The image is tagged `sregym-agent-slim:<hash>`, where the hash covers its build context (the agent drivers in `docker/agents/build.sh`'s allowlist), so a checkout with different agent code builds its own image instead of reusing or replacing another's. Before the first agent runs, SREGym checks the image with `docker/agents/check_image.sh` (no benchmark internals in the image; every containerized driver imports) and refuses to run agents from an image that fails. Images for old hashes are not removed automatically; prune them with `docker image ls sregym-agent-slim`.
+
 Use `--force-build` to rebuild the container image after updating dependencies or agent code:
 
 ```bash

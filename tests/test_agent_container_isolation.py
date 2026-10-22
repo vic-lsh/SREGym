@@ -40,6 +40,7 @@ def _docker_command(tmp_path: Path, monkeypatch) -> tuple[list[str], Path, Path]
     proxy = _kubeconfig(tmp_path / "proxy" / "agent-kubeconfig", "proxy")
 
     runner = ContainerRunner(ContainerConfig(kubeconfig_path=proxy, logs_path=tmp_path / "logs"))
+    runner._image_id = "sha256:checked"
     try:
         cmd = runner.build_docker_command(ExecInput(command="true", label="t"))
     finally:
