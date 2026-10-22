@@ -54,9 +54,9 @@ def infer_app(problem_id: str, apps: Iterable[str] = DEFAULT_APPS) -> str | None
     when exactly one known app name appears as a `_`-delimited run in the value suffix (variant
     specs put `app_name` among the values). Hand-registered ids do not encode an app: None.
     """
-    parsed = parse_plan_id(problem_id)
-    if parsed is not None:
-        return parsed[0]
+    ref = parse_plan_id(problem_id)
+    if ref is not None:
+        return ref.app
     _, sep, suffix = problem_id.partition("__v_")
     if not sep:
         return None

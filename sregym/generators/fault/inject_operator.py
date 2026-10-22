@@ -3,6 +3,7 @@ import time
 import yaml
 
 from sregym.generators.fault.base import FaultInjector
+from sregym.paths import fault_scratch_path
 from sregym.service.kubectl import KubeCtl
 
 
@@ -12,8 +13,11 @@ class K8SOperatorFaultInjector(FaultInjector):
         self.kubectl = KubeCtl()
         self.kubectl.create_namespace_if_not_exist(namespace)
 
+    def _cr_yaml_path(self, cr_name: str) -> str:
+        return fault_scratch_path(f"{self.namespace}_{cr_name}.yaml")
+
     def _apply_yaml(self, cr_name: str, cr_yaml: dict):
-        yaml_path = f"/tmp/{cr_name}.yaml"
+        yaml_path = self._cr_yaml_path(cr_name)
         with open(yaml_path, "w") as file:
             yaml.dump(cr_yaml, file)
 
@@ -23,7 +27,7 @@ class K8SOperatorFaultInjector(FaultInjector):
         print(f"Injected {cr_name}: {result}")
 
     def _delete_yaml(self, cr_name: str):
-        yaml_path = f"/tmp/{cr_name}.yaml"
+        yaml_path = self._cr_yaml_path(cr_name)
         command = f"kubectl delete -f {yaml_path} -n {self.namespace}"
         result = self.kubectl.exec_command(command)
         print(f"Recovered from misconfiguration {cr_name}: {result}")
@@ -257,7 +261,7 @@ class K8SOperatorFaultInjector(FaultInjector):
         pd_labels = "app.kubernetes.io/instance=basic,app.kubernetes.io/component=pd"
         print("[RECOVER] Deleting bogus TidbCluster (foreground cascade)...")
         result = self.kubectl.exec_command(
-            f"kubectl delete -f /tmp/non-existent-storage-fault.yaml -n {self.namespace} "
+            f"kubectl delete -f {self._cr_yaml_path('non-existent-storage-fault')} -n {self.namespace} "
             f"--ignore-not-found=true --cascade=foreground"
         )
         print(f"[RECOVER] CR delete: {result}")
@@ -301,7 +305,7 @@ class K8SOperatorFaultInjector(FaultInjector):
         }
 
         # 3. Apply the fault
-        yaml_path = f"/tmp/{cr_name}.yaml"
+        yaml_path = self._cr_yaml_path(cr_name)
         with open(yaml_path, "w") as file:
             yaml.dump(pod_yaml, file)
 
@@ -330,7 +334,7 @@ class K8SOperatorFaultInjector(FaultInjector):
         }
 
         # 3. Recover the fault
-        yaml_path = f"/tmp/{cr_name}.yaml"
+        yaml_path = self._cr_yaml_path(cr_name)
         with open(yaml_path, "w") as file:
             yaml.dump(pod_yaml, file)
 

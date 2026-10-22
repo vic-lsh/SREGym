@@ -16,6 +16,10 @@
 Pure module: standard library only. A plan is identified by (app, n, seed); the same
 triple and catalog always produce the same draws, so a problem id such as
 `mf__hotel_reservation__n5__s1234__v_` names one reproducible composite.
+
+An optional take-K suffix, `mf__<app>__n<N>__s<seed>__k<K>__v_`, keeps K of that N-fault plan's
+draws: the first K of a fixed shuffle seeded from (app, N, seed). The K-subsets of one base plan
+are nested (K=1 within K=2 within ... within K=N), so faults can be matched across problems.
 """
 
 from __future__ import annotations
@@ -37,7 +41,10 @@ PLAN_ID_PREFIX = "mf__"
 _RESTARTS = 20
 _ATTEMPTS_PER_FAULT = 50
 
-_PLAN_ID_RE = re.compile(r"^mf__(?P<app>[a-z0-9]+(?:_[a-z0-9]+)*)__n(?P<n>[1-9][0-9]*)__s(?P<seed>0|[1-9][0-9]*)__v_$")
+_PLAN_ID_RE = re.compile(
+    r"^mf__(?P<app>[a-z0-9]+(?:_[a-z0-9]+)*)__n(?P<n>[1-9][0-9]*)__s(?P<seed>0|[1-9][0-9]*)"
+    r"(?:__k(?P<take>[1-9][0-9]*))?__v_$"
+)
 
 
 class PlanError(ValueError):
@@ -45,34 +52,97 @@ class PlanError(ValueError):
 
 
 @dataclass(frozen=True)
+class PlanRef:
+    """What a multi-fault id names: the N-fault plan for (app, n, seed), or its take-K subset."""
+
+    app: str
+    n: int
+    seed: int
+    take: int | None = None
+
+
+@dataclass(frozen=True)
 class CompositionPlan:
-    """A conflict-free set of fault draws, ordered by injection tier then draw order."""
+    """A conflict-free set of fault draws, ordered by injection tier then base-plan order.
+
+    `n` is the base plan's fault count. `take` is None for a whole plan, else K, and then
+    `draws` holds K of the base plan's draws. `base_index[i]` is the position of `draws[i]` in
+    the base plan's draws (0..n-1); for a whole plan it is 0..n-1 in order.
+    """
 
     app: str
     n: int
     seed: int
     draws: tuple[FaultDraw, ...]
+    take: int | None = None
+    base_index: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.base_index:
+            object.__setattr__(self, "base_index", tuple(range(len(self.draws))))
+        if len(self.base_index) != len(self.draws):
+            raise ValueError(f"base_index has {len(self.base_index)} entries for {len(self.draws)} draws")
 
 
-def plan_id(app: str, n: int, seed: int) -> str:
-    """Return the problem id for a plan; `parse_plan_id` inverts it."""
-    pid = f"{PLAN_ID_PREFIX}{app}__n{n}__s{seed}__v_"
-    if parse_plan_id(pid) != (app, n, seed):
-        raise ValueError(f"cannot form a multi-fault plan id from app={app!r}, n={n!r}, seed={seed!r}")
+def plan_id(app: str, n: int, seed: int, take: int | None = None) -> str:
+    """Return the problem id for a plan (or its take-K subset); `parse_plan_id` inverts it."""
+    suffix = "" if take is None else f"__k{take}"
+    pid = f"{PLAN_ID_PREFIX}{app}__n{n}__s{seed}{suffix}__v_"
+    if parse_plan_id(pid) != PlanRef(app, n, seed, take):
+        raise ValueError(f"cannot form a multi-fault plan id from app={app!r}, n={n!r}, seed={seed!r}, take={take!r}")
     return pid
 
 
-def parse_plan_id(problem_id: str) -> tuple[str, int, int] | None:
-    """Return (app, n, seed) for a well-formed multi-fault id, else None."""
+def parse_plan_id(problem_id: str) -> PlanRef | None:
+    """Return the PlanRef for a well-formed multi-fault id, else None (also when K > N)."""
     match = _PLAN_ID_RE.match(problem_id)
     if match is None:
         return None
-    return match["app"], int(match["n"]), int(match["seed"])
+    n = int(match["n"])
+    take = None if match["take"] is None else int(match["take"])
+    if take is not None and take > n:
+        return None
+    return PlanRef(match["app"], n, int(match["seed"]), take)
+
+
+def _seeded_rng(text: str) -> random.Random:
+    # sha256, never hash(): Python's str hash is salted per process.
+    digest = hashlib.sha256(text.encode()).digest()
+    return random.Random(int.from_bytes(digest[:8], "big"))
 
 
 def _plan_rng(app: str, n: int, seed: int) -> random.Random:
-    digest = hashlib.sha256(f"{app}|{n}|{seed}".encode()).digest()
-    return random.Random(int.from_bytes(digest[:8], "big"))
+    return _seeded_rng(f"{app}|{n}|{seed}")
+
+
+def take_plan(plan: CompositionPlan, k: int) -> CompositionPlan:
+    """Keep K of a whole plan's draws: the first K of a shuffle seeded from (app, n, seed).
+
+    Nested: take_plan(plan, j) draws are a subset of take_plan(plan, k) draws for j <= k, and
+    K = n keeps every draw. Kept draws stay in base-plan order, which is tier order. Raises
+    PlanError unless 1 <= k <= plan.n, or if `plan` is itself a subset.
+    """
+    if plan.take is not None:
+        raise PlanError(f"plan is already a take-{plan.take} subset")
+    if not 1 <= k <= plan.n:
+        raise PlanError(f"take K must be in 1..{plan.n}, got {k}")
+    order = list(range(plan.n))
+    _seeded_rng(f"{plan.app}|{plan.n}|{plan.seed}|nest").shuffle(order)
+    kept = tuple(sorted(order[:k]))
+    return CompositionPlan(
+        app=plan.app,
+        n=plan.n,
+        seed=plan.seed,
+        draws=tuple(plan.draws[i] for i in kept),
+        take=k,
+        base_index=kept,
+    )
+
+
+def plan_for(ref: PlanRef, entries: Sequence[CatalogEntry]) -> CompositionPlan:
+    """Draw the plan a PlanRef names: `draw_plan`, then `take_plan` when it has a take-K."""
+    plan = draw_plan(ref.app, ref.n, ref.seed, entries)
+    return plan if ref.take is None else take_plan(plan, ref.take)
 
 
 def draw_plan(app: str, n: int, seed: int, entries: Sequence[CatalogEntry]) -> CompositionPlan:

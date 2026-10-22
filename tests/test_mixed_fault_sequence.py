@@ -22,7 +22,7 @@ def test_weighted_sequence_is_reproducible_and_contains_one_and_many_faults():
     assert len(first) == 12
     assert any(task.problem_id == "missing_service_hotel_reservation" for task in first)
     assert any(parse_plan_id(task.problem_id) is not None for task in first)
-    assert {parse_plan_id(task.problem_id)[1] for task in first if parse_plan_id(task.problem_id)} <= {2, 3}
+    assert {parse_plan_id(task.problem_id).n for task in first if parse_plan_id(task.problem_id)} <= {2, 3}
 
 
 def test_fault_count_weights_require_positive_counts_and_weights():

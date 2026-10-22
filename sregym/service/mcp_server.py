@@ -11,14 +11,27 @@ from sregym.service.kubectl import KubeCtl
 
 logger = logging.getLogger("all.sregym.mcp_server")
 
+# Port of the mcp-server Service inside the cluster (mcp_server/k8s/service.yaml).
+SERVICE_PORT = 9954
+# Local port-forward port of a single run; parallel workers get MCP_SERVER_PORT=9954+id.
+DEFAULT_MCP_PORT = 9954
+
 
 class MCPServer:
-    def __init__(self):
+    """Deploys the in-cluster MCP server and owns one local port-forward to it.
+
+    The port-forward listens on ``port`` (one per SREGym run or parallel worker on a host).
+    Stale-listener cleanup only ever targets processes listening on that port, never other
+    workers'.
+    """
+
+    def __init__(self, port: int = DEFAULT_MCP_PORT, *, kubectl=None, run=subprocess.run):
         self.namespace = "sregym"
         self.service_name = "mcp-server"
-        self.port = 9954
+        self.port = port
         self.port_forward_process = None
-        self.kubectl = KubeCtl()
+        self.kubectl = kubectl if kubectl is not None else KubeCtl()
+        self._run = run
 
     def _is_running(self) -> bool:
         """Check if the MCP server deployment already exists and is ready."""
@@ -81,16 +94,21 @@ class MCPServer:
 
         # Also kill orphaned port-forward processes from previous runs that we
         # don't hold a handle to (e.g. the process survived a previous crash).
-        if self.is_port_in_use(self.port):
-            try:
-                result = subprocess.run(f"lsof -ti tcp:{self.port}", shell=True, capture_output=True, text=True)
-                for pid in result.stdout.strip().split():
-                    if pid.isdigit():
-                        logger.info(f"Killing orphaned process {pid} on port {self.port}")
-                        subprocess.run(f"kill {pid}", shell=True)
+        # Only listeners on our own port: a bare `lsof -i tcp:PORT` also matches
+        # clients connected to it (agents, this process), and other ports belong
+        # to other runs on the host.
+        try:
+            result = self._run(
+                ["lsof", "-t", f"-iTCP:{self.port}", "-sTCP:LISTEN"], capture_output=True, text=True, timeout=10
+            )
+            pids = [pid for pid in result.stdout.split() if pid.isdigit()]
+            for pid in pids:
+                logger.info(f"Killing orphaned process {pid} listening on port {self.port}")
+                self._run(["kill", pid], capture_output=True, text=True, timeout=10)
+            if pids:
                 time.sleep(1)
-            except Exception as e:
-                logger.warning(f"Failed to kill stale port-forward: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to kill stale port-forward: {e}")
 
     def start_port_forward(self):
         """Starts port-forwarding to access the MCP server."""
@@ -104,9 +122,7 @@ class MCPServer:
                 time.sleep(3)
                 continue
 
-            command = (
-                f"kubectl port-forward svc/{self.service_name} {self.port}:9954 -n {self.namespace} --address 0.0.0.0"
-            )
+            command = f"kubectl port-forward svc/{self.service_name} {self.port}:{SERVICE_PORT} -n {self.namespace} --address 0.0.0.0"
             self.port_forward_process = subprocess.Popen(
                 command,
                 shell=True,

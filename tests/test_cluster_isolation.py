@@ -87,10 +87,23 @@ def test_fault_scratch_paths_are_per_cluster(monkeypatch, tmp_path) -> None:
     assert (tmp_path / "sregym-luna-w2").is_dir()
 
 
-def test_fault_injectors_keep_no_fixed_tmp_paths() -> None:
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "generators/fault/inject_virtual.py",
+        "generators/fault/inject_operator.py",
+        "generators/noise/impl/stress_injector.py",
+        "conductor/problems/missing_configmap.py",
+        "conductor/problems/hpa_missing_effective_cpu_request.py",
+        "conductor/problems/admission_webhook_outage.py",
+    ],
+)
+def test_fault_injectors_keep_no_fixed_tmp_paths(relative) -> None:
     from pathlib import Path
 
-    source = (Path(paths.BASE_DIR) / "generators" / "fault" / "inject_virtual.py").read_text()
+    source = (Path(paths.BASE_DIR) / relative).read_text()
     assert 'f"/tmp/' not in source
+    if relative != "generators/fault/inject_virtual.py":  # still has one Path("/tmp") backup (separate owner)
+        assert 'Path("/tmp")' not in source
     # A recovery that reads a fixed /tmp backup never finds the per-cluster one its injection wrote.
     assert "/tmp/{" not in source

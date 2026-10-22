@@ -7,6 +7,7 @@ from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.conductor.problems.variant_utils import create_app
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
+from sregym.paths import fault_scratch_path
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.kubectl import KubeCtl
@@ -114,7 +115,7 @@ class MissingConfigMap(Problem):
         raise ValueError(f"No ConfigMap mapping for namespace {self.namespace}")
 
     def _backup_path(self) -> str:
-        return f"/tmp/{self.namespace}_{self.faulty_services[0]}_configmap_backup.json"
+        return fault_scratch_path(f"{self.namespace}_{self.faulty_services[0]}_configmap_backup.json")
 
     @mark_fault_injected
     def inject_fault(self):

@@ -33,6 +33,7 @@ from kubernetes.client.exceptions import ApiException
 from sregym.conductor.oracles.admission_webhook_outage_mitigation import AdmissionWebhookOutageMitigationOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
+from sregym.paths import fault_scratch_path
 from sregym.service.apps.astronomy_shop import AstronomyShop
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.apps.social_network import SocialNetwork
@@ -129,7 +130,7 @@ class AdmissionWebhookOutage(Problem):
 
     def _webhook_state_path(self) -> Path:
         kind = getattr(self, "webhook_kind", "validating")
-        return Path("/tmp") / f"webhook-state-{self.namespace}-{kind}-{self.WEBHOOK_NAME}.json"
+        return Path(fault_scratch_path(f"webhook-state-{self.namespace}-{kind}-{self.WEBHOOK_NAME}.json"))
 
     @staticmethod
     def _strip_runtime_metadata(configuration: dict) -> dict:

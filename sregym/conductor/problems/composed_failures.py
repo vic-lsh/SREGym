@@ -7,6 +7,7 @@ instead shares one application, so ``problem.app.name`` stays ``Hotel Reservatio
 * Mitigation: ``CompoundedOracle`` over the sub-problems' own mitigation oracles, so ``success`` is the
   AND of all of them and ``oracles`` lists each fault's result.
 * Diagnosis: one judge call per fault against that fault's root cause, reported under ``per_fault``;
+  the other faults go to the judge as ``other_faults`` so naming them is not over-attribution.
   ``success`` requires every fault, ``accuracy`` is the fraction of faults found.
 """
 
@@ -26,11 +27,12 @@ MIN_FAULTS = 2
 MAX_FAULTS = 5
 SUPPORTED_APP_NAME = "Hotel Reservation"
 
-JudgeFactory = Callable[[Problem, str], Oracle]
+# (composite, the graded fault's root cause, the other faults' root causes) -> diagnosis oracle
+JudgeFactory = Callable[[Problem, str, Sequence[str]], Oracle]
 
 
-def _llm_judge(problem: Problem, expected: str) -> Oracle:
-    return LLMAsAJudgeOracle(problem=problem, expected=expected)
+def _llm_judge(problem: Problem, expected: str, other_faults: Sequence[str]) -> Oracle:
+    return LLMAsAJudgeOracle(problem=problem, expected=expected, other_faults=other_faults)
 
 
 def target_deployments(problem: Any) -> list[str]:
@@ -122,16 +124,10 @@ class ComposedFailures(Problem):
 
         judges = []
         for index, sub in enumerate(problems):
-            others = [
+            others = tuple(
                 (other.root_cause or "").strip() for other_index, other in enumerate(problems) if other_index != index
-            ]
-            expected = (
-                f"{(sub.root_cause or '').strip()}\n\n"
-                "Context: this incident has other concurrent, independent faults, listed below. A diagnosis that "
-                "also names them is correct; do not penalize it for mentioning them. Grade only whether the fault "
-                "above is correctly identified.\n" + "\n".join(f"- {text}" for text in others)
             )
-            judges.append(judge_factory(self, expected))
+            judges.append(judge_factory(self, (sub.root_cause or "").strip(), others))
         self.diagnosis_oracle = PerFaultDiagnosisOracle(self, [_label(sub) for sub in problems], judges)
 
         mitigation_oracles = [sub.mitigation_oracle for sub in problems if sub.mitigation_oracle is not None]

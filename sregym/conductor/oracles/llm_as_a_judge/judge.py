@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
 
@@ -219,7 +220,10 @@ fences, no preamble, no commentary.
         temperature: float = 0.0,
         max_tokens: int = 4096,
         checklist_path: str | None = None,
+        backend=None,
     ):
+        """``backend`` (anything with ``inference(messages) -> response.content``) defaults to
+        ``get_llm_backend_for_judge()``, created on first use."""
         self.provider = provider
         self.model_name = model_name or ""
         self.url = url
@@ -227,7 +231,7 @@ fences, no preamble, no commentary.
         self.temperature = temperature
         self.max_tokens = max_tokens
 
-        self._backend = None
+        self._backend = backend
 
         # Load checklist config
         if checklist_path is None:
@@ -291,12 +295,27 @@ fences, no preamble, no commentary.
         report = self.judge_detailed(solution, expectation)
         return report.verdict, report.reasoning
 
+    def prompt(
+        self,
+        solution: str,
+        expectation: str,
+        other_faults: Sequence[str] = (),
+    ) -> tuple[str, str]:
+        """The (system, user) prompt ``judge_detailed`` sends, without calling a model."""
+        return self._system_prompt, self._build_user_message(solution, expectation, other_faults)
+
     def judge_detailed(
         self,
         solution: str,
         expectation: str,
+        other_faults: Sequence[str] = (),
     ):
         """Evaluate solution against expectation using the full checklist.
+
+        ``other_faults``: root causes of the other faults injected alongside this one (a
+        multi-fault composite). When given, the judge scores only whether ``expectation`` is
+        localized and characterized somewhere in ``solution``, and naming those other faults does
+        not count as over-attribution. Empty (the default) leaves the single-fault prompt unchanged.
 
         Returns a ``JudgmentReport`` with per-dimension scores.
         """
@@ -322,7 +341,7 @@ fences, no preamble, no commentary.
             return self._empty_report()
 
         # Build and send prompt
-        user_msg = self._build_user_message(solution, expectation)
+        _, user_msg = self.prompt(solution, expectation, other_faults)
         raw_results = self._call_llm_with_retry(user_msg)
 
         # Build question lookup from config
@@ -391,6 +410,7 @@ fences, no preamble, no commentary.
         self,
         solution: str,
         expectation: str,
+        other_faults: Sequence[str] = (),
     ) -> str:
         lines: list[str] = []
 
@@ -398,6 +418,10 @@ fences, no preamble, no commentary.
         lines.append("## Ground-Truth Root Cause")
         lines.append(expectation if expectation else "(No fault - system is operating normally)")
         lines.append("")
+
+        # ---- Section 1b (multi-fault only): the other injected faults ----
+        if other_faults:
+            lines.extend(self._other_faults_section(other_faults))
 
         # ---- Section 2: Agent diagnosis ----
         lines.append("## Agent Diagnosis")
@@ -430,6 +454,25 @@ fences, no preamble, no commentary.
             )
         lines.append("]")
         return "\n".join(lines)
+
+    @staticmethod
+    def _other_faults_section(other_faults: Sequence[str]) -> list[str]:
+        lines = [
+            "## Other Injected Faults (not under evaluation)",
+            f"This system has {len(other_faults) + 1} independent injected faults: the ground-truth "
+            f"root cause above and the {len(other_faults)} listed below. The agent was asked to "
+            "diagnose all of them in one submission, so the diagnosis is expected to describe "
+            "several faults.",
+            "Evaluate ONLY whether the ground-truth root cause above is correctly localized and "
+            "characterized somewhere in the diagnosis. Naming, blaming or describing the components "
+            "of the faults listed below is correct, not over-attribution: it must NOT count against "
+            "any question (in particular D1-Q3 and D3-Q1). Components or causes that match neither "
+            "the ground-truth root cause nor any fault listed below still count as over-attribution.",
+        ]
+        for idx, root_cause in enumerate(other_faults, start=1):
+            lines.append(f"- Other fault {idx}: {root_cause.strip()}")
+        lines.append("")
+        return lines
 
     def _call_llm_with_retry(self, user_msg: str) -> list[dict]:
         """Call the LLM and parse the response, retrying up to once per failure mode."""

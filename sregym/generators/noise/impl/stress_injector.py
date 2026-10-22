@@ -2,6 +2,7 @@ import contextlib
 
 import yaml
 
+from sregym.paths import fault_scratch_path
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
 
@@ -103,7 +104,7 @@ class ChaosInjector:
 
     def create_chaos_experiment(self, experiment_yaml: dict, experiment_name: str):
         try:
-            chaos_yaml_path = f"/tmp/{experiment_name}.yaml"
+            chaos_yaml_path = fault_scratch_path(f"{self.namespace}_{experiment_name}.yaml")
             with open(chaos_yaml_path, "w") as file:
                 yaml.dump(experiment_yaml, file)
             command = f"kubectl apply -f {chaos_yaml_path}"
@@ -116,12 +117,12 @@ class ChaosInjector:
 
     def delete_chaos_experiment(self, experiment_name: str):
         try:
-            chaos_yaml_path = f"/tmp/{experiment_name}.yaml"
+            chaos_yaml_path = fault_scratch_path(f"{self.namespace}_{experiment_name}.yaml")
             command = f"kubectl delete -f {chaos_yaml_path}"
             result = self.kubectl.exec_command(command)
             print(f"Cleaned up chaos experiment: {result}")
         except Exception as e:
-            chaos_yaml_path = f"/tmp/{experiment_name}.yaml"
+            chaos_yaml_path = fault_scratch_path(f"{self.namespace}_{experiment_name}.yaml")
             command = f"kubectl delete -f {chaos_yaml_path} --force --grace-period=0"
             result = self.kubectl.exec_command(command)
             raise RuntimeError(f"Error cleaning up chaos experiment: {e}") from e

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -30,9 +31,15 @@ class LLMAsAJudgeOracle(Oracle):
         max_tokens: int = 4096,
         num_rounds: int | None = None,
         voting_temperature: float | None = None,
+        other_faults: Sequence[str] = (),
+        backend=None,
     ):
+        """``other_faults``: root causes of the faults injected alongside this one (see
+        ``DiagnosisJudge.judge_detailed``); empty for a single-fault problem. Every voting round
+        sees them. ``backend`` defaults to the configured judge backend."""
         super().__init__(problem)
         self.expected = expected or ""
+        self.other_faults = tuple(other_faults)
         self.num_rounds = num_rounds if num_rounds is not None else int(os.getenv("JUDGE_NUM_ROUNDS", "3"))
         if self.num_rounds < 1:
             raise ValueError("num_rounds must be at least 1")
@@ -48,6 +55,7 @@ class LLMAsAJudgeOracle(Oracle):
             api_key=api_key,
             temperature=temperature,
             max_tokens=max_tokens,
+            backend=backend,
         )
 
     @staticmethod
@@ -87,7 +95,9 @@ class LLMAsAJudgeOracle(Oracle):
 
     def _run_single_round(self, round_index: int, candidate: str) -> dict[str, Any]:
         try:
-            report = self.judge.judge_detailed(solution=candidate, expectation=self.expected)
+            report = self.judge.judge_detailed(
+                solution=candidate, expectation=self.expected, other_faults=self.other_faults
+            )
             return self._report_details(report, round_index)
         except Exception as exc:
             return {"round": round_index, "error": str(exc)}

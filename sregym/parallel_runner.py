@@ -153,7 +153,7 @@ def build_static_plan(args: Any) -> list[RunTask]:
         apps = getattr(args, "composition_apps", None)
         if weights_spec or schedule != "list" or apps:
             from sregym.conductor.problems.composition.catalog import SERVICES, entries_for
-            from sregym.conductor.problems.composition.generator import draw_plan, parse_plan_id, parse_weights
+            from sregym.conductor.problems.composition.generator import parse_plan_id, parse_weights, plan_for
             from sregym.conductor.problems.composition.schedule import (
                 DEFAULT_APPS,
                 filter_pool_by_apps,
@@ -174,10 +174,9 @@ def build_static_plan(args: Any) -> list[RunTask]:
             stream = single_fault_stream(pool, schedule, args.sequence_seed) if 1 in weights else iter(())
             selected = plan_sequence(args.sequence_len, weights, app_names, args.sequence_seed, stream)
             for problem_id in selected:
-                parsed = parse_plan_id(problem_id)
-                if parsed is not None:
-                    app, count, seed = parsed
-                    draw_plan(app, count, seed, entries_for(app))
+                ref = parse_plan_id(problem_id)
+                if ref is not None:
+                    plan_for(ref, entries_for(ref.app))
         else:
             if not selected:
                 raise ValueError("Cannot generate a sequence from an empty problem selection")

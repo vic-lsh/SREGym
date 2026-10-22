@@ -43,10 +43,10 @@ class _Sub:
 
 
 def _judge(verdicts):
-    """Judge factory: grades the expected text that mentions a component as listed in verdicts."""
+    """Judge factory: grades the expected root cause that mentions a component as listed in verdicts."""
 
-    def factory(problem, expected):
-        ok = any(component in expected.split("\n\n")[0] and found for component, found in verdicts.items())
+    def factory(problem, expected, other_faults):
+        ok = any(component in expected and found for component, found in verdicts.items())
         return _Oracle(problem, ok)
 
     return factory
@@ -126,17 +126,19 @@ def test_diagnosis_succeeds_only_when_every_fault_found():
     assert result["accuracy"] == 100.0
 
 
-def test_expected_text_names_other_faults_as_context():
+def test_each_judge_gets_its_own_root_cause_and_the_others_as_other_faults():
     seen = []
 
-    def factory(problem, expected):
-        seen.append(expected)
+    def factory(problem, expected, other_faults):
+        seen.append((expected, tuple(other_faults)))
         return _Oracle(problem, True)
 
-    ComposedFailures([_Sub("geo"), _Sub("recommendation")], judge_factory=factory)
-    assert seen[0].startswith("root cause of geo")
-    assert "root cause of recommendation" in seen[0]
-    assert "do not penalize" in seen[0].lower()
+    ComposedFailures([_Sub("geo"), _Sub("recommendation"), _Sub("user")], judge_factory=factory)
+    assert seen == [
+        ("root cause of geo", ("root cause of recommendation", "root cause of user")),
+        ("root cause of recommendation", ("root cause of geo", "root cause of user")),
+        ("root cause of user", ("root cause of geo", "root cause of recommendation")),
+    ]
 
 
 def test_inject_in_order_and_recover_in_reverse():

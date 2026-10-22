@@ -88,7 +88,7 @@ class Conductor:
         self.jaeger = Jaeger()
         self.otel_collector = OtelCollector()
         self.loki = Loki()
-        self.mcp_server = MCPServer()
+        self.mcp_server = MCPServer(port=int(os.environ.get("MCP_SERVER_PORT", "9954")))
         self.apps = AppRegistry()
         self.agent_name = None
 

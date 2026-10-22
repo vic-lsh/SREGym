@@ -15,6 +15,7 @@ import yaml
 from sregym.conductor.oracles.hpa_control_plane_mitigation import HPAControlPlaneMitigationOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
+from sregym.paths import fault_scratch_path
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
@@ -228,7 +229,7 @@ class HPAMissingEffectiveCPURequest(Problem):
 
         self._annotate_deployment_for_hpa_rollout(deployment)
 
-        faulty_path = f"/tmp/{service}_hpa_missing_effective_cpu_request_faulty.yaml"
+        faulty_path = fault_scratch_path(f"{self.namespace}_{service}_hpa_missing_effective_cpu_request_faulty.yaml")
         with open(faulty_path, "w") as file:
             yaml.safe_dump(deployment, file)
 
@@ -276,7 +277,7 @@ class HPAMissingEffectiveCPURequest(Problem):
             },
         }
 
-        hpa_path = f"/tmp/{hpa_name}.yaml"
+        hpa_path = fault_scratch_path(f"{self.namespace}_{hpa_name}.yaml")
         with open(hpa_path, "w") as file:
             yaml.safe_dump(hpa, file)
 
@@ -413,7 +414,7 @@ class HPAMissingEffectiveCPURequest(Problem):
         annotations[self.ROLLOUT_RESTART_ANNOTATION] = restart_stamp
 
     def _hpa_snapshot_path(self, service: str) -> str:
-        return f"/tmp/{service}_{self.HPA_SNAPSHOT_SUFFIX}.yaml"
+        return fault_scratch_path(f"{self.namespace}_{service}_{self.HPA_SNAPSHOT_SUFFIX}.yaml")
 
     @staticmethod
     def _parse_json_or_raise(raw: str, resource_name: str) -> dict:

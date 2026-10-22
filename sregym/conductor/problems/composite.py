@@ -92,9 +92,11 @@ class CompositeSpec:
     def __post_init__(self) -> None:
         from sregym.conductor.problems.composition.generator import parse_plan_id
 
-        if not self.problem_id.startswith(COMPOSITE_PREFIX) and parse_plan_id(self.problem_id) is None:
+        generated = parse_plan_id(self.problem_id) is not None
+        if not self.problem_id.startswith(COMPOSITE_PREFIX) and not generated:
             raise ValueError(f"composite ids start with {COMPOSITE_PREFIX!r} or have a valid multi-fault plan ID")
-        if len(self.components) < 2:
+        # A generated plan may hold one fault (N=1, or a take-1 subset of a larger plan).
+        if len(self.components) < (1 if generated else 2):
             raise ValueError(f"{self.problem_id}: a composite has at least two components")
         if not any(component.role == "fault" for component in self.components):
             raise ValueError(f"{self.problem_id}: a composite has at least one fault component")

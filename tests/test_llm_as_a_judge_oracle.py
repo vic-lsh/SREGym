@@ -26,7 +26,7 @@ def _report(success: bool):
 
 
 def _judge_stub(approved_for: set[str]):
-    def _stub(self, solution: str, expectation: str):
+    def _stub(self, solution: str, expectation: str, other_faults=()):
         return _report(solution in approved_for)
 
     return _stub
@@ -51,7 +51,7 @@ class TestEvaluateCandidateList:
     def test_correct_candidate_succeeds_and_short_circuits(self, oracle):
         calls: list[str] = []
 
-        def _stub(self, solution, expectation):
+        def _stub(self, solution, expectation, other_faults=()):
             calls.append(solution)
             return _report(solution == "correct")
 
@@ -83,7 +83,7 @@ def test_majority_vote_uses_upstream_detailed_reports():
     oracle = LLMAsAJudgeOracle(problem=None, expected="GROUND_TRUTH", num_rounds=3)
     verdicts = iter([True, False, True])
 
-    def _stub(self, solution, expectation):
+    def _stub(self, solution, expectation, other_faults=()):
         return _report(next(verdicts))
 
     with (
