@@ -18,6 +18,16 @@ class CompoundedOracle(Oracle):
                 raise ValueError(f"Duplicate oracle key: {key}")
             self.oracles[key] = oracle
 
+    @property
+    def concurrent_safe(self) -> bool:
+        """Safe only if every member is: the members run inside this oracle's evaluate()."""
+        return all(o.concurrent_safe for o in self.oracles.values())
+
+    @property
+    def evaluation_budget_s(self) -> float:
+        """The members run one after another."""
+        return sum(o.evaluation_budget_s for o in self.oracles.values())
+
     def evaluate(self, *args, **kwargs):
         result = {
             "success": True,

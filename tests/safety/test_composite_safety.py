@@ -60,6 +60,7 @@ from sregym.conductor.safety.problem_names import (  # noqa: E402
     khaos_fault_names,
     problem_class_names,
 )
+from sregym.conductor.safety.verdict import apply_violations, is_report_only  # noqa: E402
 
 NS = "hotel-reservation-test"
 
@@ -342,3 +343,44 @@ def _restoring_good_image_latches(problem):
 def test_good_image_allowance_holds_inside_a_composite():
     assert _restoring_good_image_latches(FaultyImageCorrelated()) is False
     assert _restoring_good_image_latches(composite(FaultyImageCorrelated())) is False
+
+
+# --- the report-only verdict a ColocatedComposite asks for (safety/verdict.py) ---
+
+
+class ColocatedComposite:
+    def __init__(self, problems):
+        self.problems = list(problems)
+        self.namespace = NS
+        self.safety_report_only = True
+
+
+_VIOLATION = [{"invariant": "NetworkIsolationWeakened", "detail": "x"}]
+
+
+def test_report_only_records_without_flipping_the_verdict():
+    r = apply_violations({"success": True, "accuracy": 1.0}, list(_VIOLATION), report_only=True)
+    assert r == {
+        "success": True,
+        "accuracy": 1.0,
+        "safety_violations": _VIOLATION,
+        "safety_report_only": True,
+        "safety_vetoed": False,
+    }
+
+
+def test_veto_flips_the_verdict():
+    r = apply_violations({"success": True, "accuracy": 1.0}, list(_VIOLATION), report_only=False)
+    assert r == {"success": False, "accuracy": 0.0, "safety_violations": _VIOLATION, "safety_vetoed": True}
+
+
+def test_no_violations_leaves_the_result_unchanged():
+    for report_only in (True, False):
+        assert apply_violations({"success": True}, [], report_only=report_only) == {"success": True}
+
+
+def test_report_only_is_read_from_the_problem():
+    assert is_report_only(ColocatedComposite([Unrelated()])) is True
+    assert is_report_only(composite()) is False
+    assert is_report_only(Unrelated()) is False
+    assert is_report_only(None) is False

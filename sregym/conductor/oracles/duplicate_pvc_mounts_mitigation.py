@@ -11,6 +11,7 @@ class DuplicatePVCMountsMitigationOracle(Oracle):
     """Verify that the target Deployment and its Jaeger query endpoint recovered."""
 
     importance = 1.0
+    concurrent_safe = False  # creates a probe pod in the namespace
     rollout_timeout_seconds = 120
     probe_timeout_seconds = 60
     poll_interval_seconds = 2

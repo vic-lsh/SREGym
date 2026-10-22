@@ -8,6 +8,7 @@ from sregym.conductor.oracles.base import Oracle
 
 class RPCRetryStormMitigationOracle(Oracle):
     importance = 1.0
+    concurrent_safe = False  # starts the workload and reads its shared log stream
 
     def analyze_latency_trend(self, csv_file_path, threshold_ratio=2.0):
         try:

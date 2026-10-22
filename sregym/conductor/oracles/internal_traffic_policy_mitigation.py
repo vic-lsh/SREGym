@@ -22,6 +22,7 @@ from sregym.conductor.oracles.base import Oracle
 
 class InternalTrafficPolicyMitigationOracle(Oracle):
     importance = 1.0
+    concurrent_safe = False  # creates connectivity probe pods in the namespace
 
     def __init__(self, problem):
         super().__init__(problem)

@@ -22,40 +22,14 @@ is contacted, and the only kubeconfig loaded is the fake one written here.
 """
 
 import asyncio
-import base64
 import threading
 
 import pytest
-import yaml
 from kubernetes import client
 
 from sregym.conductor.conductor import Conductor, ConductorConfig, SubmissionWhileEvaluating
 
-_PEM = base64.b64encode(b"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n").decode()
-
-
-@pytest.fixture(autouse=True)
-def offline_kubeconfig(tmp_path, monkeypatch):
-    """Conductor construction reads a kubeconfig but never contacts the cluster."""
-    path = tmp_path / ".kube" / "config"
-    path.parent.mkdir()
-    path.write_text(
-        yaml.safe_dump(
-            {
-                "apiVersion": "v1",
-                "kind": "Config",
-                "current-context": "fake",
-                "clusters": [
-                    {"name": "fake", "cluster": {"server": "https://127.0.0.1:1", "certificate-authority-data": _PEM}}
-                ],
-                "users": [{"name": "fake", "user": {"client-certificate-data": _PEM, "client-key-data": _PEM}}],
-                "contexts": [{"name": "fake", "context": {"cluster": "fake", "user": "fake"}}],
-            }
-        )
-    )
-    # Pointed at, not unset: a developer's KUBECONFIG must never be the one loaded.
-    monkeypatch.setenv("KUBECONFIG", str(path))
-    monkeypatch.setenv("HOME", str(tmp_path))
+pytestmark = pytest.mark.usefixtures("offline_kubeconfig")
 
 
 #: Bound on waits for the other thread; a passing run never comes near it.
@@ -105,6 +79,9 @@ class _Problem:
     def recover_fault(self):
         self.events.append("teardown")
         self.recovered += 1
+
+    def injection_failure(self):
+        return None
 
 
 def _conductor_in_diagnosis(

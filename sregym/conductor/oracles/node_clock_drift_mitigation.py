@@ -13,6 +13,7 @@ class NodeClockDriftMitigationOracle(Oracle):
     # Verifying that node clock has been restored to cluster's time (real time)
 
     importance = 1.0
+    concurrent_safe = False  # creates a probe pod
 
     def __init__(self, problem):
         super().__init__(problem)

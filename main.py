@@ -199,6 +199,23 @@ def _artifact_environment(run: RunArtifacts):
             _restore_env_var(name, value)
 
 
+def _results_row(pid: str, attempt: int, results: dict) -> dict:
+    """One CSV row: the problem, the attempt, and the conductor's results flattened one level
+    (a stage's dict becomes ``<Stage>.<key>`` columns)."""
+    row = {
+        "problem_id": pid,
+        "attempt": attempt,
+        "timed_out": False,  # results sets it True on an agent timeout
+    }
+    for stage, outcome in results.items():
+        if isinstance(outcome, dict):
+            for k, v in outcome.items():
+                row[f"{stage}.{k}"] = v
+        else:
+            row[stage] = outcome
+    return row
+
+
 def driver_loop(
     conductor: Conductor,
     problem_selection: Sequence[str] | None = None,
@@ -398,6 +415,24 @@ def driver_loop(
                     progress.advance(task_id, n_attempts - attempt + 1)
                     break  # Skip to next problem
 
+                if result == StartProblemResult.INJECTION_INVALID:
+                    # start_problem already tore down; the row carries infra_error and the
+                    # injection fields, and no agent runs on a fault that is not in place.
+                    # Later attempts would redeploy and inject the same draw again: stop here.
+                    console.log(f"⛔ Fault injection invalid for '{pid}'; no agent run, not graded, no more attempts")
+                    all_results_for_agent.append(_results_row(pid, attempt, conductor.results))
+                    fieldnames = sorted({key for row in all_results_for_agent for key in row})
+                    with open(tmp_path, "w", newline="") as csvfile:
+                        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                        writer.writeheader()
+                        writer.writerows(all_results_for_agent)
+                    if agent_to_run is not None:
+                        final_csv_path = base_dir / agent_to_run / pid / f"{pid}_{agent_to_run}_results.csv"
+                        final_csv_path.parent.mkdir(parents=True, exist_ok=True)
+                        os.replace(tmp_path, final_csv_path)
+                    progress.advance(task_id, n_attempts - attempt + 1)
+                    break
+
                 # If using external harness, fault is injected - exit now
                 if use_external_harness:
                     console.log(f"✅ Fault injected for problem '{pid}'. Exiting for external harness.")
@@ -472,17 +507,7 @@ def driver_loop(
                     LAUNCHER.cleanup_agent(agent_to_run)
                     console.log(f"🧹 Cleaned up agent process for {agent_to_run}")
 
-                snapshot = {
-                    "problem_id": pid,
-                    "attempt": run.attempt,
-                    "timed_out": False,  # conductor.results sets it True on an agent timeout
-                }
-                for stage, outcome in conductor.results.items():
-                    if isinstance(outcome, dict):
-                        for k, v in outcome.items():
-                            snapshot[f"{stage}.{k}"] = v
-                    else:
-                        snapshot[stage] = outcome
+                snapshot = _results_row(pid, run.attempt, conductor.results)
                 # Read from the agent's own logs, so a killed driver is still accounted for.
                 usage = usage_from_logs(run.active_dir)
                 if usage is not None:

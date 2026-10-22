@@ -74,6 +74,7 @@ class CumulativeAdmissionWebhookTimeoutMitigationOracle(Oracle):
     """
 
     importance = 1.0
+    concurrent_safe = False  # creates an admission probe pod in the namespace
 
     def __init__(self, problem):
         super().__init__(problem)

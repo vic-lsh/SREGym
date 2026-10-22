@@ -12,9 +12,22 @@ from sregym.conductor.oracles.rollouts import (
 
 
 class Oracle(ABC):
-    # Set True by a caller that already gave the namespace its settle window;
-    # ``settle_rollouts`` then returns at once instead of every oracle waiting on the same
-    # condition.
+    # Whether ``evaluate()`` may run at the same time as other oracles on the same namespace
+    # (``CompositeMitigationOracle`` runs its sub-oracles concurrently). Set False when
+    # evaluate() changes the namespace (creates or deletes pods, which other oracles' pod-health
+    # walks would see) or uses unsynchronized state shared with other oracles (a workload
+    # manager's log stream). Enforced for the known patterns by
+    # tests/composition/test_oracle_concurrency.py.
+    concurrent_safe: bool = True
+
+    # Upper bound, in seconds, on one evaluate() once the namespace has settled
+    # (``namespace_settled``). A caller running several oracles under one deadline sizes it
+    # from this (``CompositeMitigationOracle``). Oracles that can take longer override it.
+    evaluation_budget_s: float = 240.0
+
+    # Set True by a caller that already gave the namespace its settle window
+    # (``CompositeMitigationOracle`` waits once for all its sub-oracles); ``settle_rollouts``
+    # then returns at once instead of every oracle waiting on the same condition.
     namespace_settled: bool = False
 
     def __init__(self, problem):
@@ -25,9 +38,9 @@ class Oracle(ABC):
     def scope_to_fault(self) -> None:  # noqa: B027
         """Judge only evidence attributable to this oracle's own fault, not the whole namespace.
 
-        Called by ``CompositeFaultProblem`` on every fault component's oracle, where other faults
-        share the namespace. Default: nothing to narrow (the oracle already checks only its own
-        fault).
+        Called by ``CompositeFaultProblem`` and ``ColocatedComposite`` on every fault's oracle,
+        where other faults share the namespace. Default: nothing to narrow (the oracle already
+        checks only its own fault).
         """
 
     def settle_rollouts(

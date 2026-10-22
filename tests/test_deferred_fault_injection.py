@@ -22,6 +22,9 @@ class _Problem:
     def inject_fault(self):
         self.injected += 1
 
+    def injection_failure(self):
+        return None
+
 
 def _conductor(*, defer_fault_injection: bool) -> Conductor:
     conductor = Conductor.__new__(Conductor)
@@ -33,6 +36,7 @@ def _conductor(*, defer_fault_injection: bool) -> Conductor:
     conductor.waiting_for_agent = False
     conductor._evaluating = False
     conductor.fault_injected = False
+    conductor.injection_invalid = False
     conductor.submission_stage = "setup"
     conductor.results = {}
     conductor.execution_start_time = 0.0

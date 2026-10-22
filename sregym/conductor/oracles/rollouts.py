@@ -14,7 +14,8 @@
 """The settle wait that mitigation oracles run before judging a namespace.
 
 One implementation for every oracle (they each carried a copy), so a caller that already
-waited can tell its oracles to skip it (``Oracle.namespace_settled``). Standard library only.
+waited (``CompositeMitigationOracle``) can tell its sub-oracles to skip it
+(``Oracle.namespace_settled``). Standard library only.
 
 A namespace is settled when nothing is still rolling out: every Deployment and StatefulSet
 has observed its latest spec and has every desired replica updated and ready with no old

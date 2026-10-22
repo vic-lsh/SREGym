@@ -10,6 +10,7 @@ class MutatingWebhookResourceLimitsMitigationOracle(Oracle):
     """Verify that a recreated target pod keeps its intended memory resources."""
 
     importance = 1.0
+    concurrent_safe = False  # deletes a pod in the namespace to test admission
     rollout_timeout_seconds = 120
     replacement_timeout_seconds = 120
     stability_seconds = 15

@@ -155,10 +155,16 @@ async def main():
     # 2) Deploy environment & launch HTTP server
     result = await conductor.start_problem()
     while result != StartProblemResult.SUCCESS:
-        agent.console.print(
-            "[yellow]⏭️  This problem requires Khaos but cannot run on emulated clusters. "
-            "Please select another problem.[/yellow]"
-        )
+        if result == StartProblemResult.INJECTION_INVALID:
+            agent.console.print(
+                "[yellow]⏭️  The fault could not be injected (see the conductor log); the problem was torn down. "
+                "Please select another problem.[/yellow]"
+            )
+        else:
+            agent.console.print(
+                "[yellow]⏭️  This problem requires Khaos but cannot run on emulated clusters. "
+                "Please select another problem.[/yellow]"
+            )
         await agent.select_mode()
         result = await conductor.start_problem()
 

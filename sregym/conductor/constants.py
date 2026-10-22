@@ -10,6 +10,9 @@ class StartProblemResult(StrEnum):
     SUCCESS = "success"
     SKIPPED_KHAOS_REQUIRED = "skipped_khaos_required"
     SKIPPED_SOURCE_DEPLOY_UNSUPPORTED = "skipped_source_deploy_unsupported"
+    # The fault(s) could not be put in place: no agent runs, nothing is graded, and the
+    # conductor's results carry infra_error=injection_invalid (Problem.injection_failure).
+    INJECTION_INVALID = "injection_invalid"
 
 
 # Stage in which a deployed problem waits for the agent to request fault injection.

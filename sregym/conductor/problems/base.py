@@ -8,7 +8,7 @@ class Problem(ABC):
     # Upper bound, in seconds, on one stage evaluation (one oracle's evaluate()). The harness
     # waits this long for a pending evaluation before tearing the problem down (main.py).
     # Problems whose grading takes longer derive a larger value (composites, see
-    # serial_evaluation_timeout_s).
+    # serial_evaluation_timeout_s and ColocatedComposite).
     evaluation_timeout_s: float = 300.0
 
     def __init__(self, app, namespace: str | None = None):
@@ -25,6 +25,15 @@ class Problem(ABC):
     def requires_khaos(self) -> bool:
         """Override this method to return True if the problem requires Khaos for fault injection."""
         return False
+
+    def injection_failure(self) -> dict | None:
+        """After ``inject_fault``: None if the fault is in place, else fields saying why not.
+
+        The conductor then runs no agent and grades nothing (``infra_error`` =
+        ``injection_invalid``). A single fault's ``inject_fault`` raises on failure, so the
+        default is None; a composite, which records per-fault errors, overrides it.
+        """
+        return None
 
     @classmethod
     def build_structured_root_cause(

@@ -11,6 +11,7 @@ class ReadinessProbeMitigationOracle(Oracle):
     """Verify that the affected Deployment has current, reachable endpoints."""
 
     importance = 1.0
+    concurrent_safe = False  # creates a probe pod in the namespace
     rollout_timeout_seconds = 120
     connection_timeout_seconds = 3
     check_timeout_seconds = 60

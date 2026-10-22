@@ -11,6 +11,7 @@ def truncate(text: str, length: int = 100) -> str:
 
 class WorkloadOracle(Oracle):
     importance = 3.0
+    concurrent_safe = False  # the canonical workload manager's log stream is shared, unsynchronized state
 
     def __init__(self, problem, wrk_manager=None):
         super().__init__(problem)

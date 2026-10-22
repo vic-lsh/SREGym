@@ -9,6 +9,7 @@ class AdmissionWebhookOutageMitigationOracle(Oracle):
     """Prove that the target Deployment can durably recreate a serving pod."""
 
     importance = 1.0
+    concurrent_safe = False  # deletes a pod in the namespace to test admission
     rollout_timeout_seconds = 120
     replacement_timeout_seconds = 120
     poll_interval_seconds = 2

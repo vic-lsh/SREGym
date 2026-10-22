@@ -94,6 +94,8 @@ def _wait_for_pod_completion(core_v1, pod_name: str, namespace: str, timeout: in
 
 
 class ConntrackMitigationOracle(MitigationOracle):
+    concurrent_safe = False  # creates probe pods in the namespace
+
     def __init__(self, problem, ratio_threshold: float = 0.70, probe_attempts: int = 20, drain_timeout: int = 90):
         super().__init__(problem=problem)
         self.core_v1 = client.CoreV1Api()

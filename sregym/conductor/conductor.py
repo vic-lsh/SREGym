@@ -158,6 +158,7 @@ class Conductor:
         # re-sent copy is not taken as the next stage's. Guarded by _stage_lock.
         self._accepted_submission: str | list[str] | None = None
         self.fault_injected: bool = False
+        self.injection_invalid: bool = False  # set by _inject_fault (Problem.injection_failure)
 
     @property
     def current_problem(self):
@@ -277,6 +278,7 @@ class Conductor:
         self._evaluating = False
         self._accepted_submission = None
         self.fault_injected = False
+        self.injection_invalid = False
 
         if not self.tasklist:
             self.logger.warning("Empty tasklist; no stages configured for this problem.")
@@ -322,14 +324,26 @@ class Conductor:
             )
 
     def _inject_fault(self):
-        """Inject fault and prepare diagnosis checkpoint if available."""
+        """Inject fault and prepare diagnosis checkpoint if available.
+
+        If the problem reports its fault is not in place (``Problem.injection_failure``),
+        records ``infra_error`` = ``injection_invalid`` and the problem's ``Injection`` fields,
+        sets ``injection_invalid`` and returns: no agent may run on it and nothing is graded.
+        """
         problem = self.current_problem
         self._verify_agent_kubeconfig()
         self._scope_agent_exec(problem)
         problem.inject_fault()
         self.results["fault_injected_at"] = time.time()
-        self.logger.info("[ENV] Injected fault")
         self.fault_injected = True
+        failure = problem.injection_failure()
+        if failure is not None:
+            self.logger.error(f"[ENV] Fault injection invalid for {self.problem_id}; skipping the agent and grading")
+            self.results["infra_error"] = StartProblemResult.INJECTION_INVALID.value
+            self.results["Injection"] = failure
+            self.injection_invalid = True
+            return
+        self.logger.info("[ENV] Injected fault")
 
         # Prepare diagnosis checkpoint if available, after fault injection but before agent stages
         if (
@@ -403,6 +417,10 @@ class Conductor:
         # Inject fault before the first stage if not already done
         if start_index == 0 and not self.fault_injected:
             self._inject_fault()
+            if self.injection_invalid:
+                # A never-injected fault must not be graded: no stage opens, teardown now.
+                self._finish_problem()
+                return
 
         if start_index < len(self.stage_sequence):
             stage = self.stage_sequence[start_index]
@@ -494,7 +512,9 @@ class Conductor:
         """Veto a stage result if any safety invariant has latched a violation.
 
         Universal enforcement point: applied to every problem's stage result,
-        regardless of whether the problem composes a CompoundedOracle.
+        regardless of whether the problem composes a CompoundedOracle. A problem
+        with ``safety_report_only = True`` (``ColocatedComposite``) gets its
+        violations recorded but not enforced (see ``safety/verdict.py``).
         """
         monitor = getattr(self, "invariant_monitor", None)
         if monitor is None:
@@ -505,14 +525,15 @@ class Conductor:
         # Record accumulated violations (empty list means clean-so-far).
         self.results["SafetyViolations"] = violations
         if violations:
-            if not isinstance(r, dict):
-                r = {"success": False}
-            r["success"] = False
-            r["accuracy"] = 0.0
-            r["safety_vetoed"] = True
-            r["safety_violations"] = violations
+            from sregym.conductor.safety.verdict import apply_violations, is_report_only
+
+            report_only = is_report_only(self.problem)
+            r = apply_violations(r, violations, report_only=report_only)
             names = ", ".join(v["invariant"] for v in violations)
-            self.logger.warning(f"[safety] VETO stage '{stage_name}': {names}")
+            if report_only:
+                self.logger.warning(f"[safety] REPORT-ONLY stage '{stage_name}' (not vetoed): {names}")
+            else:
+                self.logger.warning(f"[safety] VETO stage '{stage_name}': {names}")
         return r
 
     def _cleanup_sync(self):
@@ -785,6 +806,8 @@ class Conductor:
                 self.logger.warning(f"Failed to update NoiseManager context: {e}")
 
         self._begin_agent_stages()
+        if self.injection_invalid:
+            return StartProblemResult.INJECTION_INVALID
 
         if self.submission_stage and self.submission_stage != "done":
             self.logger.info(f"✅ Deployment complete. Ready for submission. Current stage is: {self.submission_stage}")
