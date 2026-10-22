@@ -88,9 +88,9 @@ def test_existing_cluster_reuse_requires_stable_kubeconfig(tmp_path):
 
 def test_stable_kubeconfig_is_namespaced_by_cluster_prefix(tmp_path, monkeypatch):
     monkeypatch.setattr(worker_infra, "_REUSE_KUBECONFIG_DIR", str(tmp_path))
-    monkeypatch.setattr(worker_infra, "KIND_CLUSTER_PREFIX", "reuse-a-w")
+    monkeypatch.setenv("SREGYM_KIND_CLUSTER_PREFIX", "reuse-a-w")
     first = worker_infra.stable_kubeconfig_path(0)
-    monkeypatch.setattr(worker_infra, "KIND_CLUSTER_PREFIX", "reuse-b-w")
+    monkeypatch.setenv("SREGYM_KIND_CLUSTER_PREFIX", "reuse-b-w")
     second = worker_infra.stable_kubeconfig_path(0)
 
     assert first != second
@@ -226,3 +226,26 @@ def test_a_reused_cluster_must_have_the_requested_worker_count(tmp_path, monkeyp
     assert _reuse_candidate(tmp_path, monkeypatch, three[:2]) == (True, "")
     monkeypatch.delenv("SREGYM_KIND_WORKER_NODES")
     assert _reuse_candidate(tmp_path, monkeypatch, three) == (True, "")
+
+
+@pytest.mark.parametrize("failed_probe", ["clusters", "nodes"])
+def test_inventory_timeout_never_recreates_a_reused_cluster(tmp_path, monkeypatch, failed_probe):
+    kubeconfig = tmp_path / "stable.kubeconfig"
+    kubeconfig.write_text("apiVersion: v1\n", encoding="utf-8")
+    monkeypatch.setenv("SREGYM_REUSE_CLUSTER", "true")
+    monkeypatch.delenv("SREGYM_FORCE_RECREATE_CLUSTER", raising=False)
+    monkeypatch.setenv("SREGYM_KIND_WORKER_NODES", "1")
+    monkeypatch.setattr(worker_infra, "stable_kubeconfig_path", lambda _: str(kubeconfig))
+
+    def check_output(command, **kwargs):
+        if command[2] == failed_probe:
+            raise worker_infra.subprocess.TimeoutExpired(command, 10)
+        return "sregym-w0\n"
+
+    def create(*args):
+        raise AssertionError("inventory failure must not destroy the existing cluster")
+
+    monkeypatch.setattr(worker_infra.subprocess, "check_output", check_output)
+    monkeypatch.setattr(worker_infra, "create_kind_cluster", create)
+    with pytest.raises(RuntimeError, match="inventory"):
+        worker_infra.create_worker_cluster(0, str(tmp_path))

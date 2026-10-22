@@ -418,7 +418,7 @@ def existing_cluster_is_reusable(cluster_name: str, kubeconfig_path: str) -> tup
             timeout=10,
         ).splitlines()
     except (subprocess.SubprocessError, OSError) as exc:
-        return False, f"`kind get clusters` failed: {exc}"
+        raise RuntimeError(f"cannot inventory kind clusters; refusing to recreate {cluster_name}: {exc}") from exc
     if cluster_name not in clusters:
         return False, f"cluster {cluster_name} not registered with kind"
     workers = kind_worker_nodes()
@@ -431,7 +431,7 @@ def existing_cluster_is_reusable(cluster_name: str, kubeconfig_path: str) -> tup
                 timeout=10,
             ).split()
         except (subprocess.SubprocessError, OSError) as exc:
-            return False, f"`kind get nodes` failed: {exc}"
+            raise RuntimeError(f"cannot inventory kind nodes; refusing to recreate {cluster_name}: {exc}") from exc
         existing = sum(1 for node in nodes if re.search(r"-worker\d*$", node))
         if existing != workers:
             return False, f"cluster {cluster_name} has {existing} worker nodes, not the requested {workers}"

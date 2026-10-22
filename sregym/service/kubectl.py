@@ -534,9 +534,12 @@ class KubeCtl:
         host filesystem mount and toleration for all taints.
 
         Best-effort: failures on individual nodes are logged but don't raise.
+        All nodes share one timeout budget; a stalled node cannot add another
+        full timeout for every remaining node.
         Returns a dict mapping node name -> number of orphan dirs removed.
         """
         results: dict[str, int] = {}
+        deadline = time.monotonic() + timeout
 
         # Snapshot live PVs first so we never delete a dir for a PV that exists.
         try:
@@ -578,13 +581,18 @@ class KubeCtl:
         )
 
         for node_name in node_names:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.warning(f"[gc_localpv] Skipping {node_name}: sweep timeout budget exhausted")
+                results[node_name] = -1
+                continue
             try:
                 count = self._run_localpv_gc_pod_on_node(
                     node_name=node_name,
                     namespace=pod_namespace,
                     script=script,
                     keep_blob=keep_blob,
-                    timeout=timeout,
+                    timeout=remaining,
                 )
                 results[node_name] = count
                 if count:
@@ -603,7 +611,7 @@ class KubeCtl:
         namespace: str,
         script: str,
         keep_blob: str,
-        timeout: int,
+        timeout: float,
     ) -> int:
         """Run a one-shot privileged busybox pod on ``node_name`` to execute ``script``.
 
@@ -660,10 +668,10 @@ class KubeCtl:
 
         try:
             # Wait for the pod to reach a terminal phase.
-            waited = 0
+            deadline = time.monotonic() + timeout
             sleep_s = 2
             phase = "Pending"
-            while waited < timeout:
+            while time.monotonic() < deadline:
                 try:
                     pod = self.core_v1_api.read_namespaced_pod(name=pod_name, namespace=namespace)
                     phase = (pod.status.phase or "Pending") if pod.status else "Pending"
@@ -674,10 +682,11 @@ class KubeCtl:
                     raise
                 if phase in ("Succeeded", "Failed"):
                     break
-                time.sleep(sleep_s)
-                waited += sleep_s
+                time.sleep(min(sleep_s, max(0, deadline - time.monotonic())))
             else:
-                raise TimeoutError(f"GC pod {pod_name} on {node_name} did not finish within {timeout}s (phase={phase})")
+                raise TimeoutError(
+                    f"GC pod {pod_name} on {node_name} did not finish within {timeout:g}s (phase={phase})"
+                )
 
             logs = ""
             try:
