@@ -6,7 +6,7 @@ from sregym.conductor.problems.base import Problem
 from sregym.conductor.problems.variant_utils import create_app
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
 from sregym.paths import TARGET_MICROSERVICES
-from sregym.service.apps.hotel_reservation import HotelReservation
+from sregym.service.apps.hotel_reservation import FailureScripts, HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
@@ -17,8 +17,8 @@ class MongoDBUserUnregistered(Problem):
     def __init__(self, app_name: str = "hotel_reservation", faulty_service: str = "mongodb-geo"):
         app = create_app(app_name)
         if isinstance(app, HotelReservation):
-            # The agent must diagnose from symptoms: don't mount the fault scripts.
-            app.mount_failure_scripts = False
+            # The agent must diagnose from symptoms: don't deploy the fault scripts.
+            app.failure_scripts = FailureScripts.ABSENT
         super().__init__(app=app)
         self.app_name = app_name
         self.kubectl = KubeCtl()

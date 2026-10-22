@@ -1,4 +1,5 @@
 import logging
+from enum import StrEnum
 
 from sregym.generators.workload.wrk2 import Wrk2, Wrk2WorkloadManager
 from sregym.paths import FAULT_SCRIPTS, HOTEL_RES_METADATA
@@ -13,18 +14,26 @@ logger.propagate = True
 logger.setLevel(logging.DEBUG)
 
 
+class FailureScripts(StrEnum):
+    """What ``deploy`` does with the failure-admin-{geo,rate} ConfigMaps (the mongo fault scripts)."""
+
+    MOUNTED = "mounted"  # filled, and mounted at /scripts in mongodb-geo and mongodb-rate
+    UNMOUNTED = "unmounted"  # filled but mounted nowhere, as robust-skills deploys every hotel app
+    ABSENT = "absent"  # not created: the agent must diagnose a mongo auth fault from symptoms
+
+
 class HotelReservation(Application):
-    def __init__(self, mount_failure_scripts: bool = True):
+    def __init__(self, failure_scripts: FailureScripts = FailureScripts.MOUNTED):
         super().__init__(HOTEL_RES_METADATA)
         self.kubectl = KubeCtl()
         self.script_dir = FAULT_SCRIPTS
         self.helm_deploy = False
-        self.mount_failure_scripts = mount_failure_scripts
+        self.failure_scripts = FailureScripts(failure_scripts)
 
         self.load_app_json()
 
-        self.payload_script = (
-            resolve_workspace_path("hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua")
+        self.payload_script = resolve_workspace_path(
+            "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
         )
 
     def load_app_json(self):
@@ -52,8 +61,8 @@ class HotelReservation(Application):
     def create_configmaps(self):
         """Create configmaps for the hotel reservation application.
 
-        Note: failure-admin-{geo,rate} are created as standalone K8s objects (not mounted
-        into pods). They serve as noise/red herrings for unrelated faults.
+        The failure-admin-{geo,rate} ConfigMaps are made by ``populate_failure_configmaps``,
+        as ``failure_scripts`` says.
         """
         self.kubectl.create_or_update_configmap(
             name="mongo-rate-script",
@@ -131,8 +140,9 @@ class HotelReservation(Application):
                 self.kubectl.exec_command(f"kubectl apply -k {plan.manifest_path} -n {self.namespace}")
         else:
             self.kubectl.apply_configs(self.namespace, self.k8s_deploy_path)
-        if self.mount_failure_scripts:
+        if self.failure_scripts is not FailureScripts.ABSENT:
             self.populate_failure_configmaps()
+        if self.failure_scripts is FailureScripts.MOUNTED:
             self._patch_mongo_failure_script_mounts()
         self.kubectl.wait_for_ready(self.namespace)
 
@@ -148,7 +158,7 @@ class HotelReservation(Application):
         # Match the claim's namespace exactly: a substring match would also
         # delete volumes of unrelated namespaces such as ``hotel-reservation-sdo``.
         pvs = self.kubectl.exec_command(
-            "kubectl get pv -o jsonpath='{range .items[*]}{.metadata.name}{\" \"}{.spec.claimRef.namespace}{\"\\n\"}{end}'"
+            'kubectl get pv -o jsonpath=\'{range .items[*]}{.metadata.name}{" "}{.spec.claimRef.namespace}{"\\n"}{end}\''
             f" | awk '$2 == \"{self.namespace}\" {{print $1}}'"
         ).splitlines()
 

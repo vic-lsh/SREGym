@@ -41,15 +41,20 @@ def build_composite(
     `entries` defaults to the discovered catalog and `cluster` (the composite's ClusterIO) to the
     real cluster; tests pass a fake catalog and cluster. Raises KeyError naming a draw whose key
     is not in `entries`.
+
+    The shared app is deployed as robust-skills deploys it, whichever fault the plan draws first:
+    a Hotel Reservation app gets its failure-admin ConfigMaps filled but mounted nowhere
+    (`FailureScripts.UNMOUNTED`).
     """
     from sregym.conductor.problems.colocated_composite import ColocatedComposite
     from sregym.conductor.problems.composition import catalog
+    from sregym.service.apps.hotel_reservation import FailureScripts, HotelReservation
 
     by_key = {entry.key: entry for entry in (catalog.entries() if entries is None else entries)}
     missing = sorted({draw.key for draw in plan.draws} - by_key.keys())
     if missing:
         raise KeyError(f"plan draws keys not in the catalog: {missing}")
-    return ColocatedComposite(
+    composite = ColocatedComposite(
         problems=[by_key[draw.key].build(draw) for draw in plan.draws],
         footprints=[draw.footprints for draw in plan.draws],
         tiers=[draw.tier for draw in plan.draws],
@@ -57,6 +62,9 @@ def build_composite(
         identity=_plan_identity(plan),
         cluster=cluster,
     )
+    if isinstance(composite.app, HotelReservation):
+        composite.app.failure_scripts = FailureScripts.UNMOUNTED
+    return composite
 
 
 def _plan_identity(plan: CompositionPlan) -> dict[str, Any]:

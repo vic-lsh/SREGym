@@ -10,13 +10,14 @@ from sregym.conductor.oracles.deployment_readiness import DeploymentReadinessOra
 from sregym.conductor.oracles.incorrect_port import IncorrectPortAssignmentMitigationOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.oracles.mongo_auth_mitigation import MongoAuthMitigationOracle
+from sregym.service.apps.hotel_reservation import FailureScripts
 
 
 class _App:
     namespace = "test-ns"
 
     def __init__(self, *args, **kwargs):
-        self.mount_failure_scripts = True
+        self.failure_scripts = FailureScripts.MOUNTED
 
     def create_workload(self):
         pass
@@ -56,7 +57,7 @@ def test_mongo_auth_faults_probe_the_data_plane_and_blame_the_mongo_service(monk
     ):
         assert isinstance(problem.mitigation_oracle, MongoAuthMitigationOracle)
         assert "component=service/mongodb-rate;" in problem.root_cause
-        assert problem.app.mount_failure_scripts is False
+        assert problem.app.failure_scripts is FailureScripts.ABSENT
 
 
 def test_mongo_auth_oracle_passes_only_when_admin_can_read_the_service_db():
