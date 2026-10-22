@@ -189,6 +189,17 @@ Agents always run in isolated Docker containers, preventing access to SREGym int
 
 The image is tagged `sregym-agent-slim:<hash>`, where the hash covers its build context (the agent drivers in `docker/agents/build.sh`'s allowlist), so a checkout with different agent code builds its own image instead of reusing or replacing another's. Before the first agent runs, SREGym checks the image with `docker/agents/check_image.sh` (no benchmark internals in the image; every containerized driver imports) and refuses to run agents from an image that fails. Images for old hashes are not removed automatically; prune them with `docker image ls sregym-agent-slim`.
 
+Each agent container receives only the credentials its agent needs, per the allow-list `AGENT_CREDENTIALS` in `sregym/service/container_runner.py` (enforced by `tests/service/test_agent_credentials.py`):
+
+| Agent | Credentials passed in |
+|-------|-----------------------|
+| `claudecode` | Claude Code auth only: `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or Vertex (`CLAUDE_CODE_USE_VERTEX`, project, region, the Google credentials file) |
+| `codex` | `OPENAI_API_KEY`, `OPENAI_API_BASE`, `OPENAI_BASE_URL`, a copy of `~/.codex/auth.json` |
+| `gemini` | `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GEMINI_API_BASE`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GOOGLE_GENAI_USE_VERTEXAI`, the `GOOGLE_APPLICATION_CREDENTIALS` file |
+| `copilot` | `COPILOT_GITHUB_TOKEN`, `COPILOT_PROVIDER_*` |
+| `stratus`, `opencode`, unlisted agents | any provider's LiteLLM variables, `AGENT_API_BASE`/`AGENT_API_KEY`, `~/.aws`, the `GOOGLE_APPLICATION_CREDENTIALS` file |
+| `autosubmit`, `debug` | none |
+
 Use `--force-build` to rebuild the container image after updating dependencies or agent code:
 
 ```bash

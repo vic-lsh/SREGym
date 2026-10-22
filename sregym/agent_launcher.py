@@ -139,6 +139,7 @@ class AgentLauncher:
             command=composite_cmd,
             env=dict(reg.kickoff_env or {}),
             label=f"{reg.name}-run",
+            agent=reg.name,
         )
         exec_input.env.pop(HARNESS_PROBLEM_ID_ENV, None)
         exec_input.env.pop(HARNESS_ARTIFACT_ID_ENV, None)

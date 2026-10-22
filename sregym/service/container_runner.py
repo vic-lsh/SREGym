@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
-from clients.harness.claude_auth import container_auth
+from clients.harness.claude_auth import CONTAINER_CREDENTIALS_PATH, container_auth
 
 logger = logging.getLogger("all.sregym.container_runner")
 
@@ -87,6 +87,7 @@ class ExecInput:
     timeout: int | None = None  # seconds, None = no timeout
     label: str = ""
     container_name: str = ""
+    agent: str = ""  # registry name; selects the agent's credentials (AGENT_CREDENTIALS)
 
 
 @dataclass
@@ -101,118 +102,175 @@ class ContainerConfig:
     memory: str = "8g"
 
 
-class ContainerRunner:
-    # Env vars forwarded from host to agent containers.
-    # Sourced from litellm provider source code (llms/<provider>/).
-    API_KEY_VARS = [
-        # OpenAI
-        "OPENAI_API_KEY",
-        "OPENAI_API_BASE",
-        "OPENAI_BASE_URL",
-        # DeepSeek
-        "DEEPSEEK_API_KEY",
-        "DEEPSEEK_API_BASE",
-        # Anthropic
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_API_BASE",
-        # Gemini / Google
-        "GOOGLE_API_KEY",
-        "GEMINI_API_KEY",
-        "GEMINI_API_BASE",
-        # Azure OpenAI
-        "AZURE_API_KEY",
-        "AZURE_OPENAI_API_KEY",
-        "AZURE_API_BASE",
-        "AZURE_API_VERSION",
-        "AZURE_AD_TOKEN",
-        "AZURE_CLIENT_ID",
-        "AZURE_CLIENT_SECRET",
-        "AZURE_TENANT_ID",
-        "AZURE_USERNAME",
-        "AZURE_PASSWORD",
-        "AZURE_CERTIFICATE_PATH",
-        "AZURE_CERTIFICATE_PASSWORD",
-        "AZURE_CREDENTIAL",
-        "AZURE_SCOPE",
-        "AZURE_AUTHORITY_HOST",
-        "AZURE_FEDERATED_TOKEN_FILE",
-        # AWS Bedrock
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_SESSION_TOKEN",
-        "AWS_REGION_NAME",
-        "AWS_REGION",
-        "AWS_DEFAULT_REGION",
-        "AWS_SESSION_NAME",
-        "AWS_PROFILE",
-        "AWS_PROFILE_NAME",
-        "AWS_ROLE_NAME",
-        "AWS_ROLE_ARN",
-        "AWS_WEB_IDENTITY_TOKEN",
-        "AWS_WEB_IDENTITY_TOKEN_FILE",
-        "AWS_STS_ENDPOINT",
-        "AWS_EXTERNAL_ID",
-        "AWS_BEDROCK_RUNTIME_ENDPOINT",
-        "AWS_BEARER_TOKEN_BEDROCK",
-        # WatsonX / IBM
-        "WATSONX_API_KEY",
-        "WATSONX_APIKEY",
-        "WATSONX_API_BASE",
-        "WATSONX_URL",
-        "WATSONX_TOKEN",
-        "WATSONX_PROJECT_ID",
-        "WATSONX_REGION",
-        "WATSONX_SPACE_ID",
-        "WATSONX_DEPLOYMENT_SPACE_ID",
-        "WATSONX_IAM_URL",
-        "WATSONX_ZENAPIKEY",
-        "WX_API_KEY",
-        "WX_PROJECT_ID",
-        "WX_URL",
-        "WX_REGION",
-        "WX_SPACE_ID",
-        "WML_URL",
-        # Vertex AI
-        "VERTEXAI_PROJECT",
-        "VERTEXAI_LOCATION",
-        "VERTEX_LOCATION",
-        "VERTEXAI_CREDENTIALS",
-        "GOOGLE_APPLICATION_CREDENTIALS",
-        # Moonshot
-        "MOONSHOT_API_KEY",
-        "MOONSHOT_API_BASE",
-        # GLM
-        "GLM_API_KEY",
-        "ZAI_API_KEY",
-        "ZHIPU_API_KEY",
-        # Claude Code
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        # GitHub Copilot CLI
-        "COPILOT_GITHUB_TOKEN",
-        "COPILOT_PROVIDER_BASE_URL",
-        "COPILOT_PROVIDER_API_KEY",
-        "COPILOT_PROVIDER_TYPE",
-        # SREGym internal
-        "AGENT_MODEL_ID",
-        "AGENT_REASONING_EFFORT",
-        "AGENT_MAX_TURNS",
-        "SREGYM_AGENT_PROMPT_APPENDIX",
-        "AGENT_API_BASE",
-        "AGENT_API_KEY",
-        # JUDGE_* stay on the host: grading runs in the conductor, not the agent.
-        # Config vars
-        "API_HOSTNAME",
-        "API_PORT",
-        "MCP_SERVER_PORT",
-        "MCP_SERVER_URL",
-        "EXPOSE_SERVER",
-        "SESSION_CACHE_SIZE",
-        "SESSION_TTL",
-        "LLM_QUERY_MAX_RETRIES",
-        "LLM_QUERY_INIT_RETRY_DELAY",
-        "WAIT_FOR_POD_READY_TIMEOUT",
-    ]
+#: SREGym configuration every containerized agent gets. No credentials.
+COMMON_VARS = (
+    "AGENT_MODEL_ID",
+    "AGENT_REASONING_EFFORT",
+    "AGENT_MAX_TURNS",
+    "SREGYM_AGENT_PROMPT_APPENDIX",
+    # JUDGE_* stay on the host: grading runs in the conductor, not the agent.
+    "API_HOSTNAME",
+    "API_PORT",
+    "MCP_SERVER_PORT",
+    "MCP_SERVER_URL",
+    "EXPOSE_SERVER",
+    "SESSION_CACHE_SIZE",
+    "SESSION_TTL",
+    "LLM_QUERY_MAX_RETRIES",
+    "LLM_QUERY_INIT_RETRY_DELAY",
+    "WAIT_FOR_POD_READY_TIMEOUT",
+)
 
+#: Model-provider credentials for agents that take any provider's model (LiteLLM, OpenCode).
+#: Sourced from litellm provider source code (llms/<provider>/).
+PROVIDER_VARS = (
+    # OpenAI
+    "OPENAI_API_KEY",
+    "OPENAI_API_BASE",
+    "OPENAI_BASE_URL",
+    # DeepSeek
+    "DEEPSEEK_API_KEY",
+    "DEEPSEEK_API_BASE",
+    # Anthropic
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_API_BASE",
+    # Gemini / Google
+    "GOOGLE_API_KEY",
+    "GEMINI_API_KEY",
+    "GEMINI_API_BASE",
+    # Azure OpenAI
+    "AZURE_API_KEY",
+    "AZURE_OPENAI_API_KEY",
+    "AZURE_API_BASE",
+    "AZURE_API_VERSION",
+    "AZURE_AD_TOKEN",
+    "AZURE_CLIENT_ID",
+    "AZURE_CLIENT_SECRET",
+    "AZURE_TENANT_ID",
+    "AZURE_USERNAME",
+    "AZURE_PASSWORD",
+    "AZURE_CERTIFICATE_PATH",
+    "AZURE_CERTIFICATE_PASSWORD",
+    "AZURE_CREDENTIAL",
+    "AZURE_SCOPE",
+    "AZURE_AUTHORITY_HOST",
+    "AZURE_FEDERATED_TOKEN_FILE",
+    # AWS Bedrock
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_REGION_NAME",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "AWS_SESSION_NAME",
+    "AWS_PROFILE",
+    "AWS_PROFILE_NAME",
+    "AWS_ROLE_NAME",
+    "AWS_ROLE_ARN",
+    "AWS_WEB_IDENTITY_TOKEN",
+    "AWS_WEB_IDENTITY_TOKEN_FILE",
+    "AWS_STS_ENDPOINT",
+    "AWS_EXTERNAL_ID",
+    "AWS_BEDROCK_RUNTIME_ENDPOINT",
+    "AWS_BEARER_TOKEN_BEDROCK",
+    # WatsonX / IBM
+    "WATSONX_API_KEY",
+    "WATSONX_APIKEY",
+    "WATSONX_API_BASE",
+    "WATSONX_URL",
+    "WATSONX_TOKEN",
+    "WATSONX_PROJECT_ID",
+    "WATSONX_REGION",
+    "WATSONX_SPACE_ID",
+    "WATSONX_DEPLOYMENT_SPACE_ID",
+    "WATSONX_IAM_URL",
+    "WATSONX_ZENAPIKEY",
+    "WX_API_KEY",
+    "WX_PROJECT_ID",
+    "WX_URL",
+    "WX_REGION",
+    "WX_SPACE_ID",
+    "WML_URL",
+    # Vertex AI
+    "VERTEXAI_PROJECT",
+    "VERTEXAI_LOCATION",
+    "VERTEX_LOCATION",
+    "VERTEXAI_CREDENTIALS",
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CLOUD_LOCATION",
+    # Moonshot
+    "MOONSHOT_API_KEY",
+    "MOONSHOT_API_BASE",
+    # GLM
+    "GLM_API_KEY",
+    "ZAI_API_KEY",
+    "ZHIPU_API_KEY",
+)
+
+
+@dataclass(frozen=True)
+class AgentCredentials:
+    """What auth one containerized agent receives from the host, beyond ``COMMON_VARS``.
+
+    ``env``: host variables forwarded when set and non-empty. ``aws``: ``~/.aws`` read-only.
+    ``google_credentials``: the ``GOOGLE_APPLICATION_CREDENTIALS`` file alone, read-only, with the
+    variable pointing at it. ``codex_auth``: a throwaway copy of ``~/.codex/auth.json``.
+    ``claude_auth``: Claude Code's auth (``clients.harness.claude_auth.container_auth``).
+    """
+
+    env: tuple[str, ...] = ()
+    aws: bool = False
+    google_credentials: bool = False
+    codex_auth: bool = False
+    claude_auth: bool = False
+
+
+ANY_PROVIDER = AgentCredentials(
+    env=(*PROVIDER_VARS, "AGENT_API_BASE", "AGENT_API_KEY"), aws=True, google_credentials=True
+)
+
+#: Per-agent credential allow-list, by agents.yaml name. An agent not listed gets ANY_PROVIDER.
+AGENT_CREDENTIALS = {
+    "claudecode": AgentCredentials(claude_auth=True),
+    "codex": AgentCredentials(env=("OPENAI_API_KEY", "OPENAI_API_BASE", "OPENAI_BASE_URL"), codex_auth=True),
+    "gemini": AgentCredentials(
+        env=(
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+            "GEMINI_API_BASE",
+            "GOOGLE_CLOUD_PROJECT",
+            "GOOGLE_CLOUD_LOCATION",
+            "GOOGLE_GENAI_USE_VERTEXAI",
+        ),
+        google_credentials=True,
+    ),
+    "copilot": AgentCredentials(
+        env=("COPILOT_GITHUB_TOKEN", "COPILOT_PROVIDER_BASE_URL", "COPILOT_PROVIDER_API_KEY", "COPILOT_PROVIDER_TYPE")
+    ),
+    "stratus": ANY_PROVIDER,
+    "opencode": ANY_PROVIDER,
+    "autosubmit": AgentCredentials(),
+    "debug": AgentCredentials(),
+}
+
+
+def agent_credentials(agent: str) -> AgentCredentials:
+    return AGENT_CREDENTIALS.get(agent, ANY_PROVIDER)
+
+
+def _google_credentials_mount(environ) -> tuple[Path, str] | None:
+    """The host GOOGLE_APPLICATION_CREDENTIALS file and where the container sees it, if it exists."""
+    credentials = environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if not credentials:
+        return None
+    path = Path(credentials)
+    if not path.is_file():
+        logger.warning(f"GOOGLE_APPLICATION_CREDENTIALS file {credentials} does not exist; not mounting it")
+        return None
+    return path.resolve(), CONTAINER_CREDENTIALS_PATH
+
+
+class ContainerRunner:
     def __init__(self, config: ContainerConfig | None = None):
         self.config = config or ContainerConfig()
         self._credential_tmps: list[str] = []
@@ -259,19 +317,24 @@ class ContainerRunner:
             shutil.rmtree(tmp, ignore_errors=True)
         self._credential_tmps = []
 
-    def _build_env_flags(self, extra_env: dict[str, str] | None = None) -> list[str]:
+    def _build_env_flags(self, extra_env: dict[str, str] | None = None, agent: str = "") -> list[str]:
         flags = []
         env_vars = dict(self.config.env_vars)
+        credentials = agent_credentials(agent)
 
-        # Forward API keys from host (skip empty values to avoid overriding
-        # other auth mechanisms like OAuth subscription tokens)
-        for var in self.API_KEY_VARS:
+        # Forward this agent's allow-listed variables from the host (skip empty values to avoid
+        # overriding other auth mechanisms like OAuth subscription tokens).
+        for var in (*COMMON_VARS, *credentials.env):
             if var in os.environ and var not in env_vars and os.environ[var]:
                 env_vars[var] = os.environ[var]
 
-        # Claude provider auth (API key, OAuth or Vertex), with the Claude settings fallback.
-        auth, _ = container_auth(os.environ, Path.home())
-        env_vars.update({k: v for k, v in auth.items() if k not in self.config.env_vars})
+        if credentials.google_credentials and _google_credentials_mount(os.environ):
+            env_vars.setdefault("GOOGLE_APPLICATION_CREDENTIALS", CONTAINER_CREDENTIALS_PATH)
+
+        if credentials.claude_auth:
+            # Claude provider auth (API key, OAuth or Vertex), with the Claude settings fallback.
+            auth, _ = container_auth(os.environ, Path.home())
+            env_vars.update({k: v for k, v in auth.items() if k not in self.config.env_vars})
 
         if extra_env:
             env_vars.update(extra_env)
@@ -291,7 +354,7 @@ class ContainerRunner:
             flags.extend(["-e", f"{key}={value}"])
         return flags
 
-    def _build_base_docker_args(self) -> list[str]:
+    def _build_base_docker_args(self, agent: str = "") -> list[str]:
         args = [
             "docker",
             "run",
@@ -319,16 +382,23 @@ class ContainerRunner:
             args.extend(["-v", f"{self.config.kubeconfig_path.resolve()}:/root/.kube/config:ro"])
             args.extend(["-e", "KUBECONFIG=/root/.kube/config"])
 
-        # Mount AWS credentials directory (read-only) for Bedrock and other AWS services
+        credentials = agent_credentials(agent)
+        # AWS credentials directory (read-only) for Bedrock and other AWS services
         aws_dir = Path.home() / ".aws"
-        if aws_dir.is_dir():
+        if credentials.aws and aws_dir.is_dir():
             args.extend(["-v", f"{aws_dir.resolve()}:/root/.aws:ro"])
 
-        # Google credentials for Claude on Vertex: only that one file, read-only.
-        for host_path, container_path in container_auth(os.environ, Path.home())[1]:
+        mounts = []
+        if credentials.claude_auth:
+            # Google credentials for Claude on Vertex: only that one file, read-only.
+            mounts += container_auth(os.environ, Path.home())[1]
+        elif credentials.google_credentials and (mount := _google_credentials_mount(os.environ)):
+            mounts.append(mount)
+        for host_path, container_path in mounts:
             args.extend(["-v", f"{host_path}:{container_path}:ro"])
 
-        self._mount_codex_credentials(args)
+        if credentials.codex_auth:
+            self._mount_codex_credentials(args)
 
         # Mount workspace directory for agent output (logs, results, trajectories)
         if self.config.workspace_path:
@@ -345,13 +415,13 @@ class ContainerRunner:
     def build_docker_command(self, exec_input: ExecInput) -> list[str]:
         if self._image_id is None:
             raise RuntimeError("agent image not checked: call ensure_image_exists() before running agents")
-        cmd = self._build_base_docker_args()
+        cmd = self._build_base_docker_args(exec_input.agent)
         suffix = uuid.uuid4().hex[:8]
         if exec_input.label:
             container_name = f"sregym-{exec_input.label}-{suffix}"
             cmd.extend(["--name", container_name])
             exec_input.container_name = container_name
-        cmd.extend(self._build_env_flags(exec_input.env))
+        cmd.extend(self._build_env_flags(exec_input.env, exec_input.agent))
         # By ID: the image that passed the check, even if the tag moves meanwhile.
         cmd.append(self._image_id)
         cmd.append(exec_input.command)

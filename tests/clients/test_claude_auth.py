@@ -96,7 +96,7 @@ def test_vertex_without_a_credentials_file_uses_application_default_credentials(
     assert container_auth({"ANTHROPIC_API_KEY": "k"}, tmp_path)[1] == []
 
 
-def test_agent_containers_get_the_auth_env_and_only_the_credentials_mount(tmp_path, monkeypatch):
+def test_the_claude_code_container_gets_the_auth_env_and_only_the_credentials_mount(tmp_path, monkeypatch):
     credentials = tmp_path / "sa.json"
     credentials.write_text("{}")
     config = _config_dir(tmp_path, {**VERTEX, "GOOGLE_APPLICATION_CREDENTIALS": str(credentials)})
@@ -105,10 +105,10 @@ def test_agent_containers_get_the_auth_env_and_only_the_credentials_mount(tmp_pa
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
     monkeypatch.setenv("HOME", str(tmp_path))
     runner = ContainerRunner()
-    flags = runner._build_env_flags()
+    flags = runner._build_env_flags(agent="claudecode")
     for key, value in {**VERTEX, "GOOGLE_APPLICATION_CREDENTIALS": CONTAINER_CREDENTIALS_PATH}.items():
         assert f"{key}={value}" in flags
-    args = runner._build_base_docker_args()
+    args = runner._build_base_docker_args(agent="claudecode")
     mounts = [args[i + 1] for i, arg in enumerate(args) if arg == "-v"]
     assert f"{credentials.resolve()}:{CONTAINER_CREDENTIALS_PATH}:ro" in mounts
     assert not any(str(config) in mount for mount in mounts)

@@ -87,7 +87,7 @@ def run_preflight_check(
         check_cmd = f"/opt/sregym/install-scripts/{install_script} > /dev/null 2>&1 && {check_cmd}"
 
     logger.info(f"🔍 Running pre-flight check for '{agent_name}'...")
-    result = container_runner.run_sync(ExecInput(command=check_cmd, label="preflight", timeout=180))
+    result = container_runner.run_sync(ExecInput(command=check_cmd, label="preflight", timeout=180, agent=agent_name))
     if result.returncode != 0:
         if result.stdout:
             print(result.stdout.strip())
