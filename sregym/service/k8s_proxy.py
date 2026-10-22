@@ -120,6 +120,44 @@ def forbidden_status(message: str) -> bytes:
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
+def read_request_body(headers, rfile) -> bytes | None:
+    """The request body the client sent, whichever framing it used; None if there is none.
+
+    kubectl streams some bodies with `Transfer-Encoding: chunked` and no Content-Length
+    (`kubectl replace --raw PATH -f FILE`, a PUT, does). Reading only Content-Length bytes
+    left such a body unread and forwarded the chunked header with no body, so the upstream
+    waited for chunks that never came and the request hung.
+    """
+    if "chunked" in (headers.get("Transfer-Encoding") or "").lower():
+        chunks = []
+        while True:
+            size_line = rfile.readline()
+            if not size_line:
+                raise ValueError("chunked request body ended before its last chunk")
+            size = int(size_line.split(b";", 1)[0].strip(), 16)
+            if size == 0:
+                while rfile.readline() not in (b"\r\n", b"\n", b""):
+                    pass  # trailer fields: none matter to the API server
+                return b"".join(chunks)
+            chunk = rfile.read(size)
+            if len(chunk) != size:
+                raise ValueError("chunked request body ended inside a chunk")
+            chunks.append(chunk)
+            rfile.readline()  # the CRLF after the chunk
+    length = int(headers.get("Content-Length") or 0)
+    return rfile.read(length) if length > 0 else None
+
+
+# Hop-by-hop or re-derived headers: the body is forwarded whole, so http.client sets its
+# Content-Length; Accept-Encoding is dropped so responses come back unzipped for filtering.
+_NOT_FORWARDED = frozenset({"host", "accept-encoding", "transfer-encoding", "content-length", "connection"})
+
+
+def upstream_request_headers(headers) -> dict[str, str]:
+    """The client's headers to forward upstream, minus those the proxy re-derives."""
+    return {k: v for k, v in headers.items() if k.lower() not in _NOT_FORWARDED}
+
+
 class KubernetesAPIProxy:
     """Manages the Kubernetes API filtering proxy."""
 
@@ -568,8 +606,7 @@ class KubernetesAPIProxy:
                 stream = streaming_kind(path) if method == "GET" else None
 
                 # Read request body if present
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length) if content_length > 0 else None
+                body = read_request_body(self.headers, self.rfile)
 
                 try:
                     from sregym.conductor.safety import agent_actions
@@ -581,8 +618,8 @@ class KubernetesAPIProxy:
                 # Forward request to upstream
                 try:
                     conn = self._get_upstream_connection()
-                    # Forward headers (except Host and Accept-Encoding to avoid gzip)
-                    headers = {k: v for k, v in self.headers.items() if k.lower() not in ("host", "accept-encoding")}
+                    # Forward headers minus those the proxy re-derives (Host, Accept-Encoding, framing)
+                    headers = upstream_request_headers(self.headers)
                     # In-cluster mode: authenticate to the API server with the ServiceAccount bearer token
                     if bearer_token:
                         headers["Authorization"] = f"Bearer {bearer_token}"
