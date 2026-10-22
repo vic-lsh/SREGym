@@ -81,7 +81,8 @@ class ReadinessProbeMisconfiguration(Problem):
         if self.replica_count > 1:
             cmd = f"kubectl scale deployment/{self.faulty_service} --replicas={self.replica_count} -n {self.namespace}"
             self.kubectl.exec_command(cmd)
-            self.kubectl.wait_for_ready(self.namespace)
+            # Scoped to the scaled workload: other faults may already have broken the namespace.
+            self.kubectl.wait_for_ready(self.namespace, service_names=self.faulty_service)
 
     @mark_fault_injected
     def inject_fault(self):

@@ -19,7 +19,7 @@ from typing import Any
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.compound import CompoundedOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
-from sregym.conductor.problems.base import Problem
+from sregym.conductor.problems.base import Problem, serial_evaluation_timeout_s
 from sregym.utils.decorators import mark_fault_injected
 
 MIN_FAULTS = 2
@@ -138,6 +138,12 @@ class ComposedFailures(Problem):
         if len(mitigation_oracles) != len(problems):
             raise ValueError("every composed fault needs a mitigation oracle")
         self.mitigation_oracle = CompoundedOracle(self, *mitigation_oracles)
+
+    @property
+    def evaluation_timeout_s(self) -> float:
+        """Sum of the faults' bounds: the mitigation ``CompoundedOracle`` and the per-fault
+        diagnosis judges both run one sub-evaluation per fault, in turn."""
+        return serial_evaluation_timeout_s(self.problems)
 
     @mark_fault_injected
     def inject_fault(self):

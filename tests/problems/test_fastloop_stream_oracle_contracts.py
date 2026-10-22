@@ -64,7 +64,7 @@ def cluster_free_problems(monkeypatch):
     monkeypatch.setattr(KubeCtl, "is_emulated_cluster", lambda self: False)
     monkeypatch.setattr(KubeCtl, "list_deployments", lambda self, namespace: SimpleNamespace(items=[]))
     monkeypatch.setattr(KubeCtl, "exec_command", lambda self, command: "")
-    monkeypatch.setattr(KubeCtl, "wait_for_ready", lambda self, namespace: None)
+    monkeypatch.setattr(KubeCtl, "wait_for_ready", lambda self, namespace, **kwargs: None)
     monkeypatch.setattr(
         KubeCtl,
         "get_service_json",

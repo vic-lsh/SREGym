@@ -332,6 +332,12 @@ srv.serve_forever()
     # admission timeouts each take ~30s; the margin here is generous).
     SYMPTOM_TIMEOUT_S = 180
     SYMPTOM_POLL_INTERVAL_S = 5
+    # The timeout is split across this many delete-and-wait triggers. NetworkPolicy
+    # enforcement (Calico) and webhook registration in the apiserver are eventually
+    # consistent: on a busy cluster the first replacement pod can be admitted before the
+    # backends are unreachable. In 8-fault composites a single trigger missed the window
+    # every time (3/3) although admission was blocked minutes later (robust-skills #150).
+    SYMPTOM_TRIGGER_ATTEMPTS = 3
 
     # Time to wait for the recommendation deployment to converge after
     # recover_fault opens the NetworkPolicy.
@@ -568,11 +574,24 @@ srv.serve_forever()
             f"'{self.namespace}', cumulative timeoutSeconds={cumulative}s."
         )
 
-        # Step 7: trigger the symptom by deleting the target's pod
-        self._delete_target_pod()
-
-        # Step 8: wait for ready_replicas < spec.replicas (symptom live)
-        self._wait_for_symptom()
+        # Steps 7-8: trigger the symptom by deleting the target's pod, then wait for
+        # ready_replicas < spec.replicas; re-trigger if the replacement was admitted.
+        per_attempt_s = self.SYMPTOM_TIMEOUT_S / self.SYMPTOM_TRIGGER_ATTEMPTS
+        for attempt in range(1, self.SYMPTOM_TRIGGER_ATTEMPTS + 1):
+            self._delete_target_pod()
+            if self._wait_for_symptom(per_attempt_s):
+                break
+            logger.info(
+                f"Symptom not visible after trigger {attempt}/{self.SYMPTOM_TRIGGER_ATTEMPTS}; "
+                "the replacement pod was admitted (enforcement lag). Re-triggering."
+            )
+        else:
+            raise RuntimeError(
+                f"Symptom did not manifest within {self.SYMPTOM_TIMEOUT_S}s "
+                f"({self.SYMPTOM_TRIGGER_ATTEMPTS} triggers): '{self.TARGET_DEPLOYMENT}' still shows "
+                "full ready_replicas. The ReplicaSet recreated the pod successfully, indicating the "
+                "fault is not triggering admission failure as expected."
+            )
         logger.info(
             f"Fault is live: '{self.TARGET_DEPLOYMENT}' deployment in "
             f"'{self.namespace}' shows ready_replicas < spec.replicas. New pods "
@@ -1171,26 +1190,21 @@ srv.serve_forever()
                 if e.status != 404:
                     raise
 
-    def _wait_for_symptom(self) -> None:
+    def _wait_for_symptom(self, timeout_s: float) -> bool:
         """Poll until the target deployment reports
-        ``ready_replicas < spec.replicas`` (or until the timeout).
+        ``ready_replicas < spec.replicas``; return False if ``timeout_s`` passes first.
         This confirms the ReplicaSet's attempt to recreate the pod was
         blocked by admission, which is what makes the fault
         user-observable."""
-        deadline = time.monotonic() + self.SYMPTOM_TIMEOUT_S
+        deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             d = self.apps_v1.read_namespaced_deployment(name=self.TARGET_DEPLOYMENT, namespace=self.namespace)
             desired = d.spec.replicas or 1
             ready = d.status.ready_replicas or 0
             if ready < desired:
-                return
+                return True
             time.sleep(self.SYMPTOM_POLL_INTERVAL_S)
-        raise RuntimeError(
-            f"Symptom did not manifest within {self.SYMPTOM_TIMEOUT_S}s: "
-            f"'{self.TARGET_DEPLOYMENT}' still shows full ready_replicas. The "
-            "ReplicaSet may have recreated the pod successfully, indicating the "
-            "fault is not triggering admission failure as expected."
-        )
+        return False
 
     def _wait_for_recovery(self) -> None:
         """Poll until the target deployment converges back to fully ready

@@ -51,10 +51,11 @@ class TrainTicketF22(Problem):
     def inject_fault(self):
         print("== Fault Injection ==")
         self.injector = TrainTicketFaultInjector(namespace=self.namespace)
-        self.injector._inject(
+        if not self.injector._inject(
             fault_type="tt-feat-22",
             decoy_count=self._decoy_count,
-        )
+        ):
+            raise RuntimeError(f"Failed to turn on flag tt-feat-22 in namespace {self.namespace}")
         print(
             f"Injected fault-22-sql-column-name-mismatch-error (decoys={self._decoy_flag_count}) | Namespace: {self.namespace}\n"
         )

@@ -29,7 +29,7 @@ from typing import Any, Literal
 
 from sregym.conductor.oracles.compound import CompoundedOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
-from sregym.conductor.problems.base import Problem
+from sregym.conductor.problems.base import Problem, serial_evaluation_timeout_s
 
 COMPOSITE_SPECS_PATH = Path(__file__).with_name("composite_specs.json")
 COMPOSITE_PREFIX = "composite_"
@@ -296,6 +296,11 @@ class CompositeFaultProblem(Problem):
                 "the cause is wrong.\n\n" + "\n\n".join(decoys)
             )
         return text
+
+    @property
+    def evaluation_timeout_s(self) -> float:
+        """Sum of the graded faults' bounds: the mitigation ``CompoundedOracle`` runs them in turn."""
+        return serial_evaluation_timeout_s(self.components[index] for index in self.fault_indices)
 
     def requires_khaos(self) -> bool:
         return any(component.requires_khaos() for component in self.components)

@@ -165,6 +165,21 @@ def test_decoys_are_injected_in_order_recovered_but_never_graded() -> None:
     assert problem.components[1].params == {"deployment": "geo"}
 
 
+def test_evaluation_timeout_sums_the_graded_faults_and_skips_decoys() -> None:
+    events: list[str] = []
+    faults = {"a": _Fault("a", events), "b": _Fault("b", events)}
+    faults["b"].evaluation_timeout_s = 600.0
+    spec = _spec(
+        ComponentSpec(role="fault", problem="a"),
+        ComponentSpec(role="decoy", decoy="benign_env_drift"),
+        ComponentSpec(role="fault", problem="b"),
+    )
+
+    problem = _build(spec, faults, events)
+
+    assert problem.evaluation_timeout_s == Problem.evaluation_timeout_s + 600.0
+
+
 def test_diagnosis_ground_truth_lists_every_cause_and_names_each_decoy_as_not_a_cause() -> None:
     events: list[str] = []
     faults = {"a": _Fault("a", events), "b": _Fault("b", events)}

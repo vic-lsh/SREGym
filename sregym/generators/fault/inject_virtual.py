@@ -13,6 +13,9 @@ from sregym.paths import TARGET_MICROSERVICES, fault_scratch_path
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
 
+# Bound for `kubectl rollout status` calls that previously had no --timeout.
+ROLLOUT_TIMEOUT_SECONDS = 120
+
 
 class VirtualizationFaultInjector(FaultInjector):
     def __init__(self, namespace: str):
@@ -175,7 +178,11 @@ class VirtualizationFaultInjector(FaultInjector):
 
     # --- V.5 - PVC claim name mismatch (per-service) ---
     def inject_pvc_claim_mismatch(self, microservices: list[str]):
-        """Make pods Pending by pointing Deployments at a non-existent PVC claim."""
+        """Make pods Pending by pointing Deployments at a non-existent PVC claim.
+
+        Raises ValueError, before changing anything, if any target has no PVC volume.
+        """
+        planned = []
         for service in microservices:
             dep = self._get_deployment_yaml(service)
             original = copy.deepcopy(dep)
@@ -190,10 +197,13 @@ class VirtualizationFaultInjector(FaultInjector):
                     pvc["claimName"] = pvc["claimName"] + "-broken"
                     changed = True
 
-            if not changed:
-                print(f"[{service}] No PVC volumes found; skipping.")
-                continue
+            planned.append((service, dep, original, changed))
 
+        unsupported = [service for service, _, _, changed in planned if not changed]
+        if unsupported:
+            raise ValueError(f"PVC claim mismatch cannot be injected: no PVC volume in deployment(s) {unsupported}")
+
+        for service, dep, original, _ in planned:
             modified = self._write_yaml_to_file(service, dep)
 
             # Replace the deployment with the modified one
@@ -264,10 +274,16 @@ class VirtualizationFaultInjector(FaultInjector):
 
             # Modify the deployment YAML to use the 'geo' binary instead of the 'profile' binary
             containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
+            changed = False
             for container in containers:
                 if "command" in container and "profile" in container["command"]:
                     print(f"Changing binary for container {container['name']} from 'profile' to 'geo'.")
                     container["command"] = ["geo"]  # Replace 'profile' with 'geo'
+                    changed = True
+            if not changed:
+                raise ValueError(
+                    f"Wrong binary usage cannot be injected into '{service}': no container runs the 'profile' binary"
+                )
 
             modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
 
@@ -601,7 +617,9 @@ class VirtualizationFaultInjector(FaultInjector):
             print(f"Patch result for {service}: {result}")
 
             self.kubectl.exec_command(f"kubectl rollout restart deployment {service} -n {self.namespace}")
-            self.kubectl.exec_command(f"kubectl rollout status deployment {service} -n {self.namespace}")
+            self.kubectl.exec_command(
+                f"kubectl rollout status deployment {service} -n {self.namespace} --timeout={ROLLOUT_TIMEOUT_SECONDS}s"
+            )
 
             self._wait_for_dns_policy_propagation(service, external_ns=propagation_ns, expect_external=expect_external)
 
@@ -627,7 +645,9 @@ class VirtualizationFaultInjector(FaultInjector):
             print(f"Patch result for {service}: {result}")
 
             self.kubectl.exec_command(f"kubectl rollout restart deployment {service} -n {self.namespace}")
-            self.kubectl.exec_command(f"kubectl rollout status deployment {service} -n {self.namespace}")
+            self.kubectl.exec_command(
+                f"kubectl rollout status deployment {service} -n {self.namespace} --timeout={ROLLOUT_TIMEOUT_SECONDS}s"
+            )
 
             self._wait_for_dns_policy_propagation(service, external_ns=propagation_ns, expect_external=expect_external)
 
@@ -1034,7 +1054,9 @@ class VirtualizationFaultInjector(FaultInjector):
             print(f"Restored ConfigMap: {configmap_name}")
 
             self.kubectl.exec_command(f"kubectl rollout restart deployment {microservice} -n {self.namespace}")
-            self.kubectl.exec_command(f"kubectl rollout status deployment {microservice} -n {self.namespace}")
+            self.kubectl.exec_command(
+                f"kubectl rollout status deployment {microservice} -n {self.namespace} --timeout={ROLLOUT_TIMEOUT_SECONDS}s"
+            )
             print(f"Deployment {microservice} restarted and should now be healthy")
 
     # Inject ConfigMap drift by removing critical keys
@@ -1059,8 +1081,9 @@ class VirtualizationFaultInjector(FaultInjector):
                 del fault_config["GeoMongoAddress"]
                 key_to_remove = "GeoMongoAddress"
             else:
-                print(f"Service {service} not supported for ConfigMap drift fault")
-                continue
+                raise ValueError(
+                    f"ConfigMap drift cannot be injected into '{service}': only 'geo' with GeoMongoAddress is supported"
+                )
 
             configmap_name = f"{service}-config"
             fault_config_json = json.dumps(fault_config, indent=2)
@@ -1245,7 +1268,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
     # Duplicate PVC mounts multiple replicas share ReadWriteOnce PVC causing mount conflict
     def _storage_baseline_path(self, service: str) -> Path:
-        return Path("/tmp") / f"deployment-state-{self.namespace}-{service}.yaml"
+        return Path(fault_scratch_path(f"deployment-state-{self.namespace}-{service}.yaml"))
 
     @staticmethod
     def _reapplicable_deployment_manifest(deployment_yaml: dict) -> dict:
@@ -1448,6 +1471,11 @@ class VirtualizationFaultInjector(FaultInjector):
             if self.namespace == "astronomy-shop":
                 if service == "frontend-proxy":
                     shadow_vars = {"FRONTEND_HOST": "localhost"}
+            if shadow_vars is None:
+                raise ValueError(
+                    f"Env variable shadowing cannot be injected into '{service}' in namespace '{self.namespace}': "
+                    "only astronomy-shop frontend-proxy is supported"
+                )
 
             for container in containers:
                 if "env" not in container:
@@ -2734,15 +2762,26 @@ class VirtualizationFaultInjector(FaultInjector):
         )
         kubectl.exec_command(f"kubectl rollout restart deployment {service_name} -n {self.testbed}")
 
+    def _get_object_yaml(self, kind: str, name: str) -> dict:
+        """Return the live object as a dict; raise ValueError if kubectl did not return one.
+
+        `exec_command` returns stderr on failure. That text parses as YAML too (as a string, or as
+        a one-key mapping such as `Error from server (NotFound): ...`), so check for an object.
+        """
+        output = self.kubectl.exec_command(f"kubectl get {kind} {name} -n {self.namespace} -o yaml")
+        try:
+            parsed = yaml.safe_load(output)
+        except yaml.YAMLError:
+            parsed = None
+        if not (isinstance(parsed, dict) and "kind" in parsed and isinstance(parsed.get("metadata"), dict)):
+            raise ValueError(f"Cannot read {kind} '{name}' in namespace '{self.namespace}': {str(output)[:200]}")
+        return parsed
+
     def _get_deployment_yaml(self, service_name: str):
-        deployment_yaml = self.kubectl.exec_command(
-            f"kubectl get deployment {service_name} -n {self.namespace} -o yaml"
-        )
-        return yaml.safe_load(deployment_yaml)
+        return self._get_object_yaml("deployment", service_name)
 
     def _get_service_yaml(self, service_name: str):
-        deployment_yaml = self.kubectl.exec_command(f"kubectl get service {service_name} -n {self.namespace} -o yaml")
-        return yaml.safe_load(deployment_yaml)
+        return self._get_object_yaml("service", service_name)
 
     def _get_daemon_set_yaml(self, daemon_set_name: str) -> dict | None:
         daemon_set_yaml = self.kubectl.exec_command(f"kubectl get ds {daemon_set_name} -n {self.namespace} -o yaml")

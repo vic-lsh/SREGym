@@ -56,10 +56,11 @@ class TrainTicketF17(Problem):
     def inject_fault(self):
         print("== Fault Injection ==")
         self.injector = TrainTicketFaultInjector(namespace=self.namespace)
-        self.injector._inject(
+        if not self.injector._inject(
             fault_type="tt-feat-17",
             decoy_count=self._decoy_count,
-        )
+        ):
+            raise RuntimeError(f"Failed to turn on flag tt-feat-17 in namespace {self.namespace}")
         print(
             f"Injected fault-17-nested-sql-select-clause-error (decoys={self._decoy_flag_count}) | Namespace: {self.namespace}\n"
         )

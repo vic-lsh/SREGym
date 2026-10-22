@@ -10,6 +10,11 @@ from sregym.service.apps.base import Application
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
 
+# Prometheus/Grafana manifests the in-cluster deploy job (deploy-job/deploy.sh) applies into kube-system.
+_KUBE_SYSTEM_MONITORING = (
+    TARGET_MICROSERVICES / "train-ticket" / "deploy-job" / "deployment" / "kubernetes-manifests" / "prometheus"
+)
+
 
 class TrainTicket(Application):
     def __init__(self):
@@ -38,6 +43,13 @@ class TrainTicket(Application):
 
         Helm.install(**self.helm_configs)
         self.kubectl.wait_for_job_completion(job_name="train-ticket-deploy", namespace="train-ticket", timeout=1800)
+        # The finished deploy job leaves a Succeeded pod whose container is not ready. Pod-walk
+        # mitigation oracles (MitigationOracle and most per-fault oracles) require every pod in
+        # the namespace Running and ready, so with that pod present no train_ticket mitigation
+        # could ever pass. The job has done its work.
+        self.kubectl.exec_command(
+            f"kubectl delete job train-ticket-deploy -n {self.namespace} --cascade=foreground --wait=true"
+        )
 
         self._deploy_flagd_infrastructure()
         self._deploy_load_generator()
@@ -69,6 +81,10 @@ class TrainTicket(Application):
         # Helm.uninstall(**self.helm_configs)
         if self.namespace:
             self.kubectl.delete_namespace(self.namespace)
+        # The deploy job also applies a Prometheus/Grafana stack into kube-system, which neither the
+        # namespace delete nor the Conductor's baseline reconcile (kube-system is protected) removes.
+        if _KUBE_SYSTEM_MONITORING.exists():
+            self.kubectl.exec_command(f"kubectl delete -f {_KUBE_SYSTEM_MONITORING} --ignore-not-found")
 
     def create_workload(self):
         """Create workload manager for log collection (like astronomy shop)."""

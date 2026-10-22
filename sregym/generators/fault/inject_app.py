@@ -144,17 +144,20 @@ class ApplicationFaultInjector(FaultInjector):
         """Inject a fault by pulling a buggy config of the application image.
 
         NOTE: currently only the geo microservice has a buggy image.
+        Raises ValueError if a service has no `hotel-reserv-<service>` container to modify.
         """
         for service in microservices:
             # Get the deployment associated with the service
             deployment = self.kubectl.get_deployment(service, self.namespace)
-            if deployment:
-                # Modify the image to use the buggy image
-                for container in deployment.spec.template.spec.containers:
-                    if container.name == f"hotel-reserv-{service}":
-                        container.image = "yinfangchen/geo:app3"
-                self.kubectl.update_deployment(service, self.namespace, deployment)
-                time.sleep(10)
+            target = f"hotel-reserv-{service}"
+            containers = [c for c in deployment.spec.template.spec.containers if c.name == target] if deployment else []
+            if not containers:
+                raise ValueError(f"Misconfig app cannot be injected into '{service}': no container named '{target}'")
+            # Modify the image to use the buggy image
+            for container in containers:
+                container.image = "yinfangchen/geo:app3"
+            self.kubectl.update_deployment(service, self.namespace, deployment)
+            time.sleep(10)
 
     def recover_misconfig_app(self, microservices: list[str]):
         for service in microservices:

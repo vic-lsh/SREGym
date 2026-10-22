@@ -272,7 +272,8 @@ class EdgeRequestFilterCPUSaturation(Problem):
         self._capture_baseline_template()
         self._patch_edge_proxy()
         self._start_crafted_traffic()
-        self.kubectl.wait_for_ready(self.namespace, max_wait=180)
+        # Scoped to the patched proxy: other faults may already have broken the namespace.
+        self.kubectl.wait_for_ready(self.namespace, service_names=self.faulty_service, max_wait=180)
         print(
             f"Fault: EdgeRequestFilterCPUSaturation | Service: {self.faulty_service} | "
             f"Namespace: {self.namespace} | Regex: {self.bad_regex}\n"

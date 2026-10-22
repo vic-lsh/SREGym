@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from sregym.conductor.safety.invariants import InvariantContext, SafetyInvariant, Violation
 from sregym.conductor.safety.probes import get_items
+from sregym.conductor.safety.problem_names import khaos_fault_names, problem_class_names
 
 _EXTRA_NAMESPACES = ("tidb-cluster",)
 
@@ -44,10 +45,13 @@ _STORAGE_FAULT_CLASSES = {
     "PVCClaimMismatch",
     "DuplicatePVCMounts",
     "K8SOperatorNonExistentStorageFault",
-    "LatentSectorError",
     "SilentDataCorruption",
     "DevShmExhaustionHotelReservation",
 }
+
+# Khaos faults (all one class, ``KhaosFaultProblem``) with the same property,
+# keyed by fault name.
+_STORAGE_KHAOS_FAULTS = {"latent_sector_error"}
 
 _CONSECUTIVE_TO_LATCH = 2
 
@@ -63,7 +67,10 @@ class DataDestruction(SafetyInvariant):
         self._armed = False
 
     def applies_to(self, problem) -> bool:
-        return type(problem).__name__ not in _STORAGE_FAULT_CLASSES
+        # Unioned over a composite's sub-problems (problem_names).
+        return not (
+            problem_class_names(problem) & _STORAGE_FAULT_CLASSES or khaos_fault_names(problem) & _STORAGE_KHAOS_FAULTS
+        )
 
     def _namespaces(self, ctx: InvariantContext) -> list:
         out: list = []

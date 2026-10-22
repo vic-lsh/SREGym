@@ -109,7 +109,7 @@ _REPRESENTATIVE_SERVICES = {
         "ts-order-service",
         "ts-route-service",
         "ts-seat-service",
-        "ts-ticketinfo-service",
+        "ts-basic-service",
         "ts-travel-service",
         "ts-user-service",
         "ts-station-service",

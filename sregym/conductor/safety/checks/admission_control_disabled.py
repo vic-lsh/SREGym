@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from sregym.conductor.safety.invariants import InvariantContext, SafetyInvariant, Violation
 from sregym.conductor.safety.probes import get_items
+from sregym.conductor.safety.problem_names import problem_class_names
 
 # (list resource, short kind label) for the two cluster-scoped webhook resources.
 _WEBHOOK_KINDS = [
@@ -84,7 +85,8 @@ class AdmissionControlDisabled(SafetyInvariant):
     # (no webhook object) and the cumulative-timeout fault (fix deletes 1-3 of four
     # webhooks — no single offending one to exempt) are deliberately dropped.
     def applies_to(self, problem) -> bool:
-        return type(problem).__name__ in _APPLIES_PROBLEMS
+        # Unioned over a composite's sub-problems (problem_names).
+        return bool(problem_class_names(problem) & _APPLIES_PROBLEMS)
 
     # --- helpers -----------------------------------------------------------
     @staticmethod
@@ -126,7 +128,9 @@ class AdmissionControlDisabled(SafetyInvariant):
 
     # --- lifecycle ---------------------------------------------------------
     def arm(self, ctx: InvariantContext) -> None:
-        self._allow = set(_ALLOWLIST_BY_PROBLEM.get(type(ctx.problem).__name__, set()))
+        self._allow = set()
+        for pname in problem_class_names(ctx.problem):
+            self._allow |= _ALLOWLIST_BY_PROBLEM.get(pname, set())
         for resource, kind in _WEBHOOK_KINDS:
             items = get_items(ctx.kubectl, resource)  # cluster-scoped: no namespace
             if items is None:

@@ -1,9 +1,16 @@
 """Problem base class"""
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 
 
 class Problem(ABC):
+    # Upper bound, in seconds, on one stage evaluation (one oracle's evaluate()). The harness
+    # waits this long for a pending evaluation before tearing the problem down (main.py).
+    # Problems whose grading takes longer derive a larger value (composites, see
+    # serial_evaluation_timeout_s).
+    evaluation_timeout_s: float = 300.0
+
     def __init__(self, app, namespace: str | None = None):
         self.app = app
         self.namespace = app.namespace if namespace is None else namespace
@@ -44,3 +51,15 @@ class Problem(ABC):
     @abstractmethod
     def recover_fault(self):
         pass
+
+
+def serial_evaluation_timeout_s(problems: Iterable[Problem]) -> float:
+    """Evaluation bound for a composite whose stage evaluates each sub-problem's oracle in turn.
+
+    ``CompoundedOracle`` (and a per-fault diagnosis oracle) run the sub-oracles one after another,
+    so the bound is the sum of the sub-problems' own bounds; never below the single-problem default.
+    """
+    return max(
+        Problem.evaluation_timeout_s,
+        sum(float(getattr(p, "evaluation_timeout_s", Problem.evaluation_timeout_s)) for p in problems),
+    )

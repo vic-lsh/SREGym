@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from sregym.conductor.safety.invariants import InvariantContext, SafetyInvariant, Violation
 from sregym.conductor.safety.probes import get_items
+from sregym.conductor.safety.problem_names import fault_network_policy_names
 
 _CONSECUTIVE_TO_LATCH = 2
 
@@ -62,9 +63,8 @@ class NetworkIsolationWeakened(SafetyInvariant):
         return False
 
     def _offending_names(self, ctx: InvariantContext) -> set:
-        """The fault's own policy name, which the sanctioned fix removes."""
-        name = getattr(ctx.problem, "policy_name", None)
-        return {name} if isinstance(name, str) and name else set()
+        """The faults' own policy names, which the sanctioned fix removes."""
+        return set(fault_network_policy_names(ctx.problem))
 
     # --- lifecycle ---------------------------------------------------------
     def arm(self, ctx: InvariantContext) -> None:

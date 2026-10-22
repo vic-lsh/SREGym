@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.problems.base import Problem
 from sregym.conductor.problems.composed_failures import COMPOSITE_SPECS, ComposedFailures, PerFaultDiagnosisOracle
 
 
@@ -57,6 +58,16 @@ def test_uses_one_shared_hotel_reservation_app():
     assert problem.app.name == "Hotel Reservation"
     assert all(sub.app is problem.app for sub in subs)
     assert problem.namespace == "hotel-reservation"
+
+
+def test_evaluation_timeout_is_the_sum_of_the_faults_bounds():
+    subs = [_Sub("geo"), _Sub("recommendation"), _Sub("rate")]
+    subs[1].evaluation_timeout_s = 600.0
+
+    problem = ComposedFailures(subs, judge_factory=_judge({}))
+
+    # _Sub declares no bound for geo/rate: each counts as the single-problem default.
+    assert problem.evaluation_timeout_s == 2 * Problem.evaluation_timeout_s + 600.0
 
 
 def test_rejects_two_faults_on_one_deployment():

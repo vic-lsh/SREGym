@@ -205,9 +205,20 @@ class TrainTicketFaultInjector(FaultInjector):
             print(f"Error deactivating decoy flags: {e}")
             return False
 
-    def _inject(self, fault_type: str, microservices: list[str] | None = None, duration: str | None = None):
-        """Override base class _inject to use feature flag-based injection."""
-        self.activate_decoy_flags(count=10)
+    def _inject(
+        self,
+        fault_type: str,
+        microservices: list[str] | None = None,
+        duration: str | None = None,
+        decoy_count: int = 10,
+    ):
+        """Override base class _inject to use feature flag-based injection.
+
+        ``decoy_count`` decoy feature flags are turned on alongside the fault
+        (0 turns none on). Returns whether the fault flag was turned on.
+        """
+        if decoy_count > 0:
+            self.activate_decoy_flags(count=decoy_count)
         return self._set_fault_state(fault_type, "on")
 
     def _recover(self, fault_type: str, microservices: list[str] | None = None):

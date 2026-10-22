@@ -304,8 +304,8 @@ def test_recover_reapplies_each_workload_backup_and_restarts_it():
     assert kubectl.commands == [
         "kubectl apply -f /tmp/mongodb-geo_modified.yaml -n hotel-reservation",
         "kubectl rollout restart deployment mongodb-geo -n hotel-reservation",
-        "kubectl rollout status deployment mongodb-geo -n hotel-reservation",
+        "kubectl rollout status deployment mongodb-geo -n hotel-reservation --timeout=120s",
         "kubectl apply -f /tmp/mongodb-rate_modified.yaml -n hotel-reservation",
         "kubectl rollout restart deployment mongodb-rate -n hotel-reservation",
-        "kubectl rollout status deployment mongodb-rate -n hotel-reservation",
+        "kubectl rollout status deployment mongodb-rate -n hotel-reservation --timeout=120s",
     ]
