@@ -1,10 +1,8 @@
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
+from sregym.conductor.problems.variant_utils import create_app
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
-from sregym.service.apps.astronomy_shop import AstronomyShop
-from sregym.service.apps.hotel_reservation import HotelReservation
-from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
@@ -14,15 +12,7 @@ class SidecarPortConflict(Problem):
         self.app_name = app_name
         self.faulty_service = faulty_service
 
-        if app_name == "social_network":
-            app = SocialNetwork()
-        elif app_name == "hotel_reservation":
-            app = HotelReservation()
-        elif app_name == "astronomy_shop":
-            app = AstronomyShop()
-        else:
-            raise ValueError(f"Unsupported app name: {app_name}")
-
+        app = create_app(app_name)
         super().__init__(app=app)
 
         self.kubectl = KubeCtl()

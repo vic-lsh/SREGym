@@ -37,6 +37,7 @@ from sregym.conductor.problems.base import Problem
 from sregym.service.apps.astronomy_shop import AstronomyShop
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.apps.social_network import SocialNetwork
+from sregym.service.apps.train_ticket import TrainTicket
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
@@ -54,6 +55,7 @@ class PSARestrictedBlocksRecreation(Problem):
         "hotel_reservation": HotelReservation,
         "social_network": SocialNetwork,
         "astronomy_shop": AstronomyShop,
+        "train_ticket": TrainTicket,
     }
 
     def __init__(self, app_name: str = "hotel_reservation", faulty_service: str = "recommendation"):
