@@ -1,209 +1,90 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""DNSResolutionMitigationOracle against an in-memory namespace (no cluster)."""
+
+import json
+import re
 from types import SimpleNamespace
 
-from kubernetes.client.rest import ApiException
+import pytest
 
-from sregym.conductor.oracles.dns_resolution_mitigation import DNSResolutionMitigationOracle
+from sregym.conductor.oracles.dns_resolution_mitigation import DNSResolutionMitigationOracle, resolved
 
-
-def _service(name, selector=None, port=9090):
-    return SimpleNamespace(
-        metadata=SimpleNamespace(name=name),
-        spec=SimpleNamespace(
-            selector=selector,
-            ports=[] if port is None else [SimpleNamespace(port=port)],
-        ),
-    )
+NS = "train-ticket"
 
 
-def _deployment(
-    name="frontend",
-    *,
-    generation=1,
-    observed_generation=1,
-    replicas=1,
-    updated=1,
-    ready=1,
-    available=1,
-    unavailable=0,
-    dns_policy="ClusterFirst",
-    dns_config=None,
-):
-    pod_spec = SimpleNamespace(dns_policy=dns_policy, dns_config=dns_config)
-    return SimpleNamespace(
-        metadata=SimpleNamespace(name=name, generation=generation),
-        spec=SimpleNamespace(replicas=replicas, template=SimpleNamespace(spec=pod_spec)),
-        status=SimpleNamespace(
-            observed_generation=observed_generation,
-            updated_replicas=updated,
-            ready_replicas=ready,
-            available_replicas=available,
-            unavailable_replicas=unavailable,
-        ),
-    )
+class FakeKubectl:
+    """The slice of KubeCtl the oracle uses. Like KubeCtl.exec_command, a failing command
+    returns its stderr instead of raising. `pods` maps a Running pod to the Service names it
+    can resolve, or to None when its container cannot be exec'd (crash looping)."""
 
-
-class _CoreV1:
-    def __init__(self, phase="Succeeded", logs="DNS_OK\n"):
-        self.phase = phase
-        self.logs = logs
-        self.created_pods = []
-        self.deleted_pods = []
-
-    def create_namespaced_pod(self, namespace, body):
-        self.created_pods.append((namespace, body))
-
-    def read_namespaced_pod(self, name, namespace):
-        return SimpleNamespace(status=SimpleNamespace(phase=self.phase))
-
-    def read_namespaced_pod_log(self, name, namespace):
-        return self.logs
-
-    def delete_namespaced_pod(self, name, namespace, grace_period_seconds):
-        self.deleted_pods.append((name, namespace, grace_period_seconds))
-
-
-class _KubeCtl:
-    def __init__(self, services, deployments, core_v1=None):
-        self.services = services
-        self.deployments = deployments
-        self.core_v1_api = core_v1 or _CoreV1()
+    def __init__(self, services, pods):
+        self.services, self.pods = services, pods
 
     def list_services(self, namespace):
-        return SimpleNamespace(items=self.services)
+        return SimpleNamespace(items=[SimpleNamespace(metadata=SimpleNamespace(name=s)) for s in self.services])
 
-    def get_deployment(self, name, namespace):
-        if name not in self.deployments:
-            raise ApiException(status=404)
-        return self.deployments[name]
-
-
-def _oracle(kubectl, faulty_service="frontend"):
-    problem = SimpleNamespace(
-        namespace="astronomy-shop",
-        faulty_service=faulty_service,
-        kubectl=kubectl,
-    )
-    oracle = DNSResolutionMitigationOracle(problem)
-    oracle.poll_interval_seconds = 0
-    oracle.rollout_timeout_seconds = 0
-    return oracle
-
-
-def test_checks_only_the_faulty_service_fqdn():
-    core_v1 = _CoreV1()
-    kubectl = _KubeCtl(
-        services=[
-            _service("frontend", {"app": "frontend"}),
-            _service("unrelated-broken-service", {"app": "broken"}),
-        ],
-        deployments={"frontend": _deployment()},
-        core_v1=core_v1,
-    )
-
-    assert _oracle(kubectl).evaluate()["success"] is True
-    assert len(core_v1.created_pods) == 1
-    command = core_v1.created_pods[0][1].spec.containers[0].command[-1]
-    assert "frontend.astronomy-shop.svc.cluster.local" in command
-    assert "nslookup frontend.astronomy-shop.svc.cluster.local" in command
-    assert "nc -z -w 5 frontend.astronomy-shop.svc.cluster.local 9090" in command
-    assert "unrelated-broken-service" not in command
+    def exec_command(self, command):
+        if command.startswith("kubectl get service "):
+            return json.dumps({"app": command.split()[3]})
+        if command.startswith("kubectl get pods "):
+            return " ".join(self.pods)
+        m = re.fullmatch(rf"kubectl exec -n {NS} (\S+) -- getent hosts (\S+)\.{NS}\.svc\.cluster\.local", command)
+        assert m, command
+        pod, svc = m.groups()
+        if pod not in self.pods:
+            return f'Error from server (NotFound): pods "{pod}" not found'
+        if self.pods[pod] is None:
+            return f'error: Internal error occurred: unable to upgrade connection: container not found ("{pod}")'
+        if svc in self.pods[pod]:
+            return f"10.96.0.7       {svc}.{NS}.svc.cluster.local\n"
+        return "command terminated with exit code 2"
 
 
-def test_probe_inherits_the_affected_deployment_dns_settings():
-    dns_config = SimpleNamespace(nameservers=["8.8.8.8"])
-    core_v1 = _CoreV1(phase="Failed", logs="server can't find frontend: NXDOMAIN\n")
-    kubectl = _KubeCtl(
-        services=[_service("frontend", {"app": "frontend"})],
-        deployments={"frontend": _deployment(dns_policy="None", dns_config=dns_config)},
-        core_v1=core_v1,
-    )
-
-    assert _oracle(kubectl).evaluate()["success"] is False
-    probe_spec = core_v1.created_pods[0][1].spec
-    assert probe_spec.dns_policy == "None"
-    assert probe_spec.dns_config is dns_config
-    assert len(core_v1.deleted_pods) == 1
+def _evaluate(services, pods):
+    problem = SimpleNamespace(kubectl=FakeKubectl(services, pods), namespace=NS, faulty_service="ts-user-service")
+    return DNSResolutionMitigationOracle(problem).evaluate()["success"]
 
 
-def test_rejects_missing_faulty_service():
-    core_v1 = _CoreV1()
-    kubectl = _KubeCtl(services=[], deployments={}, core_v1=core_v1)
-
-    assert _oracle(kubectl).evaluate()["success"] is False
-    assert core_v1.created_pods == []
+SERVICES = ["ts-user-service", "ts-auth-service", "nacos"]
 
 
-def test_rejects_unavailable_source_deployment():
-    core_v1 = _CoreV1()
-    kubectl = _KubeCtl(
-        services=[_service("frontend", {"app": "frontend"})],
-        deployments={"frontend": _deployment(available=0)},
-        core_v1=core_v1,
-    )
-
-    assert _oracle(kubectl).evaluate()["success"] is False
-    assert core_v1.created_pods == []
+def test_passes_when_every_pod_resolves_every_service():
+    assert _evaluate(SERVICES, {"old": set(SERVICES), "new": set(SERVICES)})
 
 
-def test_rejects_successful_dns_lookup_when_tcp_connection_fails():
-    core_v1 = _CoreV1(phase="Failed", logs="")
-    kubectl = _KubeCtl(
-        services=[_service("frontend", {"app": "frontend"}, port=8080)],
-        deployments={"frontend": _deployment()},
-        core_v1=core_v1,
-    )
-
-    assert _oracle(kubectl).evaluate()["success"] is False
-    command = core_v1.created_pods[0][1].spec.containers[0].command[-1]
-    assert "nslookup frontend.astronomy-shop.svc.cluster.local" in command
-    assert "nc -z -w 5 frontend.astronomy-shop.svc.cluster.local 8080" in command
-
-
-def test_rejects_service_without_a_usable_port():
-    core_v1 = _CoreV1()
-    kubectl = _KubeCtl(
-        services=[_service("frontend", {"app": "frontend"}, port=None)],
-        deployments={"frontend": _deployment()},
-        core_v1=core_v1,
-    )
-
-    assert _oracle(kubectl).evaluate()["success"] is False
-    assert core_v1.created_pods == []
+@pytest.mark.parametrize(
+    "pods",
+    [
+        # Regression (live #150): a stalled rollout leaves the old pod resolving while the
+        # faulty pod crash loops; checking only the first pod passed with the fault in place.
+        {"old": set(SERVICES), "new": None},
+        {"old": set(SERVICES), "new": {"ts-user-service"}},
+        {"only": None},
+        {},
+    ],
+)
+def test_fails_when_any_running_pod_cannot_resolve(pods):
+    assert not _evaluate(SERVICES, pods)
 
 
-def test_rejects_available_old_replicas_before_current_rollout_completes():
-    core_v1 = _CoreV1()
-    kubectl = _KubeCtl(
-        services=[_service("frontend", {"app": "frontend"})],
-        deployments={
-            "frontend": _deployment(
-                generation=2,
-                observed_generation=1,
-                updated=0,
-                ready=1,
-                available=1,
-                unavailable=1,
-            )
-        },
-        core_v1=core_v1,
-    )
-
-    assert _oracle(kubectl).evaluate()["success"] is False
-    assert core_v1.created_pods == []
-
-
-def test_cluster_wide_fault_skips_services_without_deployments():
-    core_v1 = _CoreV1()
-    kubectl = _KubeCtl(
-        services=[
-            _service("external-name", None),
-            _service("orphan", {"app": "orphan"}),
-            _service("frontend", {"app": "frontend"}),
-        ],
-        deployments={"frontend": _deployment()},
-        core_v1=core_v1,
-    )
-
-    assert _oracle(kubectl, faulty_service=None).evaluate()["success"] is True
-    command = core_v1.created_pods[0][1].spec.containers[0].command[-1]
-    assert "frontend.astronomy-shop.svc.cluster.local" in command
+def test_resolved_requires_the_name_in_a_hosts_line():
+    fqdn = f"nacos.{NS}.svc.cluster.local"
+    assert resolved(f"10.96.0.9   {fqdn}\n", fqdn)
+    for output in (
+        "",
+        "command terminated with exit code 2",
+        'unable to upgrade connection: container not found ("x")',
+    ):
+        assert not resolved(output, fqdn)

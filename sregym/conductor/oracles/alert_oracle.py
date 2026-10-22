@@ -2,6 +2,7 @@ import json
 import subprocess
 import time
 
+from sregym.conductor.oracles.alert_attribution import AlertScope, fault_scope
 from sregym.conductor.oracles.base import Oracle
 
 # Prometheus endpoint used from *inside* the prometheus-server pod via
@@ -17,12 +18,41 @@ _POLL_INTERVAL_SECONDS = 10
 _BUFFER_SECONDS = 30
 
 
+_INFRA_POD_PREFIXES = (
+    "grafana",
+    "prometheus",
+    "alertmanager",
+    "jaeger",
+    "otel-collector",
+    "opentelemetry",
+    "opensearch",
+    "blackbox",
+    "observe",
+    "promtail",
+    "flagd",
+    "load-generator",
+    "loadgenerator",
+)
+
+
 class AlertOracle(Oracle):
     """Mitigation oracle that passes when no Prometheus alerts are firing.
 
     Queries the Prometheus alerts API for firing alerts scoped to the
     problem's namespace.  Because alerts can be flaky, the oracle waits
     for a sustained silence window before declaring success.
+
+    Alerts originating from infrastructure components (grafana, prometheus,
+    otel-collector, etc.) are excluded by default since they are not
+    related to application faults.
+
+    In a composite (``scope_to_fault``), only alerts attributable to this
+    problem's own fault count (``alert_attribution.AlertScope``); other
+    faults' and unrelated alerts are ignored.
+
+    ``fetch_alerts`` returns the Prometheus ``/api/v1/alerts`` payload
+    (default: ``kubectl exec`` into prometheus-server); ``clock`` and
+    ``sleep`` drive the buffer and silence window.
     """
 
     importance = 1.0
@@ -34,19 +64,32 @@ class AlertOracle(Oracle):
         poll_interval_seconds=_POLL_INTERVAL_SECONDS,
         buffer_seconds=_BUFFER_SECONDS,
         exclude_alerts=None,
+        include_infra_alerts=False,
+        fetch_alerts=None,
+        clock=time.monotonic,
+        sleep=time.sleep,
     ):
         super().__init__(problem)
         self.sustained_silence_seconds = sustained_silence_seconds
         self.poll_interval_seconds = poll_interval_seconds
         self.buffer_seconds = buffer_seconds
         self.exclude_alerts = set(exclude_alerts or [])
+        self.include_infra_alerts = include_infra_alerts
+        self.fetch_alerts = fetch_alerts or self._fetch_prometheus_alerts
+        self.clock = clock
+        self.sleep = sleep
+        # None: every alert in the namespace counts (a single fault).
+        self.scope: AlertScope | None = None
+
+    def scope_to_fault(self) -> None:
+        self.scope = fault_scope(self.problem)
 
     # ------------------------------------------------------------------
     # Prometheus query helpers
     # ------------------------------------------------------------------
 
-    def _query_firing_alerts(self, namespace: str) -> list[dict]:
-        """Return currently firing alerts for *namespace* via the Prometheus API.
+    def _fetch_prometheus_alerts(self) -> dict:
+        """Return the Prometheus ``/api/v1/alerts`` payload.
 
         Uses ``kubectl exec`` into the prometheus-server pod with localhost
         so we don't depend on cluster DNS (which may be broken by fault
@@ -68,19 +111,31 @@ class AlertOracle(Oracle):
         ]
         try:
             raw = subprocess.check_output(cmd, text=True, timeout=15)
-            payload = json.loads(raw)
+            return json.loads(raw)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
             raise RuntimeError("Failed to query Prometheus alerts") from exc
 
+    def _query_firing_alerts(self, namespace: str) -> list[dict]:
+        """Return the currently firing alerts in *namespace* that count for this oracle."""
+        payload = self.fetch_alerts()
         firing = []
         for alert in payload.get("data", {}).get("alerts", []):
             if alert.get("state") != "firing":
                 continue
             labels = alert.get("labels", {})
-            if labels.get("namespace") == namespace:
-                if labels.get("alertname") in self.exclude_alerts:
+            if labels.get("namespace") != namespace:
+                continue
+            if labels.get("alertname") in self.exclude_alerts:
+                continue
+            if not self.include_infra_alerts:
+                pod = labels.get("pod", "")
+                svc = labels.get("service_name", "")
+                source = pod or svc
+                if any(source.startswith(p) for p in _INFRA_POD_PREFIXES):
                     continue
-                firing.append(alert)
+            if self.scope is not None and not self.scope.attributes(labels):
+                continue
+            firing.append(alert)
         return firing
 
     def _query_max_alert_for_duration(self) -> float:
@@ -139,14 +194,14 @@ class AlertOracle(Oracle):
 
         # Buffer: give alerts time to resolve after mitigation.
         print(f"⏳ Waiting {self.buffer_seconds}s buffer before checking alerts…")
-        time.sleep(self.buffer_seconds)
+        self.sleep(self.buffer_seconds)
 
         # Poll for sustained silence. Any firing alert is an immediate failure.
-        start = time.monotonic()
+        start = self.clock()
         last_log_second = -1
 
         while True:
-            elapsed = time.monotonic() - start
+            elapsed = self.clock() - start
             if elapsed >= self.sustained_silence_seconds:
                 break
 
@@ -154,7 +209,7 @@ class AlertOracle(Oracle):
 
             if firing:
                 names = ", ".join(self._fmt_alert(a) for a in firing)
-                print(f"❌ Firing alerts in {namespace}: {names}")
+                print(f"❌ Firing alerts in {namespace}{self._scope_note()}: {names}")
                 return {"success": False}
 
             elapsed_int = int(elapsed)
@@ -162,7 +217,12 @@ class AlertOracle(Oracle):
                 print(f"🔇 No alerts firing — silence for {elapsed_int}/{self.sustained_silence_seconds}s")
                 last_log_second = elapsed_int
 
-            time.sleep(self.poll_interval_seconds)
+            self.sleep(self.poll_interval_seconds)
 
-        print(f"✅ No alerts firing in {namespace} for {self.sustained_silence_seconds}s")
+        print(f"✅ No alerts firing in {namespace}{self._scope_note()} for {self.sustained_silence_seconds}s")
         return {"success": True}
+
+    def _scope_note(self) -> str:
+        if self.scope is None:
+            return ""
+        return f" attributable to {type(self.problem).__name__} ({', '.join(sorted(self.scope.workloads))})"

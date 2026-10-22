@@ -20,6 +20,16 @@ class Oracle(ABC):
     def __init__(self, problem):
         self.problem = problem
 
+    # An optional hook with a do-nothing default, not abstract: most oracles already judge only
+    # their own fault, and @abstractmethod would force each of them to restate the no-op.
+    def scope_to_fault(self) -> None:  # noqa: B027
+        """Judge only evidence attributable to this oracle's own fault, not the whole namespace.
+
+        Called by ``CompositeFaultProblem`` on every fault component's oracle, where other faults
+        share the namespace. Default: nothing to narrow (the oracle already checks only its own
+        fault).
+        """
+
     def settle_rollouts(
         self, *, timeout_s=ROLLOUT_SETTLE_S, poll_s=ROLLOUT_POLL_S, only=None, read=None
     ) -> Settle | None:

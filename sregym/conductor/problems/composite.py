@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.compound import CompoundedOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem, serial_evaluation_timeout_s
@@ -232,6 +233,33 @@ def _raw(method: Callable[[], Any]) -> Callable[[], Any]:
     return lambda: wrapped(owner)
 
 
+def _nested_oracles(roots: Any) -> list[Oracle]:
+    """Every oracle in *roots* and the oracles nested in their attributes, each once."""
+
+    seen: set[int] = set()
+    found: list[Oracle] = []
+
+    def visit(obj: Any) -> None:
+        if isinstance(obj, (list, tuple, set)):
+            for item in obj:
+                visit(item)
+            return
+        if isinstance(obj, dict):
+            for item in obj.values():
+                visit(item)
+            return
+        if not isinstance(obj, Oracle) or id(obj) in seen:
+            return
+        seen.add(id(obj))
+        found.append(obj)
+        for attr, value in vars(obj).items():
+            if attr != "problem":
+                visit(value)
+
+    visit(list(roots))
+    return found
+
+
 class CompositeFaultProblem(Problem):
     """Several components live at once on one application; see the module docstring."""
 
@@ -271,6 +299,11 @@ class CompositeFaultProblem(Problem):
         for index in self.fault_indices:
             if self.components[index].mitigation_oracle is None:
                 raise ValueError(f"{spec.problem_id}: fault {spec.components[index].name} has no mitigation oracle")
+        # Faults share the namespace: each fault's oracle judges only its own fault's evidence
+        # (an AlertOracle ignores alerts the other faults cause), as robust-skills'
+        # ColocatedComposite does.
+        for oracle in _nested_oracles(self.components[index].mitigation_oracle for index in self.fault_indices):
+            oracle.scope_to_fault()
         self.mitigation_oracle = CompoundedOracle(
             self,
             **{self._key(index): self.components[index].mitigation_oracle for index in self.fault_indices},

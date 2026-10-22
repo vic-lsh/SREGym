@@ -15,6 +15,7 @@ class FailedReadinessProbe(Problem):
         self.kubectl = KubeCtl()
         self.injector = OtelFaultInjector(namespace=self.namespace)
         self.faulty_service = "cart"
+        self.feature_flag = "failedReadinessProbe"
         self.root_cause = self.build_structured_root_cause(
             component=f"deployment/{self.faulty_service}",
             namespace=self.namespace,
