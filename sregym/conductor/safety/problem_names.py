@@ -17,7 +17,7 @@
 Every per-problem exemption, allowlist, or applicability rule in ``checks/`` must
 read the problem through this module, never through ``type(problem).__name__`` or
 a bare ``getattr(problem, ...)``. A composite problem holds its faults in a
-sub-problem attribute (``ComposedFailures.problems``,
+sub-problem attribute (``ComposedFailures.problems``, ``ColocatedComposite.problems``,
 ``CompositeFaultProblem.components``); each accessor here unions the answer over
 the problem and, recursively, every sub-problem, so a carve-out that holds for a
 fault alone also holds when that fault is composed with others.
@@ -31,7 +31,8 @@ from __future__ import annotations
 from typing import Any
 
 # Attributes under which a composite problem stores its built sub-problems:
-# ``ComposedFailures.problems`` (list) and ``CompositeFaultProblem.components``
+# ``ComposedFailures.problems`` and ``ColocatedComposite.problems`` (lists) and
+# ``CompositeFaultProblem.components``
 # (tuple; includes decoys, whose names key no carve-out).
 _SUB_PROBLEM_ATTRS = ("problems", "components")
 
