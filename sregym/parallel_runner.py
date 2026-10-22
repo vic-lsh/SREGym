@@ -226,7 +226,7 @@ def _child_command(args: Any, task: RunTask) -> list[str]:
         command.extend(["--judge-model", args.judge_model])
     if args.reasoning_effort:
         command.extend(["--reasoning-effort", args.reasoning_effort])
-    if getattr(args, "max_turns", None):
+    if getattr(args, "max_turns", None) is not None:
         command.extend(["--max-turns", str(args.max_turns)])
     if args.noise:
         command.append("--noise")
@@ -687,7 +687,7 @@ def _args_for_tests(**overrides: Any) -> SimpleNamespace:
         "composition_apps": None,
         "exclude_unreliable_faults": False,
         "schedule": "list",
-        "judge_rounds": 3,
+        "judge_rounds": 1,
         "judge_voting_temperature": 0.7,
         "enable_summary": False,
         "no_inject_summary": False,

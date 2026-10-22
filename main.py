@@ -100,7 +100,7 @@ def run_preflight_check(
 
 
 def run_judge_preflight_check() -> None:
-    """Validate the judge model and credentials through its LiteLLM backend."""
+    """Validate the judge model and credentials through its backend (LiteLLM, Claude on Vertex or Codex)."""
     from llm_backend.init_backend import get_llm_backend_for_judge
 
     logger.info("🔍 Running pre-flight check for judge model...")
@@ -109,7 +109,8 @@ def run_judge_preflight_check() -> None:
     except Exception as e:
         logger.error(f"❌ Judge pre-flight check failed: {e}")
         logger.error(
-            "The judge uses LiteLLM. Ensure the model is LiteLLM-compatible or pass a compatible --judge-model."
+            "Ensure the judge model is LiteLLM-compatible, a Claude model with Vertex configured, "
+            "or pass a compatible --judge-model."
         )
         sys.exit(1)
 
@@ -154,7 +155,7 @@ def _configure_model_environment(args) -> tuple[str, str]:
 
     os.environ["AGENT_MODEL_ID"] = agent_model
     os.environ["JUDGE_MODEL_ID"] = judge_model
-    os.environ["JUDGE_NUM_ROUNDS"] = str(getattr(args, "judge_rounds", 3))
+    os.environ["JUDGE_NUM_ROUNDS"] = str(getattr(args, "judge_rounds", 1))
     os.environ["JUDGE_VOTING_TEMPERATURE"] = str(getattr(args, "judge_voting_temperature", 0.7))
     if reasoning_effort:
         os.environ["AGENT_REASONING_EFFORT"] = reasoning_effort
@@ -750,7 +751,13 @@ if __name__ == "__main__":
         default=None,
         help="Model for the LLM-as-a-judge evaluator (defaults to --model if not set)",
     )
-    parser.add_argument("--judge-rounds", type=int, default=3, help="Independent checklist-judge rounds")
+    parser.add_argument(
+        "--judge-rounds",
+        type=int,
+        default=1,
+        help="Independent checklist-judge rounds, majority-voted at --judge-voting-temperature when more "
+        "than one (default: 1, one call at the backend's own temperature)",
+    )
     parser.add_argument("--judge-voting-temperature", type=float, default=0.7)
     parser.add_argument(
         "--reasoning-effort",
@@ -761,8 +768,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max-turns",
         type=int,
-        default=None,
-        help="Cap the Claude Code agent's turns (claude --max-turns); no cap when omitted",
+        default=300,
+        help="Cap the Claude Code agent's turns (claude --max-turns; default: 300, 0 for no cap)",
     )
     parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."
@@ -889,8 +896,8 @@ if __name__ == "__main__":
         parser.error("--judge-rounds must be at least 1")
     if args.sequence_len < 0:
         parser.error("--sequence-len must not be negative")
-    if args.max_turns is not None and args.max_turns < 1:
-        parser.error("--max-turns must be a positive integer")
+    if args.max_turns < 0:
+        parser.error("--max-turns must be 0 (no cap) or a positive integer")
     if args.fault_count_weights is not None:
         try:
             parse_weights(args.fault_count_weights)

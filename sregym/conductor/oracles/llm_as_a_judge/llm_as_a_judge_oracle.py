@@ -40,7 +40,7 @@ class LLMAsAJudgeOracle(Oracle):
         super().__init__(problem)
         self.expected = expected or ""
         self.other_faults = tuple(other_faults)
-        self.num_rounds = num_rounds if num_rounds is not None else int(os.getenv("JUDGE_NUM_ROUNDS", "3"))
+        self.num_rounds = num_rounds if num_rounds is not None else int(os.getenv("JUDGE_NUM_ROUNDS", "1"))
         if self.num_rounds < 1:
             raise ValueError("num_rounds must be at least 1")
         self.voting_temperature = (

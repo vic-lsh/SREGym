@@ -68,13 +68,15 @@ class ConductorConfig:
     # Opt-in: the proxy's write floor (k8s_proxy.write_refusal) lets agent writes
     # through only in the problem's namespaces and never deletes cluster objects.
     proxy_write_floor: bool = False
-    # Opt-in: when the agent stops (timeout or exit) with a stage unsubmitted, grade it
-    # (a pending diagnosis fails without a judge call; a pending mitigation runs its
-    # oracles on the cluster as it stands) instead of leaving it without a result.
-    grade_unsubmitted_stages: bool = False
+    # On by default (SREGYM_GRADE_UNSUBMITTED_STAGES=0 turns it off): when the agent stops
+    # (timeout or exit) with a stage unsubmitted, grade it (a pending diagnosis fails without
+    # a judge call; a pending mitigation runs its oracles on the cluster as it stands) instead
+    # of leaving it without a result.
+    grade_unsubmitted_stages: bool = True
 
 
 _TRUTHY = {"1", "true", "yes"}
+_FALSY = {"0", "false", "no"}
 
 
 def defer_diagnosis_grading_enabled() -> bool:
@@ -83,8 +85,9 @@ def defer_diagnosis_grading_enabled() -> bool:
 
 
 def grade_unsubmitted_stages_enabled() -> bool:
-    """Whether ``SREGYM_GRADE_UNSUBMITTED_STAGES`` opts into grading stages a stopped agent left unsubmitted."""
-    return os.getenv("SREGYM_GRADE_UNSUBMITTED_STAGES", "").strip().lower() in _TRUTHY
+    """Whether to grade stages a stopped agent left unsubmitted: yes unless ``SREGYM_GRADE_UNSUBMITTED_STAGES``
+    is 0, false or no."""
+    return os.getenv("SREGYM_GRADE_UNSUBMITTED_STAGES", "").strip().lower() not in _FALSY
 
 
 def _deferred_grading_timeout() -> float:

@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""--max-turns: opt-in, validated, and passed to claude and to parallel workers."""
+"""--max-turns: validated, and passed to claude and to parallel workers (main.py defaults it to 300)."""
 
 import pytest
 
@@ -46,3 +46,6 @@ def test_parallel_workers_inherit_the_cap() -> None:
     args.max_turns = 40
     command = _child_command(args, RunTask(0, "target_port"))
     assert command[command.index("--max-turns") + 1] == "40"
+    args.max_turns = 0  # no cap must reach the child, which would otherwise default to 300
+    command = _child_command(args, RunTask(0, "target_port"))
+    assert command[command.index("--max-turns") + 1] == "0"
