@@ -15,6 +15,7 @@ from starlette.routing import Mount
 from uvicorn import Config, Server
 
 from logger import console
+from sregym.conductor.conductor import SubmissionRejected
 from sregym.conductor.constants import AWAITING_FAULT_INJECTION, MAX_DIAGNOSIS_CANDIDATES
 
 _conductor = None
@@ -52,6 +53,8 @@ async def submit_via_conductor(ans: str | list[str]) -> dict[str, str]:
         try:
             await _conductor.submit(ans)
             return {"status": "200", "text": "Submission received"}
+        except SubmissionRejected as e:
+            return {"status": "error", "text": f"Submission rejected: {e}"}
         except RuntimeError:
             if attempt < max_wait - 1:
                 await asyncio.sleep(1)
@@ -166,6 +169,8 @@ async def submit_solution(req: SubmitRequest):
         try:
             await _conductor.submit(req.solution, received_at=received_at if attempt == 0 else time.time())
             return {"status": "200", "message": "Submission received"}
+        except SubmissionRejected as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
         except RuntimeError:
             if attempt < max_wait - 1:
                 logger.debug("Conductor not ready for submission yet, retrying in 1s...")

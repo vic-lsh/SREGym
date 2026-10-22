@@ -41,6 +41,13 @@ class SubmissionWhileEvaluating(RuntimeError):
     """A submission arrived while the previous stage was still being graded."""
 
 
+class SubmissionRejected(ValueError):
+    """A submission that is never accepted, such as a re-sent copy of the previous stage's.
+
+    Not a RuntimeError, so the API answers at once instead of holding the request.
+    """
+
+
 @dataclass
 class ConductorConfig:
     """Configuration for Conductor deployment options."""
@@ -144,6 +151,9 @@ class Conductor:
         self.current_stage_index: int = 0
         self.waiting_for_agent: bool = False
         self._evaluating: bool = False  # True while a submission is being evaluated
+        # The submission last accepted for a stage (set when its stage is claimed), so a
+        # re-sent copy is not taken as the next stage's. Guarded by _stage_lock.
+        self._accepted_submission: str | list[str] | None = None
         self.fault_injected: bool = False
 
     @property
@@ -262,6 +272,7 @@ class Conductor:
         self.current_stage_index = 0
         self.waiting_for_agent = False
         self._evaluating = False
+        self._accepted_submission = None
         self.fault_injected = False
 
         if not self.tasklist:
@@ -584,7 +595,7 @@ class Conductor:
         while True:
             with self._stage_lock:
                 running = self._submit_future if self._submit_future and not self._submit_future.done() else None
-                stage = self._claim_pending_stage() if running is None and grade_pending else None
+                stage = self._claim_pending_stage("") if running is None and grade_pending else None
             if running is not None:
                 self.logger.info(f"[{reason}] Waiting up to {evaluation_wait_s:.0f}s for the running evaluation")
                 try:
@@ -606,12 +617,13 @@ class Conductor:
             self._submit_evaluate_and_advance("", stage)
         self._finish_problem()
 
-    def _claim_pending_stage(self) -> dict | None:
-        """Take the stage awaiting a submission for evaluation, or None. Caller holds _stage_lock."""
+    def _claim_pending_stage(self, solution) -> dict | None:
+        """Take the stage awaiting a submission for evaluating *solution*, or None. Caller holds _stage_lock."""
         if not self.waiting_for_agent:
             return None
         self.waiting_for_agent = False
         self._evaluating = True
+        self._accepted_submission = solution
         return self.stage_sequence[self.current_stage_index]
 
     def _finish_problem(self):
@@ -875,7 +887,11 @@ class Conductor:
             return dict(self.results)
 
         with self._stage_lock:
-            current_stage = self._claim_pending_stage()
+            if sol and sol == getattr(self, "_accepted_submission", None):
+                # A re-sent diagnosis would otherwise be held during grading and then
+                # graded as the mitigation, before the agent mitigated anything.
+                raise SubmissionRejected("identical to the previous submission, which was already accepted")
+            current_stage = self._claim_pending_stage(sol)
             if current_stage is None:
                 if self._evaluating:
                     # Never acknowledge and drop: the API holds the request until the next stage opens.

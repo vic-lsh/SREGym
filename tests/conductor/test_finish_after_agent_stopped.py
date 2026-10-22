@@ -255,3 +255,48 @@ def test_by_default_a_running_evaluation_is_still_awaited_before_teardown() -> N
     assert "Mitigation" not in conductor.results
     assert conductor.submission_stage == "done"
     assert (problem.recovered, problem.app.cleaned) == (1, 1)
+
+
+def test_a_resent_diagnosis_is_rejected_not_graded_as_the_mitigation() -> None:
+    from fastapi.testclient import TestClient
+
+    from sregym.conductor import conductor_api
+    from sregym.conductor.conductor import SubmissionRejected
+
+    gate = threading.Event()
+    conductor, problem = _conductor_in_diagnosis(diagnosis_gate=gate)
+    http = TestClient(conductor_api.app)
+    conductor_api.set_conductor(conductor)
+    try:
+        asyncio.run(conductor.submit("geo is down"))
+        assert problem.diagnosis_oracle.started.wait(GUARD_S)
+        # Answered at once (409), not held until the mitigation stage opens.
+        resent = http.post("/submit", json={"solution": "geo is down"})
+        assert resent.status_code == 409 and "identical" in resent.json()["detail"]
+        gate.set()
+        conductor._submit_future.result(GUARD_S)
+        assert conductor.submission_stage == "mitigation"
+        with pytest.raises(SubmissionRejected, match="identical"):
+            asyncio.run(conductor.submit("geo is down"))
+        assert problem.mitigation_oracle.calls == []  # the mitigation was not graded early
+        # The empty mitigation, or a different text, is still the mitigation's.
+        asyncio.run(conductor.submit(""))
+        conductor._submit_future.result(GUARD_S)
+        assert problem.diagnosis_oracle.calls == [("geo is down",)]
+        assert len(problem.mitigation_oracle.calls) == 1 and conductor.submission_stage == "done"
+    finally:
+        conductor_api.set_conductor(None)
+
+
+def test_with_deferred_diagnosis_a_resent_diagnosis_is_not_taken_as_the_mitigation() -> None:
+    from sregym.conductor.conductor import SubmissionRejected
+
+    conductor, problem = _conductor_in_diagnosis()
+    conductor.config.defer_diagnosis_grading = True
+    asyncio.run(conductor.submit("geo is down"))
+    assert conductor.submission_stage == "mitigation"  # opened at once
+    with pytest.raises(SubmissionRejected):
+        asyncio.run(conductor.submit("geo is down"))
+    assert asyncio.run(conductor.submit("scaled geo back up"))["status"] == "ok"
+    conductor._submit_future.result(GUARD_S)
+    assert len(problem.mitigation_oracle.calls) == 1
