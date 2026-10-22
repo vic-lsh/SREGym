@@ -41,13 +41,14 @@ COPY requirements-container.txt /tmp/requirements-container.txt
 RUN python3 -m pip install --break-system-packages -r /tmp/requirements-container.txt
 
 # ───────────────────────────────────────────────
-# 5. Application code
+# 5. Agent driver code
 # ───────────────────────────────────────────────
+# Build only via build.sh: its context is an allowlist of the agent drivers,
+# with no sregym package (fault definitions, oracles, conductor).
 ARG CACHE_BUST=0
 COPY clients/        /opt/sregym/clients/
 COPY logger/         /opt/sregym/logger/
 COPY llm_backend/    /opt/sregym/llm_backend/
-COPY sregym/         /opt/sregym/sregym/
 COPY install-scripts/ /opt/sregym/install-scripts/
 RUN chmod +x /opt/sregym/install-scripts/*.sh
 
@@ -56,7 +57,6 @@ RUN chmod +x /opt/sregym/install-scripts/*.sh
 # ───────────────────────────────────────────────
 ENV PYTHONPATH="/opt/sregym"
 
-# SREGym-applications/ is bind-mounted at runtime, not baked in.
 RUN mkdir -p /logs
 WORKDIR /logs
 

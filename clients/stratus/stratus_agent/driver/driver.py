@@ -307,37 +307,6 @@ async def wait_for_stage_switch(
     )
 
 
-def get_app_class_by_name(app_name):
-    target_app = ""
-    if app_name == "Social Network":
-        from sregym.service.apps.social_network import SocialNetwork
-
-        target_app = SocialNetwork()
-    elif app_name == "OpenTelemetry Demo Astronomy Shop":
-        from sregym.service.apps.astronomy_shop import AstronomyShop
-
-        target_app = AstronomyShop()
-    elif app_name == "Flight Ticket":
-        from sregym.service.apps.flight_ticket import FlightTicket
-
-        logger.info("Flight ticket has never been tested!!")
-        target_app = FlightTicket()
-    elif app_name == "Hotel Reservation":
-        from sregym.service.apps.hotel_reservation import HotelReservation
-
-        target_app = HotelReservation()
-    elif app_name == "TiDB Cluster with Operator":
-        from sregym.service.apps.fleet_cast import FleetCast
-
-        logger.info("TiDB has never been tested!!")
-        target_app = FleetCast()
-    elif app_name == "Train Ticket":
-        from sregym.service.apps.train_ticket import TrainTicket
-
-        target_app = TrainTicket()
-    return target_app
-
-
 async def diagnosis_task_main():
     logger.info("loading configs")
     file_parent_dir = Path(__file__).resolve().parent.parent
@@ -456,19 +425,11 @@ async def mitigation_task_main(diagnosis_summary):
     cluster_state_oracle = ClusterStateOracle()
     oracles = [cluster_state_oracle]
 
-    # setting up workload oracle, need to interact with benchmark.
     logger.info("getting app info")
     app_info = get_app_info()
     app_name = app_info["app_name"]
     app_description = app_info["descriptions"]
     app_namespace = app_info["namespace"]
-    # if app_name not in ["Social Network", "Hotel Reservation"]:
-    #     logger.info("Current app does not support workload oracle")
-    # else:
-    #     target_app = get_app_class_by_name(app_name)
-    #     logger.info(f"adding oracle for app [{app_name}]")
-    #     workload_oracle = WorkloadOracle(target_app)
-    #     oracles.append(workload_oracle)
 
     logger.info(f"adding alert oracle for namespace [{app_namespace}]")
     oracles.append(AlertOracle(app_namespace))

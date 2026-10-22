@@ -1,72 +1,67 @@
 #!/usr/bin/env bash
+# Build the agent image, or with --context DIR only assemble its build context.
+#
+# The image holds only what the containerized agent drivers run: an allowlist,
+# never the sregym package (fault definitions, oracles, conductor). The agent
+# must see the cluster only as an on-call engineer would, through the proxy.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+IMAGE="${SREGYM_AGENT_IMAGE:-sregym-agent-base:latest}"
+
+# Agent packages for the containerized agents in agents.yaml. Host-only agents
+# (demo, tierzero) stay out: demo ships a scripted answer.
+CLIENT_PACKAGES=(harness autosubmit claudecode codex copilot geminicli opencode stratus)
+
+assemble_context() {
+    local ctx="$1"
+    rm -rf "$ctx"
+    mkdir -p "$ctx/clients"
+
+    cp "$REPO_ROOT/clients/__init__.py" "$ctx/clients/__init__.py"
+    for pkg in "${CLIENT_PACKAGES[@]}"; do
+        cp -r "$REPO_ROOT/clients/$pkg" "$ctx/clients/$pkg"
+    done
+    cp -r "$REPO_ROOT/logger"      "$ctx/logger"
+    cp -r "$REPO_ROOT/llm_backend" "$ctx/llm_backend"
+    find "$ctx" -name __pycache__ -type d -prune -exec rm -rf {} +
+
+    cp -r "$SCRIPT_DIR/install-scripts"         "$ctx/install-scripts"
+    cp "$SCRIPT_DIR/requirements-container.txt" "$ctx/requirements-container.txt"
+    cp "$SCRIPT_DIR/Dockerfile"                 "$ctx/Dockerfile"
+}
+
+if [ "${1:-}" = "--context" ]; then
+    assemble_context "${2:?usage: build.sh --context DIR}"
+    exit 0
+fi
+
 BUILD_CTX="$SCRIPT_DIR/build-context"
-
 echo "==> Assembling build context..."
-rm -rf "$BUILD_CTX"
-
-SREGYM="$BUILD_CTX/sregym"
-
-# ───────────────────────────────────────────────
-# 1. Create directory tree
-# ───────────────────────────────────────────────
-mkdir -p "$BUILD_CTX"
-mkdir -p "$SREGYM/service/apps"
-
-# ───────────────────────────────────────────────
-# 2. Copy top-level modules
-# ───────────────────────────────────────────────
-cp -r "$REPO_ROOT/clients"    "$BUILD_CTX/clients"
-cp -r "$REPO_ROOT/logger"     "$BUILD_CTX/logger"
-cp -r "$REPO_ROOT/llm_backend" "$BUILD_CTX/llm_backend"
-
-# ───────────────────────────────────────────────
-# 3. sregym — package init files
-# ───────────────────────────────────────────────
-cp "$REPO_ROOT/sregym/__init__.py"                     "$SREGYM/__init__.py"
-cp "$REPO_ROOT/sregym/service/__init__.py"             "$SREGYM/service/__init__.py"
-
-# ───────────────────────────────────────────────
-# 4. sregym — core modules
-# ───────────────────────────────────────────────
-cp "$REPO_ROOT/sregym/paths.py"               "$SREGYM/paths.py"
-cp "$REPO_ROOT/sregym/service/kubectl.py"     "$SREGYM/service/kubectl.py"
-cp "$REPO_ROOT/sregym/service/helm.py"        "$SREGYM/service/helm.py"
-cp "$REPO_ROOT/sregym/service/apps/base.py"   "$SREGYM/service/apps/base.py"
-cp "$REPO_ROOT/sregym/service/apps/helpers.py" "$SREGYM/service/apps/helpers.py"
-
-echo "==> sregym modules copied ($(find "$SREGYM" -type f | wc -l) files)"
-
-# ───────────────────────────────────────────────
-# 5. Build support files
-# ───────────────────────────────────────────────
-cp -r "$SCRIPT_DIR/install-scripts"          "$BUILD_CTX/install-scripts"
-cp "$SCRIPT_DIR/requirements-container.txt"  "$BUILD_CTX/requirements-container.txt"
-cp "$SCRIPT_DIR/Dockerfile"                  "$BUILD_CTX/Dockerfile"
-
-# ───────────────────────────────────────────────
-# 6. Build image & clean up
-# ───────────────────────────────────────────────
+assemble_context "$BUILD_CTX"
+trap 'rm -rf "$BUILD_CTX"' EXIT
 
 # Capture the current image ID so we can remove it after the new build
-OLD_IMAGE_ID="$(docker images -q sregym-agent-base:latest 2>/dev/null || true)"
+OLD_IMAGE_ID="$(docker images -q "$IMAGE" 2>/dev/null || true)"
 
 echo "==> Building Docker image..."
-docker build --build-arg CACHE_BUST="$(date +%s)" -t sregym-agent-base:latest -f "$BUILD_CTX/Dockerfile" "$BUILD_CTX"
+docker build --build-arg CACHE_BUST="$(date +%s)" -t "$IMAGE" -f "$BUILD_CTX/Dockerfile" "$BUILD_CTX"
+
+echo "==> Checking image contents..."
+if ! "$SCRIPT_DIR/check_image.sh" "$IMAGE"; then
+    echo "==> Image check failed; untagging $IMAGE" >&2
+    docker rmi "$IMAGE" >/dev/null 2>&1 || true
+    exit 1
+fi
 
 # Remove the previous image (now untagged) to avoid dangling buildup
 if [ -n "$OLD_IMAGE_ID" ]; then
-    NEW_IMAGE_ID="$(docker images -q sregym-agent-base:latest)"
+    NEW_IMAGE_ID="$(docker images -q "$IMAGE")"
     if [ "$OLD_IMAGE_ID" != "$NEW_IMAGE_ID" ]; then
         echo "==> Removing previous image $OLD_IMAGE_ID..."
         docker rmi "$OLD_IMAGE_ID" 2>/dev/null || true
     fi
 fi
 
-echo "==> Cleaning up build context..."
-rm -rf "$BUILD_CTX"
-
-echo "==> Done! Image: sregym-agent-base:latest"
+echo "==> Done! Image: $IMAGE"

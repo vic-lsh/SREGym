@@ -51,8 +51,6 @@ class ContainerConfig:
     kubeconfig_path: Path | None = None
     workspace_path: Path | None = None  # bind-mounted to /workspace for agent output
     logs_path: Path | None = None
-    sregym_apps_path: Path | None = None
-    sregym_app_subdirs: list[str] | None = None
     env_vars: dict = field(default_factory=dict)
     cpus: float = 4.0
     memory: str = "8g"
@@ -156,9 +154,7 @@ class ContainerRunner:
         "SREGYM_AGENT_PROMPT_APPENDIX",
         "AGENT_API_BASE",
         "AGENT_API_KEY",
-        "JUDGE_MODEL_ID",
-        "JUDGE_API_BASE",
-        "JUDGE_API_KEY",
+        # JUDGE_* stay on the host: grading runs in the conductor, not the agent.
         # Config vars
         "API_HOSTNAME",
         "API_PORT",
@@ -258,17 +254,11 @@ class ContainerRunner:
         else:
             args.append(f"--network={self.config.network_mode}")
 
-        # Mount kubeconfig (read-only)
+        # The only kubeconfig in the container is the filtering proxy's. Grading
+        # runs in the conductor on the host, so nothing in here needs the real one.
         if self.config.kubeconfig_path and self.config.kubeconfig_path.exists():
             args.extend(["-v", f"{self.config.kubeconfig_path.resolve()}:/root/.kube/config:ro"])
             args.extend(["-e", "KUBECONFIG=/root/.kube/config"])
-
-        # Mount the real (unproxied) kubeconfig so that workload oracles
-        # running inside the container can bypass the filtering proxy.
-        real_kubeconfig = Path(os.path.expanduser("~/.kube/config"))
-        if real_kubeconfig.exists():
-            args.extend(["-v", f"{real_kubeconfig.resolve()}:/root/.kube/real-config:ro"])
-            args.extend(["-e", "SREGYM_REAL_KUBECONFIG=/root/.kube/real-config"])
 
         # Mount AWS credentials directory (read-only) for Bedrock and other AWS services
         aws_dir = Path.home() / ".aws"
@@ -290,13 +280,6 @@ class ContainerRunner:
         if self.config.logs_path:
             self.config.logs_path.mkdir(parents=True, exist_ok=True)
             args.extend(["-v", f"{self.config.logs_path.resolve()}:/logs"])
-
-        # Mount only the needed SREGym-applications subdirectories (read-only)
-        if self.config.sregym_apps_path and self.config.sregym_app_subdirs:
-            for subdir in self.config.sregym_app_subdirs:
-                host_path = self.config.sregym_apps_path / subdir
-                if host_path.exists():
-                    args.extend(["-v", f"{host_path.resolve()}:/opt/sregym/SREGym-applications/{subdir}:ro"])
 
         return args
 
@@ -405,6 +388,7 @@ class ContainerRunner:
         result = subprocess.run(
             [str(build_script)],
             cwd=str(repo_root),
+            env={**os.environ, "SREGYM_AGENT_IMAGE": image},
         )
         if result.returncode != 0:
             raise RuntimeError(f"Failed to build container image '{image}'. Check the build output above for errors.")

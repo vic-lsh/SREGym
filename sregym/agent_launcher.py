@@ -46,8 +46,6 @@ class AgentLauncher:
             config = ContainerConfig(
                 kubeconfig_path=Path(self._agent_kubeconfig_path) if self._agent_kubeconfig_path else None,
                 logs_path=Path("./logs"),
-                sregym_apps_path=Path("./SREGym-applications"),
-                sregym_app_subdirs=["socialNetwork/wrk2", "hotelReservation/wrk2"],
             )
             self._container_runner = ContainerRunner(config)
             if force_build:
