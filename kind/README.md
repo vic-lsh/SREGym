@@ -54,6 +54,37 @@ kubectl get nodes
 
 The cluster is now ready to run SREGym.
 
+## (Optional) Local pull-through image cache
+
+When several kind clusters share a host, `regcache.sh` runs one local
+pull-through cache per registry (docker.io, ghcr.io, quay.io, registry.k8s.io)
+so repeat pulls stay on the host and Docker Hub's per-IP rate limit (HTTP 429)
+stops failing deploys. The caches are `registry:3` containers named
+`rs-regcache-<upstream>` on the `kind` docker network, with no published ports.
+
+```bash
+export REGCACHE_DIR=/path/to/fast/disk/registry-cache  # default ~/.cache/regcache
+bash kind/regcache.sh up                  # start the caches (idempotent)
+bash kind/regcache.sh attach <cluster>    # write hosts.toml on every node
+bash kind/regcache.sh status <cluster>    # disk use, hits/misses, attached nodes
+```
+
+`attach` only writes `/etc/containerd/certs.d/<registry>/hosts.toml`, which
+containerd reads on the next pull, so it is safe on a cluster with running
+workloads. Each node needs `config_path = "/etc/containerd/certs.d"` in its
+containerd config (`attach` warns if it is missing). docker.io pulls try the
+local cache, then `mirror.gcr.io`, then Docker Hub; the other registries try the
+cache, then the registry itself, so a stopped cache only costs a retry. Run
+`attach` after anything else that writes the docker.io hosts file.
+
+To pull from Docker Hub as an account rather than anonymously, put the user on
+line 1 and an access token on line 2 of `~/.config/sregym/dockerhub` (mode 600;
+or pass another path), then run `bash kind/regcache.sh creds`. The token goes into
+a mode-600 env file under `REGCACHE_DIR`, never on a command line.
+
+`bash kind/regcache.sh warm < images.txt` fetches the listed images through the
+caches without storing them on any node, so the next deploy pulls locally.
+
 ## Troubleshooting
 
 ### Docker issues
