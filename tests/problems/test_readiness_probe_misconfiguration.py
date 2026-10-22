@@ -1,4 +1,7 @@
+import pytest
+
 import sregym.conductor.problems.readiness_probe_misconfiguration as readiness_problem_module
+import sregym.paths
 from sregym.conductor.problems.readiness_probe_misconfiguration import ReadinessProbeMisconfiguration
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 
@@ -46,16 +49,42 @@ def test_fresh_problem_recovery_constructs_its_own_injector(monkeypatch):
     assert problem.fault_injected is False
 
 
-def test_recovery_restores_saved_manifest_when_deployment_is_missing():
-    kubectl = _KubeCtl()
+@pytest.fixture
+def injector(tmp_path, monkeypatch):
+    monkeypatch.setattr(sregym.paths, "FAULT_SCRATCH_ROOT", tmp_path)
+    monkeypatch.delenv("SREGYM_KIND_CLUSTER_NAME", raising=False)
     injector = VirtualizationFaultInjector.__new__(VirtualizationFaultInjector)
     injector.namespace = "social-network"
-    injector.kubectl = kubectl
+    injector.kubectl = _KubeCtl()
+    return injector
+
+
+def test_recovery_restores_saved_manifest_when_deployment_is_missing(injector, tmp_path):
+    injector._save_backup("readiness_probe_misconfiguration", "user-service", {"kind": "Deployment"})
 
     injector.recover_readiness_probe_misconfiguration(["user-service"])
 
-    assert kubectl.commands == [
+    assert injector.kubectl.commands == [
         "kubectl delete deployment user-service -n social-network --ignore-not-found=true",
-        "kubectl apply -f /tmp/user-service_modified.yaml -n social-network",
+        f"kubectl apply -f {tmp_path}/social-network_user-service_readiness_probe_misconfiguration_backup.yaml"
+        " -n social-network",
     ]
-    assert kubectl.waited_namespaces == ["social-network"]
+    assert injector.kubectl.waited_namespaces == ["social-network"]
+
+
+def test_recovery_without_a_backup_skips_the_deployment(injector):
+    injector.recover_readiness_probe_misconfiguration(["user-service"])
+
+    assert injector.kubectl.commands == []
+
+
+def test_recovery_continues_when_the_namespace_never_becomes_ready(injector):
+    def never_ready(namespace):
+        raise TimeoutError("another fault keeps a pod unready")
+
+    injector.kubectl.wait_for_ready = never_ready
+    injector._save_backup("readiness_probe_misconfiguration", "user-service", {"kind": "Deployment"})
+
+    injector.recover_readiness_probe_misconfiguration(["user-service"])  # must not raise
+
+    assert injector.kubectl.commands[-1].startswith("kubectl apply -f ")

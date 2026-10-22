@@ -72,6 +72,41 @@ class ImagePullWatch:
         return stuck
 
 
+_REVISION_ANNOTATION = "deployment.kubernetes.io/revision"
+
+
+def _revision_of(obj) -> int | None:
+    """The Deployment controller's revision annotation on a Deployment or ReplicaSet."""
+    annotations = getattr(getattr(obj, "metadata", None), "annotations", None) or {}
+    try:
+        return int(annotations[_REVISION_ANNOTATION])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def order_replicasets_current_first(replicasets: list, deployment_revision: int | None) -> list:
+    """Order a Deployment's ReplicaSets so the current one comes first.
+
+    The current ReplicaSet is the one whose revision annotation equals the
+    Deployment's. Ties and an unknown Deployment revision fall back to: has
+    replicas, then highest revision, then newest creationTimestamp. Stable for
+    equal keys, so the result is deterministic for a given input order.
+    """
+
+    def key(rs):
+        revision = _revision_of(rs)
+        replicas = getattr(getattr(rs, "spec", None), "replicas", None) or 0
+        created = getattr(getattr(rs, "metadata", None), "creation_timestamp", None)
+        return (
+            deployment_revision is not None and revision == deployment_revision,
+            replicas > 0,
+            revision if revision is not None else -1,
+            created.timestamp() if created is not None else float("-inf"),
+        )
+
+    return sorted(replicasets, key=key, reverse=True)
+
+
 class KubeCtl:
     # Seam for tests: wait loops sleep through this, so a test can pass a fake clock.
     _sleep = staticmethod(time.sleep)
@@ -244,6 +279,11 @@ class KubeCtl:
             display_name = f"services {services}" if len(services) > 1 else f"service '{services[0]}'"
         else:
             display_name = f"namespace '{namespace}'"
+
+        # As robust-skills does (its runs had no otel-collector-agent pods): the astronomy-shop
+        # chart's collector DaemonSet binds hostPort 4317, which deadlocks deploys sharing a node.
+        with contextlib.suppress(Exception):
+            self.apps_v1_api.delete_namespaced_daemon_set(name="otel-collector-agent", namespace=namespace)
 
         console.log(f"[bold yellow]Waiting for all pods in {display_name} to be ready...")
 
@@ -907,6 +947,12 @@ class KubeCtl:
             return False
 
     def get_matching_replicasets(self, namespace: str, deployment_name: str) -> list[client.V1ReplicaSet]:
+        """ReplicaSets owned by the Deployment, the CURRENT one first.
+
+        A Deployment keeps old, scaled-to-zero ReplicaSets after every rollout,
+        and the API lists them in name order, so ``[0]`` used to be arbitrary:
+        deleting a stale one is a no-op. See ``order_replicasets_current_first``.
+        """
         apps_v1 = self.apps_v1_api
         rs_list = apps_v1.list_namespaced_replica_set(namespace)
         matching_rs = []
@@ -919,7 +965,13 @@ class KubeCtl:
                         matching_rs.append(rs)
                         break
 
-        return matching_rs
+        try:
+            deployment = apps_v1.read_namespaced_deployment(deployment_name, namespace)
+            revision = _revision_of(deployment)
+        except ApiException as e:
+            logger.warning(f"Could not read deployment {namespace}/{deployment_name} revision: {e}")
+            revision = None
+        return order_replicasets_current_first(matching_rs, revision)
 
     def delete_replicaset(self, name: str, namespace: str):
         body = client.V1DeleteOptions(propagation_policy="Foreground")

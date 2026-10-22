@@ -25,7 +25,7 @@ class IncorrectPortAssignment(Problem):
         self.app_name = app_name
         self.faulty_service = faulty_service
         self.env_var = env_var
-        self.incorrect_port = incorrect_port
+        self.incorrect_port = str(incorrect_port)
         self.correct_port = correct_port
 
         if app_name == "social_network":
@@ -46,8 +46,8 @@ class IncorrectPortAssignment(Problem):
             namespace=self.namespace,
             description=(
                 f"The {self.env_var} environment variable points to the wrong backend port ({self.incorrect_port} instead of "
-                f"{self.correct_port}), so checkout cannot reach product-catalog and related requests fail. "
-                "Symptoms include connection-refused errors and elevated failed request rates on checkout endpoints."
+                f"{self.correct_port}), so {self.faulty_service} cannot reach the dependent service and related requests fail. "
+                "Symptoms include connection-refused errors and elevated failed request rates."
             ),
         )
 
@@ -74,7 +74,7 @@ class IncorrectPortAssignment(Problem):
 
         if unschedulable:
             mitigation_oracles = [
-                IncorrectPortAssignmentMitigationOracle(problem=self, require_source_ready=False),
+                IncorrectPortAssignmentMitigationOracle(problem=self),
                 AssignNonExistentNodeMitigationOracle(problem=self),
             ]
             self.mitigation_oracle = CompoundedOracle(self, *mitigation_oracles)

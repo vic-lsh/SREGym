@@ -32,7 +32,7 @@ class ScalePodZeroMitigationOracle(Oracle):
         # Check if all services are running normally
         pod_list = kubectl.list_pods(namespace)
         for pod in pod_list.items:
-            for container_status in pod.status.container_statuses:
+            for container_status in pod.status.container_statuses or []:
                 if container_status.state.waiting and container_status.state.waiting.reason == "CrashLoopBackOff":
                     print(f"Container {container_status.name} is in CrashLoopBackOff")
                     all_normal = False

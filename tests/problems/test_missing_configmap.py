@@ -7,6 +7,7 @@ import yaml
 
 import sregym.conductor.problems.missing_configmap as missing_configmap_module
 import sregym.conductor.problems.registry as registry_module
+import sregym.paths
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.missing_configmap import MissingConfigMap
@@ -256,7 +257,9 @@ def test_inject_deletes_the_rate_script_and_restarts_only_mongodb_rate(monkeypat
         }
     )
     injector = _injector(kubectl)
-    monkeypatch.setattr(injector, "_write_yaml_to_file", lambda service, content: written.update({service: content}))
+    monkeypatch.setattr(
+        injector, "_save_backup", lambda fault, service, content: written.update({(fault, service): content})
+    )
 
     injector.inject_missing_configmap(["mongodb-rate"])
 
@@ -268,7 +271,7 @@ def test_inject_deletes_the_rate_script_and_restarts_only_mongodb_rate(monkeypat
         "kubectl scale deployment mongodb-rate -n hotel-reservation --replicas=1",
     ]
     assert written == {
-        "mongodb-rate": {
+        ("missing_configmap", "mongodb-rate"): {
             "apiVersion": "v1",
             "kind": "ConfigMap",
             "metadata": {"name": "mongo-rate-script", "namespace": "hotel-reservation"},
@@ -285,7 +288,7 @@ def test_inject_for_two_workloads_deletes_both_scripts():
         }
     )
     injector = _injector(kubectl)
-    injector._write_yaml_to_file = lambda service, content: None
+    injector._save_backup = lambda fault, service, content: None
 
     injector.inject_missing_configmap(["mongodb-geo", "mongodb-rate"])
 
@@ -296,16 +299,18 @@ def test_inject_for_two_workloads_deletes_both_scripts():
     ]
 
 
-def test_recover_reapplies_each_workload_backup_and_restarts_it():
+def test_recover_reapplies_each_workload_backup_and_restarts_it(monkeypatch, tmp_path):
+    monkeypatch.setattr(sregym.paths, "FAULT_SCRATCH_ROOT", tmp_path)
+    monkeypatch.delenv("SREGYM_KIND_CLUSTER_NAME", raising=False)
     kubectl = _KubeCtl()
 
     _injector(kubectl).recover_missing_configmap(["mongodb-geo", "mongodb-rate"])
 
     assert kubectl.commands == [
-        "kubectl apply -f /tmp/mongodb-geo_modified.yaml -n hotel-reservation",
+        f"kubectl apply -f {tmp_path}/hotel-reservation_mongodb-geo_missing_configmap_backup.yaml -n hotel-reservation",
         "kubectl rollout restart deployment mongodb-geo -n hotel-reservation",
         "kubectl rollout status deployment mongodb-geo -n hotel-reservation --timeout=120s",
-        "kubectl apply -f /tmp/mongodb-rate_modified.yaml -n hotel-reservation",
+        f"kubectl apply -f {tmp_path}/hotel-reservation_mongodb-rate_missing_configmap_backup.yaml -n hotel-reservation",
         "kubectl rollout restart deployment mongodb-rate -n hotel-reservation",
         "kubectl rollout status deployment mongodb-rate -n hotel-reservation --timeout=120s",
     ]

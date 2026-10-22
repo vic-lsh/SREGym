@@ -4,7 +4,6 @@ from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsA
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
-from sregym.paths import TARGET_MICROSERVICES
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
@@ -44,10 +43,6 @@ class PVCClaimMismatch(Problem):
     def __init__(self, pvc_failure_scope: str = "all"):
         super().__init__(app=HotelReservation())
         self.kubectl = KubeCtl()
-        self.app.payload_script = (
-            TARGET_MICROSERVICES
-            / "DeathStarBench/hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
-        )
         scope_config = _PVC_FAILURE_SCOPES[pvc_failure_scope]
         self.faulty_service = scope_config["services"]
         self.injector = VirtualizationFaultInjector(namespace=self.namespace)

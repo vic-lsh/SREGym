@@ -63,7 +63,7 @@ class SustainedReadinessOracle(Oracle):
                     all_normal = False
                     break
 
-                for container_status in pod.status.container_statuses:
+                for container_status in pod.status.container_statuses or []:
                     if container_status.state.waiting and container_status.state.waiting.reason:
                         if verbose:
                             print(

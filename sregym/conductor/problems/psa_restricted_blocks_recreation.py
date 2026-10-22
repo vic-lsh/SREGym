@@ -109,6 +109,19 @@ class PSARestrictedBlocksRecreation(Problem):
         # A merge patch with a value of None removes that label key.
         self.core_api.patch_namespace(self.namespace, {"metadata": {"labels": labels}})
 
+    def _find_target_pod(self) -> str:
+        selectors = [
+            f"app={self.faulty_service}",
+            f"io.kompose.service={self.faulty_service}",
+            f"app.kubernetes.io/name={self.faulty_service}",
+            f"service={self.faulty_service}",
+        ]
+        for sel in selectors:
+            pods = self.core_api.list_namespaced_pod(namespace=self.namespace, label_selector=sel)
+            if pods.items:
+                return pods.items[0].metadata.name
+        raise RuntimeError(f"No pods found for service '{self.faulty_service}' in namespace '{self.namespace}'")
+
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
@@ -122,13 +135,7 @@ class PSARestrictedBlocksRecreation(Problem):
         )
         print(f"Labelled namespace {self.namespace} with {PSA_ENFORCE_LABEL}={RESTRICTED_PROFILE}")
 
-        pods = self.core_api.list_namespaced_pod(
-            namespace=self.namespace,
-            label_selector=f"io.kompose.service={self.faulty_service}",
-        )
-        if not pods.items:
-            raise RuntimeError(f"No pods found for service '{self.faulty_service}' in namespace '{self.namespace}'")
-        target = pods.items[0].metadata.name
+        target = self._find_target_pod()
         self.core_api.delete_namespaced_pod(
             name=target,
             namespace=self.namespace,

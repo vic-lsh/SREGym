@@ -1,230 +1,189 @@
 """Mitigation oracle for controller-owned finalizer deadlocks."""
 
-import contextlib
-import time
-
 from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
 
+_REQUIRED_VERBS = {"patch", "update"}
+_CONTROLLER_COMPLETION_ANNOTATION = "cleanup-controller.platform.io/finalizer-cleanup-completed"
+
 
 class FinalizerDeadlockControllerMitigationOracle(Oracle):
-    """Require the running controller to reconcile a fresh cleanup request."""
+    """Require the RBAC root cause to be fixed, not just the finalizer removed."""
 
     importance = 1.0
-    rollout_settle_seconds = 60
-    cleanup_timeout_seconds = 45
-    poll_interval_seconds = 2
 
     def __init__(
         self,
         problem,
         configmap_name: str,
         finalizer: str,
+        clusterrole_name: str,
         controller_deployment_name: str,
     ):
         super().__init__(problem)
         self.configmap_name = configmap_name
         self.finalizer = finalizer
+        self.clusterrole_name = clusterrole_name
         self.controller_deployment_name = controller_deployment_name
+        self.rbac_v1 = client.RbacAuthorizationV1Api()
 
-    def evaluate(self, *args, **kwargs) -> dict:
-        print("== Cleanup Controller Recovery Evaluation ==")
+    def evaluate(self) -> dict:
+        print("== Finalizer Controller Deadlock Mitigation Evaluation ==")
 
         namespace = self.problem.namespace
         kubectl = self.problem.kubectl
 
-        try:
-            self._wait_for_rollouts(kubectl, namespace)
+        self.settle_rollouts()
 
-            configmap_deleted = self._wait_for_configmap_deleted(
-                kubectl,
-                namespace,
-                self.configmap_name,
+        clusterrole_ok, clusterrole_msg = self._check_clusterrole()
+        print(clusterrole_msg)
+
+        configmap_deleted, configmap_msg = self._check_configmap_deleted(kubectl, namespace)
+        print(configmap_msg)
+
+        if configmap_deleted and not clusterrole_ok:
+            print(
+                "[FAIL] Shortcut detected: the ConfigMap is gone but the controller ClusterRole "
+                f"`{self.clusterrole_name}` still has RBAC issues. The valid mitigation "
+                "is to restore controller RBAC and let the controller remove the finalizer."
             )
-            if configmap_deleted:
-                print(f"[OK] ConfigMap `{self.configmap_name}` has been fully deleted.")
-            else:
-                print(f"[FAIL] ConfigMap `{self.configmap_name}` is still stuck in deletion.")
-
-            controller_ok, controller_msg = self._check_controller_healthy(kubectl, namespace)
-            print(controller_msg)
-
-            app_ok, app_msg = self._check_app_healthy(kubectl, namespace)
-            print(app_msg)
-
-            durability_ok = False
-            if configmap_deleted and controller_ok and app_ok:
-                durability_ok = self._run_cleanup_request(kubectl, namespace)
-
-            success = configmap_deleted and controller_ok and app_ok and durability_ok
-        except Exception as exc:
-            print(f"[FAIL] Error checking cleanup-controller recovery: {exc}")
             return {"success": False}
 
+        controller_ok, controller_msg = self._check_controller_healthy(kubectl, namespace)
+        print(controller_msg)
+
+        controller_completed, controller_completed_msg = self._check_controller_completed_cleanup(kubectl, namespace)
+        print(controller_completed_msg)
+
+        app_ok, app_msg = self._check_app_healthy(kubectl, namespace)
+        print(app_msg)
+
+        success = clusterrole_ok and configmap_deleted and controller_ok and controller_completed and app_ok
         if success:
-            print("[PASS] The controller successfully reconciled a new cleanup request.")
+            print("[PASS] ClusterRole restored, ConfigMap deleted, controller healthy, application healthy.")
         else:
-            print("[FAIL] Cleanup-controller recovery is incomplete.")
+            print("[FAIL] One or more mitigation conditions failed.")
         return {"success": success}
 
-    @staticmethod
-    def _desired_replicas(deployment) -> int:
-        replicas = deployment.spec.replicas
-        return 1 if replicas is None else replicas
+    def _check_clusterrole(self) -> tuple[bool, str]:
+        try:
+            role = self.rbac_v1.read_cluster_role(self.clusterrole_name, _request_timeout=10)
+        except ApiException as e:
+            if e.status == 404:
+                return False, f"[FAIL] ClusterRole `{self.clusterrole_name}` is missing."
+            return False, f"[FAIL] Could not read ClusterRole `{self.clusterrole_name}`: {e}"
 
-    def _wait_for_rollouts(self, kubectl, namespace):
-        deadline = time.monotonic() + self.rollout_settle_seconds
-        while time.monotonic() < deadline:
-            deployments = kubectl.list_deployments(namespace)
-            all_settled = True
-            for deployment in deployments.items:
-                desired = self._desired_replicas(deployment)
-                status = deployment.status
-                generation = deployment.metadata.generation or 0
-                if (
-                    desired < 1
-                    or (status.observed_generation or 0) < generation
-                    or (status.updated_replicas or 0) != desired
-                    or (status.ready_replicas or 0) != desired
-                    or (status.available_replicas or 0) != desired
-                    or (status.unavailable_replicas or 0) != 0
-                ):
-                    all_settled = False
-                    break
-            if all_settled:
-                return
-            time.sleep(self.poll_interval_seconds)
-        print("Timed out waiting for deployments to settle; evaluating current state")
+        granted_on_configmaps = set()
+        granted_on_finalizers = set()
+        configmaps_unrestricted = False
+        configmaps_allowed_names = set()
+        for rule in role.rules or []:
+            resources = set(rule.resources or [])
+            verbs = set(rule.verbs or [])
+            if "*" in verbs:
+                verbs.update(_REQUIRED_VERBS)
+            if "configmaps" in resources or "*" in resources:
+                granted_on_configmaps.update(verbs)
+                if rule.resource_names is None:
+                    configmaps_unrestricted = True
+                else:
+                    configmaps_allowed_names.update(rule.resource_names)
+            if "configmaps/finalizers" in resources or "*" in resources:
+                granted_on_finalizers.update(verbs)
 
-    def _wait_for_configmap_deleted(self, kubectl, namespace: str, name: str) -> bool:
-        deadline = time.monotonic() + self.cleanup_timeout_seconds
-        while True:
-            try:
-                kubectl.core_v1_api.read_namespaced_config_map(
-                    name,
-                    namespace,
-                    _request_timeout=10,
-                )
-            except ApiException as exc:
-                if exc.status == 404:
-                    return True
-                raise
+        missing_configmaps = _REQUIRED_VERBS - granted_on_configmaps
+        missing_finalizers = _REQUIRED_VERBS - granted_on_finalizers
+        if missing_configmaps or missing_finalizers:
+            return (
+                False,
+                f"[FAIL] ClusterRole `{self.clusterrole_name}` is not restored. Missing configmaps verbs: {sorted(missing_configmaps)}; "
+                f"missing configmaps/finalizers verbs: {sorted(missing_finalizers)}.",
+            )
 
-            if time.monotonic() >= deadline:
-                return False
-            time.sleep(self.poll_interval_seconds)
+        # Check that no resourceNames restriction blocks access to the target ConfigMap.
+        # RBAC is additive: any unrestricted rule grants access to all names.
+        if (
+            not configmaps_unrestricted
+            and configmaps_allowed_names
+            and self.configmap_name not in configmaps_allowed_names
+        ):
+            return (
+                False,
+                f"[FAIL] ClusterRole `{self.clusterrole_name}` has a `resourceNames` restriction on configmaps "
+                f"that excludes `{self.configmap_name}`. Granted resourceNames: {sorted(configmaps_allowed_names)}.",
+            )
+
+        return (
+            True,
+            f"[OK] ClusterRole `{self.clusterrole_name}` grants patch/update on configmaps and finalizers.",
+        )
+
+    def _check_configmap_deleted(self, kubectl, namespace) -> tuple[bool, str]:
+        try:
+            cm = kubectl.core_v1_api.read_namespaced_config_map(
+                self.configmap_name,
+                namespace,
+                _request_timeout=10,
+            )
+        except ApiException as e:
+            if e.status == 404:
+                return True, f"[OK] ConfigMap `{self.configmap_name}` has been fully deleted."
+            return False, f"[FAIL] Could not read ConfigMap `{self.configmap_name}`: {e}"
+
+        finalizers = cm.metadata.finalizers or []
+        if cm.metadata.deletion_timestamp and self.finalizer in finalizers:
+            return (
+                False,
+                f"[FAIL] ConfigMap `{self.configmap_name}` is still Terminating with finalizer `{self.finalizer}`.",
+            )
+        return False, f"[FAIL] ConfigMap `{self.configmap_name}` still exists."
 
     def _check_controller_healthy(self, kubectl, namespace) -> tuple[bool, str]:
         try:
-            deployment = kubectl.apps_v1_api.read_namespaced_deployment(
+            dep = kubectl.apps_v1_api.read_namespaced_deployment(
                 self.controller_deployment_name,
                 namespace,
                 _request_timeout=10,
             )
-        except ApiException as exc:
-            if exc.status == 404:
+        except ApiException as e:
+            if e.status == 404:
                 return False, f"[FAIL] Controller Deployment `{self.controller_deployment_name}` was deleted."
-            return False, f"[FAIL] Could not read controller Deployment: {exc}"
+            return False, f"[FAIL] Could not read controller Deployment: {e}"
 
-        desired = self._desired_replicas(deployment)
-        if desired < 1:
-            return False, "[FAIL] Controller Deployment is scaled to zero."
+        desired = dep.spec.replicas or 1
+        ready = dep.status.ready_replicas or 0
+        if ready < desired:
+            return False, f"[FAIL] Controller Deployment has {ready}/{desired} ready replicas."
+        return True, f"[OK] Controller Deployment is healthy ({ready}/{desired} ready)."
 
-        status = deployment.status
-        generation = deployment.metadata.generation or 0
-        healthy = (
-            (status.observed_generation or 0) >= generation
-            and (status.updated_replicas or 0) == desired
-            and (status.ready_replicas or 0) == desired
-            and (status.available_replicas or 0) == desired
-            and (status.unavailable_replicas or 0) == 0
-        )
-        if not healthy:
-            return False, (
-                f"[FAIL] Controller Deployment is not fully rolled out ({status.ready_replicas or 0}/{desired} ready)."
-            )
-        return True, f"[OK] Controller Deployment is healthy ({desired}/{desired} ready)."
-
-    def _run_cleanup_request(self, kubectl, namespace: str) -> bool:
-        core_v1 = kubectl.core_v1_api
-        request_name = f"reservation-cleanup-request-{time.time_ns()}"[:63]
-        body = client.V1ConfigMap(
-            metadata=client.V1ObjectMeta(
-                name=request_name,
-                namespace=namespace,
-                finalizers=[self.finalizer],
-                labels={
-                    "app.kubernetes.io/component": "reservation-cleanup",
-                    "app.kubernetes.io/managed-by": self.controller_deployment_name,
-                },
-            ),
-            data={"cleanup-token": "pending", "source": "reservation-maintenance"},
-        )
-
-        created = False
+    def _check_controller_completed_cleanup(self, kubectl, namespace) -> tuple[bool, str]:
         try:
-            core_v1.create_namespaced_config_map(
-                namespace=namespace,
-                body=body,
+            dep = kubectl.apps_v1_api.read_namespaced_deployment(
+                self.controller_deployment_name,
+                namespace,
                 _request_timeout=10,
             )
-            created = True
-            core_v1.delete_namespaced_config_map(
-                name=request_name,
-                namespace=namespace,
-                body=client.V1DeleteOptions(grace_period_seconds=0),
-                _request_timeout=10,
+        except ApiException as e:
+            return False, f"[FAIL] Could not read controller cleanup annotation: {e}"
+
+        annotations = dep.metadata.annotations or {}
+        if _CONTROLLER_COMPLETION_ANNOTATION not in annotations:
+            return (
+                False,
+                "[FAIL] Controller has not recorded finalizer cleanup completion. This rejects direct finalizer "
+                "patches that bypass the controller reconcile loop.",
             )
-            print(f"Created cleanup request `{request_name}` and requested deletion.")
-
-            if self._wait_for_configmap_deleted(kubectl, namespace, request_name):
-                print(f"[OK] Controller completed cleanup request `{request_name}`.")
-                return True
-
-            print(f"[FAIL] Cleanup request `{request_name}` remained stuck in deletion.")
-            return False
-        except ApiException as exc:
-            print(f"[FAIL] Could not exercise cleanup controller: {exc}")
-            return False
-        finally:
-            if created:
-                self._remove_cleanup_request(core_v1, namespace, request_name)
-
-    @staticmethod
-    def _remove_cleanup_request(core_v1, namespace: str, name: str):
-        try:
-            core_v1.patch_namespaced_config_map(
-                name=name,
-                namespace=namespace,
-                body={"metadata": {"finalizers": None}},
-                _request_timeout=10,
-            )
-        except ApiException as exc:
-            if exc.status != 404:
-                raise
-
-        with contextlib.suppress(ApiException):
-            core_v1.delete_namespaced_config_map(
-                name=name,
-                namespace=namespace,
-                body=client.V1DeleteOptions(grace_period_seconds=0),
-                _request_timeout=10,
-            )
+        return True, "[OK] Controller recorded finalizer cleanup completion."
 
     def _check_app_healthy(self, kubectl, namespace) -> tuple[bool, str]:
         try:
             pods = kubectl.list_pods(namespace).items
-        except Exception as exc:
-            return False, f"[FAIL] Could not list pods in `{namespace}`: {exc}"
+        except Exception as e:
+            return False, f"[FAIL] Could not list pods in `{namespace}`: {e}"
 
-        app_pods = [
-            pod
-            for pod in pods
-            if pod.metadata.deletion_timestamp is None
-            and not pod.metadata.name.startswith(f"{self.controller_deployment_name}-")
-        ]
+        app_pods = [pod for pod in pods if not pod.metadata.name.startswith(f"{self.controller_deployment_name}-")]
         if not app_pods:
             return False, "[FAIL] No application pods found."
 

@@ -42,14 +42,18 @@ def _baseline_deployment():
     }
 
 
+_INJECTED = {"sregym.io/injected-by": "duplicate_pvc_mounts"}
+
+
 class _CoreV1:
-    def __init__(self, claims=None):
+    def __init__(self, claims=None, injected_claims=()):
         self.claims = set(claims or [])
+        self.labels = {name: dict(_INJECTED) for name in injected_claims}
 
     def read_namespaced_persistent_volume_claim(self, name, namespace):
         if name not in self.claims:
             raise ApiException(status=404)
-        return SimpleNamespace(metadata=SimpleNamespace(name=name))
+        return SimpleNamespace(metadata=SimpleNamespace(name=name, labels=self.labels.get(name)))
 
     def list_namespaced_persistent_volume_claim(self, namespace):
         return SimpleNamespace(
@@ -68,9 +72,9 @@ class _AppsV1:
 
 
 class _KubeCtl:
-    def __init__(self, deployment_yaml, *, claims=None, statefulset=None):
+    def __init__(self, deployment_yaml, *, claims=None, injected_claims=(), statefulset=None):
         self.deployment_yaml = deployment_yaml
-        self.core_v1_api = _CoreV1(claims)
+        self.core_v1_api = _CoreV1(claims, injected_claims)
         self.apps_v1_api = _AppsV1(statefulset)
         self.commands = []
         self.wait_calls = []
@@ -83,6 +87,7 @@ class _KubeCtl:
         if command.startswith("kubectl apply -f -"):
             manifest = yaml.safe_load(command.split("<<EOF\n", 1)[1].rsplit("\nEOF", 1)[0])
             self.core_v1_api.claims.add(manifest["metadata"]["name"])
+            self.core_v1_api.labels[manifest["metadata"]["name"]] = manifest["metadata"].get("labels")
         if command.startswith("kubectl delete pvc "):
             claim_name = command.split()[3]
             self.core_v1_api.claims.discard(claim_name)
@@ -135,22 +140,39 @@ def test_injection_saves_baseline_and_creates_the_expected_storage_conflict(tmp_
         "kubernetes.io/hostname"
     )
     assert "jaeger-pvc" in kubectl.core_v1_api.claims
+    assert kubectl.core_v1_api.labels["jaeger-pvc"] == _INJECTED
     assert baseline["spec"]["replicas"] == 1
 
 
-def test_injection_refuses_to_modify_a_preexisting_claim(tmp_path):
+def test_injection_reuses_a_preexisting_claim(tmp_path):
+    kubectl = _KubeCtl(_baseline_deployment(), claims={"jaeger-pvc"})
+    injector = _injector(tmp_path, kubectl)
+    written_manifests = []
+    injector._write_yaml_to_file = lambda service, manifest: written_manifests.append(manifest) or "/tmp/jaeger.yaml"
+
+    injector.inject_duplicate_pvc_mounts(["jaeger"])
+
+    assert (tmp_path / "deployment-state-jaeger.yaml").exists()
+    assert not any(command.startswith("kubectl apply -f -") for command in kubectl.commands)
+    assert kubectl.core_v1_api.labels.get("jaeger-pvc") is None
+    assert written_manifests[0]["spec"]["template"]["spec"]["volumes"][-1] == {
+        "name": "jaeger-volume",
+        "persistentVolumeClaim": {"claimName": "jaeger-pvc"},
+    }
+    assert any(command == "kubectl apply -f /tmp/jaeger.yaml -n social-network" for command in kubectl.commands)
+
+
+def test_recovery_keeps_a_claim_that_existed_before_injection(tmp_path):
+    baseline_path = tmp_path / "deployment-state-jaeger.yaml"
+    baseline_path.write_text(yaml.safe_dump(_baseline_deployment()))
     kubectl = _KubeCtl(_baseline_deployment(), claims={"jaeger-pvc"})
     injector = _injector(tmp_path, kubectl)
 
-    try:
-        injector.inject_duplicate_pvc_mounts(["jaeger"])
-    except RuntimeError as exc:
-        assert "Refusing to replace pre-existing PersistentVolumeClaim" in str(exc)
-    else:
-        raise AssertionError("Expected injection to reject the pre-existing claim")
+    injector.recover_duplicate_pvc_mounts(["jaeger"])
 
-    assert not (tmp_path / "deployment-state-jaeger.yaml").exists()
-    assert not any(command.startswith("kubectl apply") for command in kubectl.commands)
+    assert not any(command.startswith("kubectl delete pvc") for command in kubectl.commands)
+    assert kubectl.core_v1_api.claims == {"jaeger-pvc"}
+    assert any(f"kubectl apply -f {baseline_path}" in command for command in kubectl.commands)
 
 
 def test_recovery_restores_deployment_and_removes_current_and_legacy_claims(tmp_path):
@@ -162,6 +184,7 @@ def test_recovery_restores_deployment_and_removes_current_and_legacy_claims(tmp_
     kubectl = _KubeCtl(
         _baseline_deployment(),
         claims={"jaeger-pvc", "data-volume-jaeger-0", "unrelated-pvc"},
+        injected_claims={"jaeger-pvc"},
         statefulset=statefulset,
     )
     injector = _injector(tmp_path, kubectl)
@@ -181,7 +204,7 @@ def test_recovery_restores_deployment_and_removes_current_and_legacy_claims(tmp_
 
 
 def test_recovery_requires_the_saved_deployment_before_deleting_resources(tmp_path):
-    kubectl = _KubeCtl(_baseline_deployment(), claims={"jaeger-pvc"})
+    kubectl = _KubeCtl(_baseline_deployment(), claims={"jaeger-pvc"}, injected_claims={"jaeger-pvc"})
     injector = _injector(tmp_path, kubectl)
 
     try:

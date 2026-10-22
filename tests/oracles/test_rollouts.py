@@ -409,8 +409,6 @@ def test_a_settled_healthy_namespace_passes(oracle_cls):
 # Oracles that keep a wait of their own, and why it is not a copy of the namespace settle.
 _OWN_WAITS = {
     "calico_route_reflector_mitigation.py": "waits on two namespaces for 180 s",
-    "finalizer_deadlock_controller_mitigation.py": "stricter all-available wait; its pod walk skips Terminating pods",
-    "rolling_update_misconfiguration_mitigation.py": "waits for one Deployment to reach a given generation",
 }
 
 

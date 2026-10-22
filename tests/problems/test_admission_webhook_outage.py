@@ -151,3 +151,20 @@ def test_recovery_requires_saved_ownership_state_before_deleting_webhook(tmp_pat
 
     assert admission_api.deleted == []
     assert problem.fault_injected is False
+
+
+def test_recovery_wait_is_best_effort_once_the_webhook_is_restored(tmp_path):
+    class _NeverReady(_KubeCtl):
+        def wait_for_ready(self, namespace, service_names, max_wait):
+            raise TimeoutError("recommendation not ready")
+
+    admission_api = _AdmissionApi(current=SimpleNamespace(metadata=SimpleNamespace(resource_version="99")))
+    problem = _problem(tmp_path, admission_api, _NeverReady())
+    path = problem._webhook_state_path()
+    path.write_text(json.dumps({"existed": False}))
+
+    problem.recover_fault()
+
+    assert admission_api.deleted == [AdmissionWebhookOutage.WEBHOOK_NAME]
+    assert not path.exists()
+    assert problem.fault_injected is False

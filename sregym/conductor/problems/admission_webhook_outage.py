@@ -30,7 +30,7 @@ from pathlib import Path
 from kubernetes import client
 from kubernetes.client.exceptions import ApiException
 
-from sregym.conductor.oracles.admission_webhook_outage_mitigation import AdmissionWebhookOutageMitigationOracle
+from sregym.conductor.oracles.deployment_readiness import DeploymentReadinessOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.paths import fault_scratch_path
@@ -126,7 +126,7 @@ class AdmissionWebhookOutage(Problem):
         # Use DeploymentReadinessOracle, not the generic MitigationOracle: the fault
         # makes the affected pod absent from the namespace's pod list, so a per-pod
         # health walk reports false success even when the fault is unmitigated.
-        self.mitigation_oracle = AdmissionWebhookOutageMitigationOracle(problem=self)
+        self.mitigation_oracle = DeploymentReadinessOracle(problem=self)
 
     def _webhook_state_path(self) -> Path:
         kind = getattr(self, "webhook_kind", "validating")
@@ -299,6 +299,11 @@ class AdmissionWebhookOutage(Problem):
     def recover_fault(self):
         print("== Fault Recovery ==")
         state_path = self._restore_webhook_baseline()
-        self._wait_for_target_ready()
+        # Best effort, as in robust-skills (whose recovery does not wait): the webhook is
+        # restored either way, so a slow or failed rollout must not fail the recovery.
+        try:
+            self._wait_for_target_ready()
+        except Exception as exc:
+            print(f"Warning: {self.faulty_service} not Ready after webhook recovery: {exc}")
         state_path.unlink()
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")

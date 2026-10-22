@@ -1,183 +1,74 @@
+"""RollingUpdateMitigationOracle only observes: rollout complete and `hang-init` gone (no cluster)."""
+
 import json
 from types import SimpleNamespace
 
-import yaml
+import pytest
 
-import sregym.conductor.oracles.rolling_update_misconfiguration_mitigation as rolling_update_module
 from sregym.conductor.oracles.rolling_update_misconfiguration_mitigation import RollingUpdateMitigationOracle
 
 
-def _deployment(
-    *,
-    generation=1,
-    observed_generation=1,
-    replicas=3,
-    updated=3,
-    ready=3,
-    available=3,
-    unavailable=0,
-    max_unavailable="25%",
-    max_surge="25%",
-):
-    return {
-        "apiVersion": "apps/v1",
-        "kind": "Deployment",
-        "metadata": {"name": "custom-service", "generation": generation},
-        "spec": {
-            "replicas": replicas,
-            "template": {
-                "metadata": {"labels": {"app": "custom-service"}},
-                "spec": {
-                    "containers": [
-                        {
-                            "name": "custom-service-main",
-                            "image": "python:3.9-slim",
-                        }
-                    ]
-                },
-            },
-            "strategy": {
-                "type": "RollingUpdate",
-                "rollingUpdate": {
-                    "maxUnavailable": max_unavailable,
-                    "maxSurge": max_surge,
-                },
-            },
-        },
-        "status": {
-            "observedGeneration": observed_generation,
-            "updatedReplicas": updated,
-            "readyReplicas": ready,
-            "availableReplicas": available,
-            "unavailableReplicas": unavailable,
-        },
-    }
-
-
-class _KubeCtl:
-    def __init__(self, initial_deployment, json_deployments):
-        self.initial_deployment = initial_deployment
-        self.json_deployments = list(json_deployments)
-        self.patch_commands = []
-        self.patches = []
+class _Kubectl:
+    def __init__(self, outputs):
+        self.outputs = list(outputs)
+        self.commands = []
 
     def exec_command(self, command):
-        if command.endswith("-o yaml"):
-            return yaml.safe_dump(self.initial_deployment)
-        if command.endswith("-o json"):
-            if not self.json_deployments:
-                raise AssertionError("No deployment status queued")
-            return json.dumps(self.json_deployments.pop(0))
-        if "--patch-file" in command:
-            self.patch_commands.append(command)
-            patch_path = command.split("--patch-file ", 1)[1]
-            with open(patch_path) as patch_file:
-                self.patches.append(yaml.safe_load(patch_file))
-            return "deployment.apps/custom-service patched\n"
-        raise AssertionError(f"Unexpected command: {command}")
+        self.commands.append(command)
+        return self.outputs.pop(0) if len(self.outputs) > 1 else self.outputs[0]
 
 
-def _oracle(kubectl):
-    problem = SimpleNamespace(namespace="social-network", kubectl=kubectl)
-    oracle = RollingUpdateMitigationOracle(problem, "custom-service")
-    oracle.poll_interval_seconds = 0
-    return oracle
-
-
-def test_rejects_original_strategy_without_triggering_probe():
-    deployment = _deployment(max_unavailable="100%", max_surge="0%")
-    kubectl = _KubeCtl(deployment, [])
-
-    assert _oracle(kubectl).evaluate()["success"] is False
-    assert kubectl.patch_commands == []
-
-
-def test_accepts_safe_strategy_after_stable_probe_rollout(monkeypatch):
-    monkeypatch.setattr(rolling_update_module.time, "time_ns", lambda: 1234)
-    initial = _deployment()
-    probe_started = _deployment(
-        generation=2,
-        observed_generation=1,
-        updated=0,
-        ready=3,
-        available=3,
-    )
-    probe_progress = _deployment(
-        generation=2,
-        observed_generation=2,
-        updated=1,
-        ready=3,
-        available=3,
-    )
-    probe_complete = _deployment(generation=2, observed_generation=2)
-    kubectl = _KubeCtl(
-        initial,
-        [
-            initial,
-            probe_started,
-            probe_progress,
-            probe_complete,
-        ],
-    )
-
-    assert _oracle(kubectl).evaluate()["success"] is True
-    assert len(kubectl.patch_commands) == 2
-    probe_container = kubectl.patches[0]["spec"]["template"]["spec"]["initContainers"][0]
-    assert probe_container["image"] == "busybox:1.36"
-    assert probe_container["imagePullPolicy"] == "IfNotPresent"
-    restored_template = kubectl.patches[1]["spec"]["template"]
-    assert restored_template["spec"]["initContainers"] is None
-    assert restored_template["metadata"]["annotations"]["rollout-readiness-check"] is None
-
-
-def test_rejects_zero_availability_during_probe(monkeypatch):
-    monkeypatch.setattr(rolling_update_module.time, "time_ns", lambda: 1234)
-    initial = _deployment()
-    probe_started = _deployment(
-        generation=2,
-        observed_generation=1,
-        updated=0,
-        ready=3,
-        available=3,
-    )
-    outage = _deployment(
-        generation=2,
-        observed_generation=2,
-        updated=0,
-        ready=0,
-        available=0,
-        unavailable=3,
-    )
-    kubectl = _KubeCtl(initial, [initial, probe_started, outage])
-
-    assert _oracle(kubectl).evaluate()["success"] is False
-    assert len(kubectl.patch_commands) == 2
-
-
-def test_rejects_probe_that_does_not_advance_generation(monkeypatch):
-    monkeypatch.setattr(rolling_update_module.time, "time_ns", lambda: 1234)
-    initial = _deployment()
-    kubectl = _KubeCtl(initial, [initial, initial])
-
-    assert _oracle(kubectl).evaluate()["success"] is False
-    assert len(kubectl.patch_commands) == 2
-
-
-def test_restore_preserves_the_repaired_template():
-    original_template = _deployment()["spec"]["template"]
-    original_template["metadata"]["annotations"] = {"agent.example/repair": "kept"}
-    original_template["spec"]["initContainers"] = [
+def _deployment(*, replicas=3, generation=4, observed=4, updated=3, total=3, available=3, init=()):
+    return json.dumps(
         {
-            "name": "agent-setup",
-            "image": "busybox:1.36",
-            "command": ["sh", "-c", "true"],
+            "metadata": {"generation": generation},
+            "spec": {
+                "replicas": replicas,
+                "template": {"spec": {"initContainers": [{"name": n} for n in init]}},
+            },
+            "status": {
+                "observedGeneration": observed,
+                "updatedReplicas": updated,
+                "replicas": total,
+                "availableReplicas": available,
+            },
         }
-    ]
-    kubectl = _KubeCtl(_deployment(), [])
+    )
 
-    _oracle(kubectl)._restore_pod_template(original_template)
 
-    restored_template = kubectl.patches[0]["spec"]["template"]
-    assert restored_template["metadata"]["annotations"]["agent.example/repair"] == "kept"
-    assert restored_template["metadata"]["annotations"]["rollout-readiness-check"] is None
-    assert restored_template["spec"]["initContainers"] == original_template["spec"]["initContainers"]
+def _evaluate(monkeypatch, *outputs):
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+    kubectl = _Kubectl(outputs)
+    problem = SimpleNamespace(namespace="hotel-reservation", kubectl=kubectl)
+    return RollingUpdateMitigationOracle(problem, "custom-service").evaluate()["success"], kubectl
+
+
+def test_completed_rollout_without_hang_init_passes_and_only_reads(monkeypatch):
+    success, kubectl = _evaluate(monkeypatch, _deployment(init=("wait-for-db",)))
+    assert success is True
+    assert kubectl.commands == ["kubectl get deployment custom-service -n hotel-reservation -o json"]
+
+
+def test_completed_rollout_with_hang_init_still_present_fails(monkeypatch):
+    # slow_timeout: the init container eventually succeeds, so the rollout completes unfixed.
+    assert _evaluate(monkeypatch, _deployment(init=("hang-init",)))[0] is False
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        {"available": 0},  # drain_all
+        {"total": 4},  # stuck canary: an old-template pod lingers
+        {"updated": 1},
+        {"observed": 3},  # controller has not seen the latest spec
+    ],
+)
+def test_incomplete_rollout_fails(monkeypatch, status):
+    assert _evaluate(monkeypatch, _deployment(**status))[0] is False
+
+
+def test_empty_output_is_retried_then_fails(monkeypatch):
+    success, kubectl = _evaluate(monkeypatch, "", "  ", "")
+    assert success is False
+    assert len(kubectl.commands) == 3
+    assert _evaluate(monkeypatch, "", _deployment())[0] is True

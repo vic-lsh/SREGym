@@ -3,17 +3,19 @@
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.missing_cm_key_mitigation import MissingCmKeyMitigationOracle
 from sregym.conductor.problems.base import Problem
+from sregym.conductor.problems.variant_utils import create_app
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
-from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
 
 class ConfigMapDrift(Problem):
-    def __init__(self, faulty_service: str = "geo"):
+    def __init__(self, app_name: str = "hotel_reservation", faulty_service: str = "geo"):
+        self.app_name = app_name
         self.faulty_service = faulty_service
 
-        super().__init__(app=HotelReservation())
+        app = create_app(app_name)
+        super().__init__(app=app)
 
         self.kubectl = KubeCtl()
         self.root_cause = self.build_structured_root_cause(
@@ -21,7 +23,7 @@ class ConfigMapDrift(Problem):
             namespace=self.namespace,
             description=(
                 f"ConfigMap `{self.faulty_service}-config` has drifted and is missing required keys (for example "
-                "`GeoMongoAddress`), so deployment `{self.faulty_service}` starts with incomplete runtime config. "
+                f"`GeoMongoAddress`), so deployment `{self.faulty_service}` starts with incomplete runtime config. "
                 "The service may run but fails dependency initialization and request handling for paths requiring the "
                 "missing settings. Users observe intermittent errors, degraded responses, and feature-level failures."
             ),
@@ -30,10 +32,8 @@ class ConfigMapDrift(Problem):
         self.configmap_name = f"{self.faulty_service}-config"
 
         self.app.create_workload()
-        self.mitigation_oracle = MissingCmKeyMitigationOracle(
-            problem=self,
-            configmap_name=self.configmap_name,
-            expected_keys=[
+        expected_keys = (
+            [
                 "consulAddress",
                 "jaegerAddress",
                 "FrontendPort",
@@ -54,7 +54,14 @@ class ConfigMapDrift(Problem):
                 "UserPort",
                 "UserMongoAddress",
                 "KnativeDomainName",
-            ],
+            ]
+            if self.app_name == "hotel_reservation"
+            else []
+        )
+        self.mitigation_oracle = MissingCmKeyMitigationOracle(
+            problem=self,
+            configmap_name=self.configmap_name,
+            expected_keys=expected_keys,
         )
 
     @mark_fault_injected

@@ -436,6 +436,30 @@ class ApplicationFaultInjector(FaultInjector):
         self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
         print(f"Deleted environment variable '{env_var}' from deployment '{deployment_name}'.")
 
+    def inject_empty_env_variable(self, deployment_name: str, env_var: str):
+        """
+        Patch the deployment to set a specific environment variable to an empty string.
+        """
+        try:
+            deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+            container = deployment.spec.template.spec.containers[0]
+            current_env = container.env
+        except Exception as e:
+            raise ValueError(f"Failed to get deployment '{deployment_name}': {e}") from e
+
+        found = False
+        for e in current_env:
+            if e.name == env_var:
+                e.value = ""
+                found = True
+                break
+
+        if not found:
+            raise ValueError(f"Environment variable '{env_var}' not found in deployment '{deployment_name}'")
+
+        self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
+        print(f"Set environment variable '{env_var}' to empty string in deployment '{deployment_name}'.")
+
     def recover_missing_env_variable(self, deployment_name: str, env_var: str, env_value: str):
         """
         Restore the previously deleted environment variable.

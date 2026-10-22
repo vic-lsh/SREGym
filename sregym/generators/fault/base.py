@@ -36,13 +36,13 @@ class FaultInjector:
 
         self._inject(microservices, fault_type)
 
-    def _inject(self, fault_type: str, microservices: list[str] = None, duration: str = None):
+    def _inject(self, fault_type: str, microservices: list[str] = None, duration: str = None, **kwargs):
         if duration:
-            self._invoke_method("inject", fault_type, microservices, duration)
+            self._invoke_method("inject", fault_type, microservices, duration, **kwargs)
         elif microservices:
-            self._invoke_method("inject", fault_type, microservices)
+            self._invoke_method("inject", fault_type, microservices, **kwargs)
         else:
-            self._invoke_method("inject", fault_type)
+            self._invoke_method("inject", fault_type, **kwargs)
         time.sleep(6)
 
     def _recover(
@@ -55,11 +55,11 @@ class FaultInjector:
         elif fault_type:
             self._invoke_method("recover", fault_type)
 
-    def _invoke_method(self, action_prefix, *args):
+    def _invoke_method(self, action_prefix, *args, **kwargs):
         """helper: injects/recovers faults based on name"""
         method_name = f"{action_prefix}_{args[0]}"
         method = getattr(self, method_name, None)
         if method:
-            method(*args[1:])
+            method(*args[1:], **kwargs)
         else:
             print(f"Unknown fault type: {args[0]}")

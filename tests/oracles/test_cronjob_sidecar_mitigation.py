@@ -1,7 +1,9 @@
 from types import SimpleNamespace
 
 import pytest
+from kubernetes.client.exceptions import ApiException
 
+from sregym.conductor.oracles import cronjob_sidecar_mitigation
 from sregym.conductor.oracles.cronjob_sidecar_mitigation import (
     CronJobSidecarBlocksCompletionMitigationOracle,
 )
@@ -14,170 +16,100 @@ def _container(name, restart_policy=None):
     return SimpleNamespace(name=name, restart_policy=restart_policy)
 
 
-def _job_spec(
-    *,
-    native_sidecar=True,
-    dummy_native=False,
-    regular_sidecar=False,
-    primary=True,
-    job_deadline=None,
-    pod_deadline=None,
-):
-    containers = []
-    if primary:
-        containers.append(_container("archiver"))
-    if regular_sidecar:
-        containers.append(_container("fluent-bit-sidecar"))
-
+def _cronjob(*, native_sidecar=True, other_native=False, deadline=None):
+    containers = [_container("archiver")]
     init_containers = []
     if native_sidecar:
         init_containers.append(_container("fluent-bit-sidecar", "Always"))
-    if dummy_native:
+    else:
+        containers.append(_container("fluent-bit-sidecar"))
+    if other_native:
         init_containers.append(_container("telemetry-bootstrap", "Always"))
+    pod_spec = SimpleNamespace(containers=containers, init_containers=init_containers)
+    job_spec = SimpleNamespace(active_deadline_seconds=deadline, template=SimpleNamespace(spec=pod_spec))
+    return SimpleNamespace(spec=SimpleNamespace(job_template=SimpleNamespace(spec=job_spec)))
 
-    pod_spec = SimpleNamespace(
-        containers=containers,
-        init_containers=init_containers,
-        active_deadline_seconds=pod_deadline,
-    )
+
+def _job(*, active=0, succeeded=0, owner="audit-log-archiver"):
     return SimpleNamespace(
-        active_deadline_seconds=job_deadline,
-        template=SimpleNamespace(spec=pod_spec),
-    )
-
-
-def _cronjob(*, job_spec=None, suspend=False, schedule="* * * * *"):
-    return SimpleNamespace(
-        spec=SimpleNamespace(
-            suspend=suspend,
-            schedule=schedule,
-            job_template=SimpleNamespace(spec=job_spec or _job_spec()),
-        )
+        metadata=SimpleNamespace(owner_references=[SimpleNamespace(kind="CronJob", name=owner)]),
+        status=SimpleNamespace(active=active, succeeded=succeeded),
     )
 
 
-def _owned_job(name, job_spec, *, active=1):
+def _deployment(*, replicas=1, ready=1):
     return SimpleNamespace(
-        metadata=SimpleNamespace(
-            name=name,
-            owner_references=[SimpleNamespace(kind="CronJob", name="audit-log-archiver")],
-        ),
-        spec=job_spec,
-        status=SimpleNamespace(active=active, succeeded=0),
+        metadata=SimpleNamespace(name="frontend"),
+        spec=SimpleNamespace(replicas=replicas),
+        status=SimpleNamespace(ready_replicas=ready),
     )
 
 
 class _BatchV1:
-    def __init__(self, *, jobs=None, controlled_status=None):
-        self.jobs = jobs or []
-        self.controlled_status = controlled_status or SimpleNamespace(succeeded=1, failed=0)
-        self.created = []
-        self.deleted = []
+    def __init__(self, cronjob, jobs):
+        self.cronjob = cronjob
+        self.jobs = jobs
+
+    def read_namespaced_cron_job(self, name, namespace):
+        if self.cronjob is None:
+            raise ApiException(status=404)
+        return self.cronjob
 
     def list_namespaced_job(self, namespace):
         return SimpleNamespace(items=self.jobs)
 
-    def create_namespaced_job(self, namespace, body):
-        self.created.append((namespace, body))
 
-    def read_namespaced_job(self, name, namespace):
-        return SimpleNamespace(status=self.controlled_status)
-
-    def delete_namespaced_job(self, name, namespace, propagation_policy):
-        self.deleted.append((name, namespace, propagation_policy))
-
-
-def _oracle(batch_v1=None):
-    problem = SimpleNamespace(
-        cronjob_name="audit-log-archiver",
-        PRIMARY_CONTAINER="archiver",
-        SIDECAR_CONTAINER="fluent-bit-sidecar",
-        SCHEDULE="* * * * *",
-    )
-    oracle = CronJobSidecarBlocksCompletionMitigationOracle(problem)
-    oracle.batch_v1 = batch_v1 or _BatchV1()
-    return oracle
+def _evaluate(monkeypatch, *, cronjob=..., jobs=None, deployments=None):
+    monkeypatch.setattr(cronjob_sidecar_mitigation, "_BEHAVIOR_PROOF_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(cronjob_sidecar_mitigation, "_BEHAVIOR_PROOF_POLL_INTERVAL_S", 0.01)
+    problem = SimpleNamespace(namespace="hotel-reservation", cronjob_name="audit-log-archiver")
+    oracle = CronJobSidecarBlocksCompletionMitigationOracle.__new__(CronJobSidecarBlocksCompletionMitigationOracle)
+    oracle.problem = problem
+    oracle.namespace_settled = True
+    oracle.batch_v1 = _BatchV1(_cronjob() if cronjob is ... else cronjob, [_job(succeeded=1)] if jobs is None else jobs)
+    deployments = [_deployment()] if deployments is None else deployments
+    oracle.apps_v1 = SimpleNamespace(list_namespaced_deployment=lambda namespace: SimpleNamespace(items=deployments))
+    return oracle.evaluate()["success"]
 
 
-def test_accepts_named_native_sidecar_with_primary_and_no_deadline():
-    assert _oracle()._is_spec_fixed(_cronjob()) is True
+def test_passes_with_native_sidecar_bounded_jobs_healthy_app_and_a_completed_job(monkeypatch):
+    jobs = [_job(active=1), _job(active=1), _job(succeeded=1)]
+    assert _evaluate(monkeypatch, jobs=jobs) is True
 
 
-def test_rejects_unrelated_restartable_init_when_real_sidecar_is_removed():
-    spec = _job_spec(native_sidecar=False, dummy_native=True)
-
-    assert _oracle()._is_spec_fixed(_cronjob(job_spec=spec)) is False
-
-
-def test_rejects_real_sidecar_left_in_regular_containers():
-    spec = _job_spec(dummy_native=True, regular_sidecar=True)
-
-    assert _oracle()._is_spec_fixed(_cronjob(job_spec=spec)) is False
+def test_any_restartable_init_container_counts_as_the_native_sidecar_fix(monkeypatch):
+    assert _evaluate(monkeypatch, cronjob=_cronjob(native_sidecar=False, other_native=True)) is True
 
 
 @pytest.mark.parametrize(
-    "job_spec",
-    [
-        _job_spec(job_deadline=30),
-        _job_spec(pod_deadline=30),
-    ],
+    "cronjob",
+    [None, _cronjob(native_sidecar=False), _cronjob(native_sidecar=False, deadline=30)],
+    ids=["deleted", "unfixed", "deadline-workaround"],
 )
-def test_rejects_active_deadline_workarounds(job_spec):
-    assert _oracle()._is_spec_fixed(_cronjob(job_spec=job_spec)) is False
+def test_rejects_a_cronjob_without_the_native_sidecar_pattern(monkeypatch, cronjob):
+    assert _evaluate(monkeypatch, cronjob=cronjob) is False
 
 
-def test_rejects_suspended_or_rescheduled_cronjob():
-    assert _oracle()._is_spec_fixed(_cronjob(suspend=True)) is False
-    assert _oracle()._is_spec_fixed(_cronjob(schedule="0 0 * * *")) is False
+def test_rejects_accumulated_active_jobs(monkeypatch):
+    jobs = [_job(active=1) for _ in range(3)] + [_job(succeeded=1), _job(active=1, owner="other")]
+    assert _evaluate(monkeypatch, jobs=jobs) is False
 
 
-def test_identifies_active_job_from_old_regular_sidecar_template_as_unsafe():
-    stale = _owned_job(
-        "audit-log-archiver-old",
-        _job_spec(native_sidecar=False, regular_sidecar=True),
-    )
-    current = _owned_job("audit-log-archiver-new", _job_spec())
-    batch_v1 = _BatchV1(jobs=[stale, current])
-    oracle = _oracle(batch_v1)
-
-    active = oracle._active_jobs("audit-log-archiver", "hotel-reservation")
-
-    assert [job.metadata.name for job in active] == [
-        "audit-log-archiver-old",
-        "audit-log-archiver-new",
-    ]
-    assert oracle._job_spec_is_safe(stale.spec) is False
-    assert oracle._job_spec_is_safe(current.spec) is True
+def test_rejects_collateral_damage_to_the_application(monkeypatch):
+    assert _evaluate(monkeypatch, deployments=[_deployment(replicas=2, ready=1)]) is False
 
 
-def test_runtime_proof_creates_and_deletes_a_fresh_job_from_current_template():
-    batch_v1 = _BatchV1()
-    oracle = _oracle(batch_v1)
-    cronjob = _cronjob()
-
-    assert oracle._run_controlled_job(cronjob, "hotel-reservation") is True
-
-    controlled = batch_v1.created[0][1]
-    assert controlled.metadata.name.startswith("audit-log-archiver-run-")
-    assert controlled.spec is not cronjob.spec.job_template.spec
-    assert len(batch_v1.deleted) == 1
+def test_rejects_when_no_owned_job_ever_completes(monkeypatch):
+    assert _evaluate(monkeypatch, jobs=[_job(active=1), _job(succeeded=1, owner="other")]) is False
 
 
-def test_runtime_proof_rejects_failed_current_template_and_cleans_job():
-    batch_v1 = _BatchV1(controlled_status=SimpleNamespace(succeeded=0, failed=1))
-    oracle = _oracle(batch_v1)
-
-    assert oracle._run_controlled_job(_cronjob(), "hotel-reservation") is False
-    assert len(batch_v1.deleted) == 1
-
-
-def test_archiver_requires_live_sidecar_and_native_recovery_preserves_it():
+def test_native_recovery_moves_the_sidecar_to_a_restartable_init_container():
     problem = object.__new__(CronJobSidecarBlocksCompletionHotelReservation)
     problem.namespace = "hotel-reservation"
 
     broken = problem._build_cronjob_body()
-    primary = broken["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
-    assert "nc -w 2 127.0.0.1 24224" in primary["command"][-1]
+    broken_pod = broken["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+    assert [container["name"] for container in broken_pod["containers"]] == ["archiver", "fluent-bit-sidecar"]
 
     recovered = problem._build_cronjob_body_with_native_sidecar()
     pod_spec = recovered["spec"]["jobTemplate"]["spec"]["template"]["spec"]
