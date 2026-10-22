@@ -335,10 +335,11 @@ def prepare_kind_config(
         )
         config.setdefault("containerdConfigPatches", []).append(auth_patch)
     # containerd 1.x reads the v2 key, 2.x the images plugin key; each version ignores the other.
+    patches = config.setdefault("containerdConfigPatches", [])
     for plugin in ("io.containerd.grpc.v1.cri", "io.containerd.cri.v1.images"):
-        config.setdefault("containerdConfigPatches", []).append(
-            f'[plugins."{plugin}".registry]\n  config_path = "/etc/containerd/certs.d"\n'
-        )
+        patch = f'[plugins."{plugin}".registry]\n  config_path = "/etc/containerd/certs.d"\n'
+        if patch not in patches:  # the base kind configs already carry it
+            patches.append(patch)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as handle:
         yaml.safe_dump(config, handle)
     return handle.name
@@ -364,6 +365,31 @@ def apply_worker_cpu_limit(cluster_name: str) -> None:
     )
     for container_id in node_containers:
         subprocess.run(["docker", "update", "--cpus", cpu_limit, container_id], check=False)
+
+
+def registry_caches_running(prefix: str | None = None) -> bool:
+    """Whether kind/regcache.sh's local pull-through caches are up (its docker.io cache runs)."""
+    name = f"{prefix or os.environ.get('REGCACHE_PREFIX', 'rs-regcache')}-dockerhub"
+    result = subprocess.run(
+        ["docker", "inspect", "-f", "{{.State.Running}}", name], capture_output=True, text=True, check=False
+    )
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
+def attach_registry_caches(cluster_name: str) -> None:
+    """Point a new worker cluster's image pulls at the local pull-through caches, when they run.
+
+    Opt-in by starting the caches (``bash kind/regcache.sh up``); otherwise pulls are
+    left as they were. Best effort: a failed attach only costs cache hits.
+    """
+    if not registry_caches_running():
+        return
+    script = os.path.abspath(os.path.join("kind", "regcache.sh"))
+    result = subprocess.run(["bash", script, "attach", cluster_name], capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        logger.warning("regcache attach failed for %s: %s", cluster_name, result.stderr.strip())
+    else:
+        logger.info("Worker cluster %s pulls through the local registry caches", cluster_name)
 
 
 def install_calico(cluster_name: str, kubeconfig_path: str) -> None:
@@ -426,6 +452,7 @@ def create_kind_cluster(cluster_name: str, kubeconfig_path: str) -> tuple[str, s
             create_command.extend(["--wait", "180s"])
         subprocess.run(create_command, check=True)
         apply_worker_cpu_limit(cluster_name)
+        attach_registry_caches(cluster_name)
         if _truthy_env("SREGYM_KIND_REQUIRE_NETWORK_POLICY"):
             install_calico(cluster_name, kubeconfig_path)
             subprocess.run(

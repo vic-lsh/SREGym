@@ -24,9 +24,58 @@ from kubernetes.client.rest import ApiException  # noqa: E402
 from logger import console  # noqa: E402
 
 WAIT_FOR_POD_READY_TIMEOUT = int(os.getenv("WAIT_FOR_POD_READY_TIMEOUT", "600"))
+# A pod that cannot pull its image for this long (e.g. registry rate limits, a
+# missing tag) fails wait_for_ready at once instead of after the full timeout.
+IMAGE_PULL_FAIL_FAST_S = 60
+
+_IMAGE_PULL_ERRORS = frozenset({"ErrImagePull", "ImagePullBackOff"})
+
+
+class ImagePullStuckError(Exception):
+    """Pods sat in an image-pull error longer than wait_for_ready's fail-fast window."""
+
+
+def image_pull_errors(pod) -> list[tuple[str, str]]:
+    """(image, kubelet message) for each of the pod's containers stuck pulling its image."""
+    status = pod.status
+    errors = []
+    for cs in (status.init_container_statuses or []) + (status.container_statuses or []):
+        waiting = cs.state.waiting if cs.state else None
+        if waiting is not None and waiting.reason in _IMAGE_PULL_ERRORS:
+            errors.append((cs.image, waiting.message or waiting.reason))
+    return errors
+
+
+class ImagePullWatch:
+    """Tracks how long each pod has been continuously in an image-pull error.
+
+    Pure: the caller supplies the time of each observation. A pod that is seen
+    without a pull error starts over.
+    """
+
+    def __init__(self, fail_after_s: float):
+        self.fail_after_s = fail_after_s
+        self._since: dict[str, float] = {}
+
+    def observe(self, pods, now: float) -> dict[str, list[tuple[str, str]]]:
+        """Record one observation of *pods*; return the pods stuck past the window, by name."""
+        stuck, since = {}, {}
+        for pod in pods:
+            errors = image_pull_errors(pod)
+            if not errors:
+                continue
+            name = pod.metadata.name
+            since[name] = self._since.get(name, now)
+            if now - since[name] >= self.fail_after_s:
+                stuck[name] = errors
+        self._since = since
+        return stuck
 
 
 class KubeCtl:
+    # Seam for tests: wait loops sleep through this, so a test can pass a fake clock.
+    _sleep = staticmethod(time.sleep)
+
     def __init__(self):
         """Initialize the KubeCtl object and load the Kubernetes configuration."""
         try:
@@ -157,6 +206,7 @@ class KubeCtl:
         service_names: str | list[str] | None = None,
         sleep: int = 2,
         max_wait: int = WAIT_FOR_POD_READY_TIMEOUT,
+        image_pull_fail_after: int = IMAGE_PULL_FAIL_FAST_S,
     ):
         """Wait for pods to be in a Ready state.
 
@@ -166,6 +216,11 @@ class KubeCtl:
                            If None, wait for all pods in the namespace.
             sleep: Seconds between checks
             max_wait: Maximum seconds to wait
+            image_pull_fail_after: Seconds a pod may stay in ErrImagePull/ImagePullBackOff
+
+        Raises:
+            ImagePullStuckError: a pod stayed in an image-pull error for image_pull_fail_after seconds.
+            Exception: not every pod was ready within max_wait seconds.
         """
 
         # Normalize to list
@@ -193,6 +248,7 @@ class KubeCtl:
         console.log(f"[bold yellow]Waiting for all pods in {display_name} to be ready...")
 
         wait = 0
+        pulls = ImagePullWatch(image_pull_fail_after)
 
         while wait < max_wait:
             try:
@@ -221,11 +277,24 @@ class KubeCtl:
                     if len(ready_pods) == len(all_pods):
                         console.log(f"[bold green]All pods in {display_name} are ready.")
                         return
+                    # Elapsed time counts the sleeps, as max_wait does.
+                    stuck = pulls.observe(all_pods, now=wait)
+                    if stuck:
+                        details = "; ".join(
+                            f"{pod}: " + ", ".join(f"{image} ({message})" for image, message in errors)
+                            for pod, errors in sorted(stuck.items())
+                        )
+                        raise ImagePullStuckError(
+                            f"Pods in {display_name} could not pull their images for {image_pull_fail_after}s "
+                            f"or more: {details}"
+                        )
 
+            except ImagePullStuckError:
+                raise
             except Exception as e:
                 console.log(f"[red]Error checking pod statuses: {e}")
 
-            time.sleep(sleep)
+            self._sleep(sleep)
             wait += sleep
 
         raise Exception(

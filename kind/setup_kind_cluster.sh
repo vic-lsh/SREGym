@@ -25,6 +25,27 @@ fi
 echo "==> Step 1: Create Kind cluster (arch: ${ARCH})"
 kind create cluster --config "${KIND_CONFIG}"
 
+echo "==> Step 1b: Route image pulls around Docker Hub's rate limit"
+# Anonymous Docker Hub pulls are rate-limited (HTTP 429). The kind config points
+# containerd at /etc/containerd/certs.d, which it reads on each pull.
+REGCACHE="${SCRIPT_DIR}/regcache.sh"
+if [[ -f "${REGCACHE}" ]] &&
+    [[ $(docker inspect -f '{{.State.Running}}' "${REGCACHE_PREFIX:-rs-regcache}-dockerhub" 2>/dev/null) == true ]]; then
+    # The local pull-through caches are up: use them for every registry.
+    bash "${REGCACHE}" attach kind
+else
+    for node in $(kind get nodes --name kind); do
+        docker exec -i "${node}" sh -c 'd=/etc/containerd/certs.d/docker.io && mkdir -p $d &&
+            cat >$d/.hosts.toml.new && mv $d/.hosts.toml.new $d/hosts.toml' <<'TOML'
+server = "https://registry-1.docker.io"
+
+[host."https://mirror.gcr.io"]
+  capabilities = ["pull", "resolve"]
+TOML
+        echo "${node}: docker.io pulls go through mirror.gcr.io"
+    done
+fi
+
 echo "==> Step 2: Install Calico CNI"
 kubectl apply -f "https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/calico.yaml"
 

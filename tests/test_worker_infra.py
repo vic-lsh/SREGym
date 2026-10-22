@@ -333,3 +333,27 @@ def test_inventory_timeout_never_recreates_a_reused_cluster(tmp_path, monkeypatc
     monkeypatch.setattr(worker_infra, "create_kind_cluster", create)
     with pytest.raises(RuntimeError, match="inventory"):
         worker_infra.create_worker_cluster(0, str(tmp_path))
+
+
+def test_new_worker_clusters_attach_to_the_registry_caches_only_when_they_run(monkeypatch) -> None:
+    import subprocess as sp
+
+    from sregym import worker_infra
+
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        running = "true" if caches_up else "false"
+        return sp.CompletedProcess(command, 0, stdout=running if command[0] == "docker" else "", stderr="")
+
+    monkeypatch.setattr(worker_infra.subprocess, "run", fake_run)
+    caches_up = False
+    worker_infra.attach_registry_caches("sregym-w0")
+    assert [c[0] for c in calls] == ["docker"]  # inspected, nothing attached
+
+    calls.clear()
+    caches_up = True
+    worker_infra.attach_registry_caches("sregym-w0")
+    assert calls[-1][0] == "bash" and calls[-1][-2:] == ["attach", "sregym-w0"]
+    assert calls[-1][1].endswith("kind/regcache.sh")

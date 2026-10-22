@@ -85,7 +85,19 @@ a mode-600 env file under `REGCACHE_DIR`, never on a command line.
 `bash kind/regcache.sh warm < images.txt` fetches the listed images through the
 caches without storing them on any node, so the next deploy pulls locally.
 
+`setup_kind_cluster.sh` attaches its cluster to the caches when they are up, and
+otherwise points docker.io pulls at `mirror.gcr.io`. Parallel worker clusters
+(`--parallel`) are attached when created if the caches are up, and are left as
+they are otherwise.
+
 ## Troubleshooting
+
+### ImagePullBackOff or `429 Too Many Requests` from Docker Hub
+
+Anonymous Docker Hub pulls are rate-limited per IP. Start the local pull-through
+caches (see above). `wait_for_ready` fails after 60 s of a pod in
+`ErrImagePull`/`ImagePullBackOff` and names the pods and images, rather than
+waiting out `WAIT_FOR_POD_READY_TIMEOUT`.
 
 ### Docker issues
 

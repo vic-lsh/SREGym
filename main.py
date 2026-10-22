@@ -474,6 +474,7 @@ def driver_loop(
                 snapshot = {
                     "problem_id": pid,
                     "attempt": run.attempt,
+                    "timed_out": False,  # conductor.results sets it True on an agent timeout
                 }
                 for stage, outcome in conductor.results.items():
                     if isinstance(outcome, dict):

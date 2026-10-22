@@ -2,11 +2,19 @@ kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 networking:
   disableDefaultCNI: true
-# uncomment below content to enable nodes to pull images from our exclusive docker registry
-#containerdConfigPatches:
-#  - |
-#    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."docker.io"]
-#      endpoint = ["http://128.105.144.30:5000"]
+# containerd reads per-registry hosts.toml files from certs.d on each pull, so
+# they can be written after the cluster is up without a restart. Anonymous
+# Docker Hub pulls are rate-limited (HTTP 429): setup_kind_cluster.sh points
+# the nodes at the local caches (regcache.sh attach) when they run, else
+# docker.io pulls at mirror.gcr.io. containerd 1.x reads the first key, 2.x the
+# second; each ignores the other (worker_infra.prepare_kind_config sets the same).
+containerdConfigPatches:
+  - |
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "/etc/containerd/certs.d"
+  - |
+    [plugins."io.containerd.cri.v1.images".registry]
+      config_path = "/etc/containerd/certs.d"
 nodes:
   - role: control-plane
     image: jacksonarthurclark/aiopslab-kind-arm:latest
