@@ -122,12 +122,24 @@ def _node_digests(node: str, image: str) -> set[str]:
     return digests | set(re.findall(r"sha256:[0-9a-f]{64}", listed.stdout))
 
 
+def _node_has_digest(node: str, image: str, digest: str) -> bool:
+    try:
+        return digest in _node_digests(node, image)
+    except subprocess.CalledProcessError:
+        return False
+
+
 def ensure_kind_images(cluster_name: str, images: list[str]) -> dict[str, dict[str, str]]:
     expected = {image: _image_digest(image) for image in images}
-    if images:
-        _run(["kind", "load", "docker-image", "--name", cluster_name, *images])
+    nodes = _kind_nodes(cluster_name)
+    # `kind load` streams every image into every node (about 60 s for the SDO images), so load only the
+    # images a node lacks or holds at another digest. The verification below still covers every image.
+    stale = [image for image, digest in expected.items() if not all(_node_has_digest(node, image, digest) for node in nodes)]
+    if stale:
+        logger.info("loading %d of %d kind images with missing or stale digests: %s", len(stale), len(images), stale)
+        _run(["kind", "load", "docker-image", "--name", cluster_name, *stale])
     evidence: dict[str, dict[str, str]] = {}
-    for node in _kind_nodes(cluster_name):
+    for node in nodes:
         node_evidence: dict[str, str] = {}
         for image, digest in expected.items():
             observed = _node_digests(node, image)
