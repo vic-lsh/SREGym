@@ -61,10 +61,15 @@ async def submit_via_conductor(ans: str | list[str]) -> dict[str, str]:
             return {"status": "error", "text": f"Grading error: {e}"}
 
 
+# No route listing (/docs, /redoc, /openapi.json): the agent reaches this API, and
+# needs only the endpoints its prompt names.
 app = FastAPI(
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
     routes=[
         Mount("/submit_mcp", app=create_sse_app(submit_mcp, "/messages/", "/sse")),
-    ]
+    ],
 )
 
 _server: Server | None = None

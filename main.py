@@ -22,11 +22,18 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
+from clients.harness.limits import MAX_TURNS_ENV
 from clients.harness.problem_id import HARNESS_ARTIFACT_ID_ENV, HARNESS_PROBLEM_ID_ENV
+from clients.harness.usage import usage_from_logs
 from logger import console, init_logger
 from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents
-from sregym.conductor.conductor import Conductor, ConductorConfig, defer_diagnosis_grading_enabled
+from sregym.conductor.conductor import (
+    Conductor,
+    ConductorConfig,
+    defer_diagnosis_grading_enabled,
+    grade_unsubmitted_stages_enabled,
+)
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.problem_sets import PROBLEM_SETS
@@ -153,6 +160,11 @@ def _configure_model_environment(args) -> tuple[str, str]:
         os.environ["AGENT_REASONING_EFFORT"] = reasoning_effort
     else:
         os.environ.pop("AGENT_REASONING_EFFORT", None)
+    max_turns = getattr(args, "max_turns", None)
+    if max_turns:
+        os.environ[MAX_TURNS_ENV] = str(max_turns)
+    else:
+        os.environ.pop(MAX_TURNS_ENV, None)
 
     if not getattr(args, "judge_model", None) or normalizes_opencode_local_judge:
         if not os.environ.get("JUDGE_API_BASE") and os.environ.get("AGENT_API_BASE"):
@@ -419,8 +431,9 @@ def driver_loop(
                         LAUNCHER.cleanup_agent(agent_to_run)
                         conductor.results["timed_out"] = True
                         conductor.results["agent_timeout_seconds"] = agent_timeout
+                        # Awaits any evaluation the agent started just before the timeout.
                         console.log("🧹 Running conductor cleanup after agent timeout...")
-                        conductor._finish_problem()
+                        conductor.finish_after_agent_stopped("agent_timeout")
                         break
 
                     tracked_proc = LAUNCHER._procs.get(agent_to_run) or agent_proc
@@ -429,19 +442,8 @@ def driver_loop(
                         if tracked_proc.proc.returncode is not None:
                             agent_proc = tracked_proc
                             console.log(f"⚠️  Agent process exited with return code {tracked_proc.proc.returncode}")
-                            if conductor._submit_future is not None and not conductor._submit_future.done():
-                                console.log("⏳ Waiting for conductor evaluation to complete...")
-                                try:
-                                    await asyncio.wait_for(
-                                        asyncio.wrap_future(conductor._submit_future),
-                                        timeout=300,
-                                    )
-                                except TimeoutError:
-                                    console.log("⚠️  Conductor evaluation did not finish within 300s")
-                                except Exception as e:
-                                    console.log(f"⚠️  Conductor evaluation raised: {e}")
                             console.log("🧹 Running conductor cleanup after agent exit...")
-                            conductor._finish_problem()
+                            conductor.finish_after_agent_stopped("agent_exit")
                             break
                     await asyncio.sleep(1)
 
@@ -479,6 +481,10 @@ def driver_loop(
                             snapshot[f"{stage}.{k}"] = v
                     else:
                         snapshot[stage] = outcome
+                # Read from the agent's own logs, so a killed driver is still accounted for.
+                usage = usage_from_logs(run.active_dir)
+                if usage is not None:
+                    snapshot.update(usage.result_fields())
 
                 fieldnames = sorted({key for row in [*all_results_for_agent, snapshot] for key in row})
                 ownership_image = (
@@ -629,6 +635,7 @@ def main(args):
         preserve_infrastructure=os.getenv("SREGYM_PRESERVE_INFRASTRUCTURE", "").lower() in {"1", "true", "yes"},
         defer_fault_injection=bool(agent_reg and agent_reg.defer_fault_injection),
         defer_diagnosis_grading=defer_diagnosis_grading_enabled(),
+        grade_unsubmitted_stages=grade_unsubmitted_stages_enabled(),
         enable_safety_invariants=args.enable_safety_invariants,
         proxy_write_floor=getattr(args, "proxy_write_floor", False),
     )
@@ -751,6 +758,12 @@ if __name__ == "__main__":
         help="Reasoning effort for Codex, Copilot, OpenCode, and Claude Code (uses the agent default when omitted)",
     )
     parser.add_argument(
+        "--max-turns",
+        type=int,
+        default=None,
+        help="Cap the Claude Code agent's turns (claude --max-turns); no cap when omitted",
+    )
+    parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."
     )
     parser.add_argument(
@@ -868,6 +881,8 @@ if __name__ == "__main__":
         parser.error("--judge-rounds must be at least 1")
     if args.sequence_len < 0:
         parser.error("--sequence-len must not be negative")
+    if args.max_turns is not None and args.max_turns < 1:
+        parser.error("--max-turns must be a positive integer")
     if args.fault_count_weights is not None:
         try:
             parse_weights(args.fault_count_weights)

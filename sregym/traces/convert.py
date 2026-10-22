@@ -20,6 +20,7 @@ from typing import Any
 from atif_converter import SUPPORTED_AGENTS, AtifConverterError, Trajectory
 from atif_converter import convert as convert_session
 from atif_converter.adapters import claudecode
+from clients.harness.usage import usage_from_logs
 
 logger = logging.getLogger(__name__)
 
@@ -76,25 +77,14 @@ def _find_claudecode_session_files(run_dir: Path) -> list[Path]:
 
 
 def _claudecode_total_cost_usd(run_dir: Path) -> float | None:
-    """Read Claude's authoritative cost from its separate stream output."""
-    try:
-        lines = (run_dir / "claude-code.txt").read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return None
-    for line in lines:
-        if not line.strip().startswith("{"):
-            continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if event.get("type") != "result" or event.get("total_cost_usd") is None:
-            continue
-        try:
-            return float(event["total_cost_usd"])
-        except (TypeError, ValueError):
-            return None
-    return None
+    """Read Claude's authoritative cost from its separate stream output.
+
+    A session woken again (a backgrounded task's notification) emits a further result
+    event with the session's cumulative cost, so the first result under-reports; and a
+    run killed before its result has no authoritative cost at all.
+    """
+    usage = usage_from_logs(run_dir)
+    return usage.total_cost_usd if usage is not None else None
 
 
 def _find_codex_session_file(run_dir: Path) -> Path | None:

@@ -14,6 +14,7 @@ from pathlib import Path
 import requests
 
 from clients.claudecode.claudecode_agent import ClaudeCodeAgent
+from clients.harness import task_text as t
 from clients.harness.problem_id import resolve_problem_id
 from logger import init_logger
 
@@ -145,8 +146,9 @@ def build_instruction(app_info: dict) -> str:
     else:
         namespace_block = f"Namespace: {namespaces[0]}"
 
-    # Build instruction similar to how it would be done in Harbor
-    instruction = f"""You are an SRE agent tasked with diagnosing and fixing issues in a Kubernetes application.
+    # The task wording never says how many faults there are (clients.harness.task_text).
+    api_base_url = get_api_base_url()
+    instruction = f"""{t.ROLE}
 
 Application: {app_name}
 {namespace_block}
@@ -155,37 +157,38 @@ Application: {app_name}
 
 CRITICAL: You are running in an AUTOMATED environment. Work autonomously and make all decisions yourself. DO NOT ask for user confirmation or approval. Proceed with the best solution based on your analysis.
 
+{t.GOAL}
+
 WORKFLOW: You will perform TWO tasks in sequence:
 
 TASK 1: DIAGNOSIS
-- Investigate the application to detect any anomalies or issues
+- {t.INVESTIGATE}
 - Analyze metrics, logs, and traces
-- When ready, submit a natural language description of the issue you found
-- Your diagnosis is evaluated on whether you correctly identify the faulty components and root cause
+- {t.DIAGNOSIS_SUBMIT}
+- {t.DIAGNOSIS_EVALUATED}
 
 TASK 2: MITIGATION
-- Identify the root cause of the issue
-- Implement a fix to resolve the problem
-- When the fix is applied, submit to trigger validation
-- Your mitigation is evaluated on whether the application is healthy after your changes
-- Your fix is also evaluated on whether it addresses the root cause, not just the symptoms
+- {t.MITIGATE}
+- {t.MITIGATION_SUBMIT}
+- {t.MITIGATION_EVALUATED}
+- {t.MITIGATION_ROOT_CAUSE}
 
 HOW TO SUBMIT:
 
-The submission endpoint is: {get_api_base_url()}/submit
+The submission endpoint is: {api_base_url}/submit
 
 For DIAGNOSIS stage:
-- Submit with a natural language description of the issue
-- Example: POST {get_api_base_url()}/submit with JSON: {{"solution": "The frontend service is crashing due to missing environment variable"}}
+- Submit with {t.DIAGNOSIS_SUBMISSION}
+- Example: POST {api_base_url}/submit with JSON: {{"solution": "{t.DIAGNOSIS_EXAMPLE}"}}
 
 For MITIGATION stage:
-- Submit with an EMPTY STRING after you have applied the fix
-- POST {get_api_base_url()}/submit with JSON: {{"solution": ""}}
+- Submit with an EMPTY STRING after you have applied your changes
+- POST {api_base_url}/submit with JSON: {{"solution": ""}}
 
 Important:
 - You have access to kubectl commands to inspect and modify resources in namespace(s): {", ".join(namespaces)}
 - You can query metrics and traces through the available observability tools
-- The conductor API is available at {get_api_base_url()}
+- The conductor API is available at {api_base_url}
 """
 
     from clients.harness.memory import inject_operational_memory

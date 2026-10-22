@@ -59,6 +59,7 @@ def _conductor(*, defer_grading: bool, defer_cleanup: bool = False) -> tuple[Con
     conductor._submit_future = None
     conductor._diagnosis_future = None
     conductor._cleanup_lock = threading.Lock()
+    conductor._stage_lock = threading.Lock()
     conductor._cleanup_timer = None
     conductor.submission_stage = None
     conductor._build_stage_sequence()

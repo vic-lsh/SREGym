@@ -150,6 +150,7 @@ class ContainerRunner:
         # SREGym internal
         "AGENT_MODEL_ID",
         "AGENT_REASONING_EFFORT",
+        "AGENT_MAX_TURNS",
         "SREGYM_AGENT_PROMPT_APPENDIX",
         "AGENT_API_BASE",
         "AGENT_API_KEY",

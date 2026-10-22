@@ -224,6 +224,8 @@ def _child_command(args: Any, task: RunTask) -> list[str]:
         command.extend(["--judge-model", args.judge_model])
     if args.reasoning_effort:
         command.extend(["--reasoning-effort", args.reasoning_effort])
+    if getattr(args, "max_turns", None):
+        command.extend(["--max-turns", str(args.max_turns)])
     if args.noise:
         command.append("--noise")
     if args.force_build:

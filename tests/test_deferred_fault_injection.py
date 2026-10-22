@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from pathlib import Path
 
 import pytest
@@ -36,6 +37,7 @@ def _conductor(*, defer_fault_injection: bool) -> Conductor:
     conductor.results = {}
     conductor.execution_start_time = 0.0
     conductor._submit_future = None
+    conductor._stage_lock = threading.Lock()
     return conductor
 
 

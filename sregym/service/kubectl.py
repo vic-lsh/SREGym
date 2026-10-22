@@ -30,7 +30,8 @@ class KubeCtl:
     def __init__(self):
         """Initialize the KubeCtl object and load the Kubernetes configuration."""
         try:
-            config.load_kube_config()
+            # KUBECONFIG as it is now: the kubernetes package's default froze it at import.
+            config.load_kube_config(config_file=os.environ.get("KUBECONFIG") or "~/.kube/config")
         except Exception:
             logger.error("Missing kubeconfig. Please set up a cluster.")
             exit(1)

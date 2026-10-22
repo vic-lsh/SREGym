@@ -10,6 +10,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from clients.harness.limits import max_turns_args, max_turns_from_env
+
 logger = logging.getLogger("all.claudecode.agent")
 
 
@@ -354,6 +356,7 @@ class ClaudeCodeAgent:
         ]
         if reasoning_effort:
             command.extend(["--effort", reasoning_effort])
+        command.extend(max_turns_args(max_turns_from_env(os.environ)))
         command.extend(["--allowedTools", *self.ALLOWED_TOOLS])
 
         logger.info(f"Executing command: {' '.join(command)}")

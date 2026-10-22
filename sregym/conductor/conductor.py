@@ -61,6 +61,10 @@ class ConductorConfig:
     # Opt-in: the proxy's write floor (k8s_proxy.write_refusal) lets agent writes
     # through only in the problem's namespaces and never deletes cluster objects.
     proxy_write_floor: bool = False
+    # Opt-in: when the agent stops (timeout or exit) with a stage unsubmitted, grade it
+    # (a pending diagnosis fails without a judge call; a pending mitigation runs its
+    # oracles on the cluster as it stands) instead of leaving it without a result.
+    grade_unsubmitted_stages: bool = False
 
 
 _TRUTHY = {"1", "true", "yes"}
@@ -69,6 +73,11 @@ _TRUTHY = {"1", "true", "yes"}
 def defer_diagnosis_grading_enabled() -> bool:
     """Whether ``SREGYM_DEFER_DIAGNOSIS_GRADING`` opts into deferred diagnosis grading."""
     return os.getenv("SREGYM_DEFER_DIAGNOSIS_GRADING", "").strip().lower() in _TRUTHY
+
+
+def grade_unsubmitted_stages_enabled() -> bool:
+    """Whether ``SREGYM_GRADE_UNSUBMITTED_STAGES`` opts into grading stages a stopped agent left unsubmitted."""
+    return os.getenv("SREGYM_GRADE_UNSUBMITTED_STAGES", "").strip().lower() in _TRUTHY
 
 
 def _deferred_grading_timeout() -> float:
@@ -119,6 +128,9 @@ class Conductor:
         self.submission_stage = None
         self.results = {}
         self._submit_future = None  # Future for the executor running _submit_evaluate_and_advance
+        # Guards claiming the pending stage (waiting_for_agent -> evaluating) and setting
+        # _submit_future, so the /submit thread and finish_after_agent_stopped never both take it.
+        self._stage_lock = threading.Lock()
         # Background diagnosis grading when config.defer_diagnosis_grading is on.
         self._diagnosis_future: concurrent.futures.Future | None = None
         self._cleanup_lock = threading.Lock()
@@ -542,6 +554,66 @@ class Conductor:
         self.submission_stage = "done"
         self.logger.info("[CLEANUP] Cleanup complete, stage set to 'done'")
 
+    def finish_after_agent_stopped(self, reason: str, evaluation_wait_s: float | None = None):
+        """Tear down after the agent stopped (it timed out and was killed, or it exited).
+
+        An evaluation already running (a submission accepted before the stop, or one the
+        /submit handler's hold claims meanwhile) is awaited and its result kept; teardown
+        never starts while one runs. With ``config.grade_unsubmitted_stages`` the stages
+        the agent left unsubmitted are then graded: a pending diagnosis fails without a
+        judge call; a pending mitigation runs its oracles on the cluster as it stands,
+        exactly as an empty submission would, and ``unsubmitted_reason`` = *reason*
+        (e.g. ``agent_timeout``, ``agent_exit``) is recorded. Without it they stay
+        ungraded, as before.
+
+        Each wait on a running evaluation is bounded by *evaluation_wait_s* (default: the
+        problem's ``evaluation_timeout_s``, else 300 s, plus 300 s for the advance). If it
+        fires, records ``evaluation_wait_timeout_s`` and ``infra_error`` and tears down
+        anyway; the late evaluation then neither advances nor tears down again.
+        """
+        if evaluation_wait_s is None:
+            evaluation_wait_s = float(getattr(self.problem, "evaluation_timeout_s", 300.0)) + 300.0
+        grade_pending = self.config.grade_unsubmitted_stages
+
+        def fail_diagnosis(solution):
+            r = {"success": False, "submission": None, "error": f"no diagnosis submitted ({reason})"}
+            self.results["Diagnosis"] = r
+            self.logger.info(f"[EVAL] Diagnosis Failed (not submitted: {reason})")
+            return r
+
+        while True:
+            with self._stage_lock:
+                running = self._submit_future if self._submit_future and not self._submit_future.done() else None
+                stage = self._claim_pending_stage() if running is None and grade_pending else None
+            if running is not None:
+                self.logger.info(f"[{reason}] Waiting up to {evaluation_wait_s:.0f}s for the running evaluation")
+                try:
+                    running.result(timeout=evaluation_wait_s)
+                except concurrent.futures.TimeoutError:
+                    self.logger.error(f"[{reason}] Evaluation still running after {evaluation_wait_s:.0f}s")
+                    self.results["evaluation_wait_timeout_s"] = evaluation_wait_s
+                    self.results["infra_error"] = "evaluation_wait_timeout"
+                    break
+                except Exception:
+                    self.logger.exception(f"[{reason}] The running evaluation raised")
+                continue
+            if stage is None:
+                break
+            self.results["unsubmitted_reason"] = reason
+            if stage["name"] == "diagnosis":
+                stage = {**stage, "evaluation": fail_diagnosis}
+            self.logger.info(f"[{reason}] Grading unsubmitted stage '{stage['name']}'")
+            self._submit_evaluate_and_advance("", stage)
+        self._finish_problem()
+
+    def _claim_pending_stage(self) -> dict | None:
+        """Take the stage awaiting a submission for evaluation, or None. Caller holds _stage_lock."""
+        if not self.waiting_for_agent:
+            return None
+        self.waiting_for_agent = False
+        self._evaluating = True
+        return self.stage_sequence[self.current_stage_index]
+
     def _finish_problem(self):
         """
         Runs problem teardown synchronously (fault recovery, app undeploy, cluster
@@ -761,6 +833,13 @@ class Conductor:
         finally:
             self._evaluating = False
 
+        with self._stage_lock:
+            torn_down = self.submission_stage in ("done", "tearing_down")
+        if torn_down:
+            # finish_after_agent_stopped stopped waiting for this evaluation and tore down.
+            self.logger.warning(f"Stage '{stage_name}' finished after teardown; not advancing")
+            return
+
         # After evaluation, advance to the next stage (if any)
         next_index = self.current_stage_index + 1
         self._advance_to_next_stage(start_index=next_index)
@@ -795,50 +874,49 @@ class Conductor:
             self.logger.warning("submit() called but no stages are configured; returning current results.")
             return dict(self.results)
 
-        if not self.waiting_for_agent:
-            if self._evaluating:
-                # Never acknowledge and drop: the API holds the request until the next stage opens.
-                raise SubmissionWhileEvaluating(
-                    f"stage '{self.submission_stage}' is still being evaluated; the submission was not recorded"
+        with self._stage_lock:
+            current_stage = self._claim_pending_stage()
+            if current_stage is None:
+                if self._evaluating:
+                    # Never acknowledge and drop: the API holds the request until the next stage opens.
+                    raise SubmissionWhileEvaluating(
+                        f"stage '{self.submission_stage}' is still being evaluated; the submission was not recorded"
+                    )
+                self.logger.error(
+                    "submit() called when conductor is not waiting for a submission. "
+                    f"Current submission_stage={self.submission_stage}"
                 )
-            self.logger.error(
-                "submit() called when conductor is not waiting for a submission. "
-                f"Current submission_stage={self.submission_stage}"
+                raise RuntimeError("Conductor is not currently waiting for an agent submission.")
+
+            # When the agent sent this answer, before any API-side retry or oracle time.
+            self.results[f"{current_stage['name']}_submitted_at"] = (
+                received_at if received_at is not None else time.time()
             )
-            raise RuntimeError("Conductor is not currently waiting for an agent submission.")
 
-        current_stage = self.stage_sequence[self.current_stage_index]
+            next_index = self.current_stage_index + 1
+            if (
+                self.config.defer_diagnosis_grading
+                and current_stage["name"] == "diagnosis"
+                and next_index < len(self.stage_sequence)
+            ):
+                # TTL is the time to the answer; the judge's latency is not the agent's.
+                self.results["TTL"] = self.results["diagnosis_submitted_at"] - self.execution_start_time
+                self._start_deferred_diagnosis(sol)
+                self._evaluating = False
+                self._advance_to_next_stage(start_index=next_index)
+                return {"status": "ok", "message": "Submission received"}
 
-        # Mark that we're no longer waiting so duplicate submits are rejected
-        self.waiting_for_agent = False
-        self._evaluating = True
-        # When the agent sent this answer, before any API-side retry or oracle time.
-        self.results[f"{current_stage['name']}_submitted_at"] = received_at if received_at is not None else time.time()
-
-        next_index = self.current_stage_index + 1
-        if (
-            self.config.defer_diagnosis_grading
-            and current_stage["name"] == "diagnosis"
-            and next_index < len(self.stage_sequence)
-        ):
-            # TTL is the time to the answer; the judge's latency is not the agent's.
-            self.results["TTL"] = self.results["diagnosis_submitted_at"] - self.execution_start_time
-            self._start_deferred_diagnosis(sol)
-            self._evaluating = False
-            self._advance_to_next_stage(start_index=next_index)
-            return {"status": "ok", "message": "Submission received"}
-
-        # Run evaluation and stage advancement in an executor thread so the HTTP
-        # response returns immediately.  Store the future so start_problem() can
-        # await it and guarantee cleanup is fully done before the next problem starts.
-        # Use concurrent.futures directly (not asyncio's run_in_executor) so the
-        # future is loop-independent.  submit() is called from the uvicorn API thread
-        # which has its own event loop; start_problem() runs in the main driver loop.
-        # asyncio.wrap_future() in start_problem() binds the future to whichever loop
-        # is running at await time, avoiding "Future attached to a different loop".
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        self._submit_future = executor.submit(self._submit_evaluate_and_advance, sol, current_stage)
-        executor.shutdown(wait=False)
+            # Run evaluation and stage advancement in an executor thread so the HTTP
+            # response returns immediately.  Store the future so start_problem() and
+            # finish_after_agent_stopped() can await it and guarantee no teardown overlaps it.
+            # Use concurrent.futures directly (not asyncio's run_in_executor) so the
+            # future is loop-independent.  submit() is called from the uvicorn API thread
+            # which has its own event loop; start_problem() runs in the main driver loop.
+            # asyncio.wrap_future() in start_problem() binds the future to whichever loop
+            # is running at await time, avoiding "Future attached to a different loop".
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            self._submit_future = executor.submit(self._submit_evaluate_and_advance, sol, current_stage)
+            executor.shutdown(wait=False)
 
         return {"status": "ok", "message": "Submission received"}
 
