@@ -4,14 +4,17 @@ Drop-in for ``LiteLLMBackend`` (``inference(messages) -> obj`` with a ``.content
 robust-skills' SREGym. It authenticates the way Claude Code does on Vertex
 (``ANTHROPIC_VERTEX_PROJECT_ID`` and ``CLOUD_ML_REGION``, Google credentials), taken from the
 environment or, for any not set there, from the Claude settings fallback
-(``clients.harness.claude_auth``). ``temperature`` is sent only when set; Claude models that
-deprecate it reject it.
+(``clients.harness.claude_auth``). ``temperature`` is sent only when set and the model is known
+to accept it: newer Claude models (Opus 4.7 on, Sonnet 5 on, Haiku 5.5, Fable) reject it with a
+400, so for any model not in ``TEMPERATURE_MODELS`` it is dropped and the model samples at its
+default.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from types import SimpleNamespace
 
@@ -20,6 +23,28 @@ from clients.harness.claude_auth import auth_env, vertex_project
 logger = logging.getLogger("all.llm_backend.anthropic_vertex")
 
 _CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
+
+#: Claude models (without a date suffix) known to accept ``temperature``, from Anthropic's model
+#: docs. A model missing here only loses the setting; it never fails.
+TEMPERATURE_MODELS = frozenset(
+    {
+        "claude-opus-4",
+        "claude-opus-4-1",
+        "claude-opus-4-5",
+        "claude-opus-4-6",
+        "claude-sonnet-4",
+        "claude-sonnet-4-5",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
+    }
+)
+_DATE_SUFFIX = re.compile(r"[-@]\d{8}$")
+
+
+def accepts_temperature(model_name: str) -> bool:
+    """Whether *model_name* (``claude-sonnet-4-6``, ``claude-opus-4-5@20251101``, ...) takes ``temperature``."""
+    family = _DATE_SUFFIX.sub("", model_name.lower())
+    return family.startswith("claude-3") or family in TEMPERATURE_MODELS
 
 
 class AnthropicVertexBackend:
@@ -91,7 +116,7 @@ class AnthropicVertexBackend:
     def inference(self, messages, system_prompt=None, tools=None):
         system_str, msgs = self._convert(messages, system_prompt)
         kwargs = dict(model=self.model_name, max_tokens=self.max_tokens, messages=msgs)
-        if self.temperature is not None:
+        if self.temperature is not None and accepts_temperature(self.model_name):
             kwargs["temperature"] = self.temperature
         if system_str:
             kwargs["system"] = system_str
