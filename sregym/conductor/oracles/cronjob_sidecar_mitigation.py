@@ -43,8 +43,6 @@ from kubernetes.client.exceptions import ApiException
 
 from sregym.conductor.oracles.base import Oracle
 
-_ROLLOUT_SETTLE_SECONDS = 60
-_ROLLOUT_POLL_INTERVAL = 5
 _MAX_ACTIVE_JOBS = 2  # allow legitimate schedule-boundary overlap after rejecting stale templates
 
 # How long to wait for the controlled Job created from the current template.
@@ -75,13 +73,12 @@ class CronJobSidecarBlocksCompletionMitigationOracle(Oracle):
     def evaluate(self, *args, **kwargs) -> dict:
         print("== CronJob Sidecar Mitigation Evaluation ==")
 
-        kubectl = self.problem.kubectl
         namespace = self.problem.namespace
         cronjob_name = self.problem.cronjob_name
 
         # Let any in-progress app rollouts settle so we don't evaluate a
         # transient window where the agent's patch is mid-application.
-        self._wait_for_rollouts(kubectl, namespace)
+        self.settle_rollouts()
 
         # 1. Was the CronJob fixed using the native sidecar pattern?
         cj = self._get_cronjob(cronjob_name, namespace)
@@ -148,26 +145,6 @@ class CronJobSidecarBlocksCompletionMitigationOracle(Oracle):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-    def _wait_for_rollouts(self, kubectl, namespace):
-        deadline = time.monotonic() + _ROLLOUT_SETTLE_SECONDS
-        while time.monotonic() < deadline:
-            deployments = kubectl.list_deployments(namespace)
-            all_settled = True
-            for dep in deployments.items:
-                status = dep.status
-                desired = dep.spec.replicas or 1
-                if (
-                    (status.updated_replicas or 0) < desired
-                    or (status.ready_replicas or 0) < desired
-                    or (status.unavailable_replicas or 0) > 0
-                ):
-                    all_settled = False
-                    break
-            if all_settled:
-                return
-            time.sleep(_ROLLOUT_POLL_INTERVAL)
-        print("⚠️ Timed out waiting for deployments to settle; evaluating current state")
-
     def _get_cronjob(self, name, namespace):
         try:
             return self.batch_v1.read_namespaced_cron_job(name=name, namespace=namespace)

@@ -63,6 +63,9 @@ class RunResult:
     result_dir: str
     solved: bool
     error: str = ""
+    # The conductor's row-level ``infra_error`` (an oracle could not judge the mitigation);
+    # empty when the run was graded. ``solved`` is still False for such a row.
+    infra_error: str = ""
 
 
 def _load_tasklist(path: Path) -> list[str]:
@@ -249,17 +252,27 @@ def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes"}
 
 
-def _read_solved(result_dir: Path) -> bool:
+def _last_result_row(result_dir: Path) -> dict[str, str] | None:
     rows: list[dict[str, str]] = []
     for result_csv in result_dir.rglob("*_results.csv"):
         with result_csv.open(newline="", encoding="utf-8") as stream:
             rows.extend(csv.DictReader(stream))
-    if not rows:
+    return rows[-1] if rows else None
+
+
+def _read_solved(result_dir: Path) -> bool:
+    row = _last_result_row(result_dir)
+    if row is None:
         return False
-    row = rows[-1]
     diagnosis = _truthy(row.get("Diagnosis.success"))
     mitigation_value = row.get("Mitigation.success")
     return diagnosis and (mitigation_value is None or _truthy(mitigation_value))
+
+
+def _read_infra_error(result_dir: Path) -> str:
+    """The row's ``infra_error`` (the conductor's results flatten it to a top-level column)."""
+    row = _last_result_row(result_dir)
+    return (row or {}).get("infra_error") or ""
 
 
 def _manifest_row_is_complete(row: dict[str, str]) -> bool:
@@ -382,6 +395,7 @@ def _run_child(
             elapsed_seconds=time.monotonic() - started,
             result_dir=str(task_dir),
             solved=completed.returncode == 0 and _read_solved(task_dir / "results"),
+            infra_error=_read_infra_error(task_dir / "results"),
         )
     except Exception as exc:
         return RunResult(
@@ -436,6 +450,7 @@ _MANIFEST_FIELDS = (
     "result_dir",
     "solved",
     "error",
+    "infra_error",
 )
 
 
@@ -465,6 +480,7 @@ def _result_row(result: RunResult) -> dict[str, Any]:
         "result_dir": result.result_dir,
         "solved": str(result.solved).lower(),
         "error": result.error,
+        "infra_error": result.infra_error,
     }
 
 

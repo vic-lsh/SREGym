@@ -91,6 +91,8 @@ class HPAMissingEffectiveCPURequest(Problem):
         self._delete_hpa_if_exists(self.HPA_NAME)
         self._create_cpu_utilization_hpa(self.faulty_service, self.HPA_NAME)
         self._wait_for_hpa_missing_cpu_request(self.HPA_NAME)
+        # Before the agent acts: grading tells a metrics outage apart from the agent's doing.
+        self.mitigation_oracle.record_metrics_baseline()
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
 
     @mark_fault_injected

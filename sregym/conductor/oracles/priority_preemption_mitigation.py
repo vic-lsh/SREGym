@@ -1,15 +1,10 @@
 """Mitigation oracle for PriorityClass preemption cascade failures."""
 
-import time
-
 from kubernetes import client
 from kubernetes.client.exceptions import ApiException
 from kubernetes.utils.quantity import parse_quantity
 
 from sregym.conductor.oracles.base import Oracle
-
-_ROLLOUT_SETTLE_SECONDS = 60
-_ROLLOUT_POLL_INTERVAL = 5
 
 
 class PriorityPreemptionMitigationOracle(Oracle):
@@ -30,26 +25,6 @@ class PriorityPreemptionMitigationOracle(Oracle):
         self.apps_v1 = client.AppsV1Api()
         self.core_v1 = client.CoreV1Api()
         self.scheduling_v1 = client.SchedulingV1Api()
-
-    def _wait_for_rollouts(self, namespace):
-        deadline = time.monotonic() + _ROLLOUT_SETTLE_SECONDS
-        while time.monotonic() < deadline:
-            deployments = self.apps_v1.list_namespaced_deployment(namespace)
-            all_settled = True
-            for dep in deployments.items:
-                desired = dep.spec.replicas or 0
-                status = dep.status
-                if (
-                    (status.updated_replicas or 0) < desired
-                    or (status.ready_replicas or 0) < desired
-                    or (status.unavailable_replicas or 0) > 0
-                ):
-                    all_settled = False
-                    break
-            if all_settled:
-                return
-            time.sleep(_ROLLOUT_POLL_INTERVAL)
-        print("⚠️ Timed out waiting for deployments to settle; evaluating current state")
 
     def _read_priority_class(self, name):
         try:
@@ -191,7 +166,7 @@ class PriorityPreemptionMitigationOracle(Oracle):
         pressure_deployment = self.problem.PRESSURE_DEPLOYMENT
         platform_priority = self.problem.PLATFORM_PRIORITY_CLASS
 
-        self._wait_for_rollouts(namespace)
+        self.settle_rollouts()
 
         target_ready, target_deployment = self._deployment_ready(target, namespace)
         if not target_ready:

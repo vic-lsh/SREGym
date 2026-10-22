@@ -1,11 +1,4 @@
-import time
-
 from sregym.conductor.oracles.base import Oracle
-
-# Time to wait for deployments to settle after agent submission, so we
-# evaluate a stable state rather than a transient rolling-update window.
-_ROLLOUT_SETTLE_SECONDS = 60
-_ROLLOUT_POLL_INTERVAL = 5
 
 
 class MitigationOracle(Oracle):
@@ -16,27 +9,6 @@ class MitigationOracle(Oracle):
         deployments = self.problem.kubectl.list_deployments(self.problem.namespace)
         self.replica_count = {dep.metadata.name: dep.spec.replicas for dep in deployments.items}
 
-    def _wait_for_rollouts(self, kubectl, namespace):
-        """Wait for all deployments in the namespace to finish rolling out."""
-        deadline = time.monotonic() + _ROLLOUT_SETTLE_SECONDS
-        while time.monotonic() < deadline:
-            deployments = kubectl.list_deployments(namespace)
-            all_settled = True
-            for dep in deployments.items:
-                status = dep.status
-                desired = dep.spec.replicas if dep.spec.replicas is not None else 1
-                if (
-                    (status.updated_replicas or 0) < desired
-                    or (status.ready_replicas or 0) < desired
-                    or (status.unavailable_replicas or 0) > 0
-                ):
-                    all_settled = False
-                    break
-            if all_settled:
-                return
-            time.sleep(_ROLLOUT_POLL_INTERVAL)
-        print("⚠️ Timed out waiting for deployments to settle; evaluating current state")
-
     def evaluate(self) -> dict:
         print("== Mitigation Evaluation ==")
 
@@ -46,7 +18,7 @@ class MitigationOracle(Oracle):
 
         # Wait for any in-progress rollouts to finish so we don't evaluate
         # a transient state where old pods are gone and new ones haven't crashed yet.
-        self._wait_for_rollouts(kubectl, namespace)
+        self.settle_rollouts()
 
         deployments = kubectl.list_deployments(namespace)
         current_deps = {dep.metadata.name: dep for dep in deployments.items}

@@ -13,38 +13,11 @@ It also walks the rest of the namespace's pods to catch crashloops or other
 downstream breakage the agent may have introduced.
 """
 
-import time
-
 from sregym.conductor.oracles.base import Oracle
-
-_ROLLOUT_SETTLE_SECONDS = 60
-_ROLLOUT_POLL_INTERVAL = 5
 
 
 class DeploymentReadinessOracle(Oracle):
     importance = 1.0
-
-    def _wait_for_rollouts(self, kubectl, namespace):
-        """Wait for all deployments in the namespace to finish rolling out so we
-        evaluate stable state rather than a transient window."""
-        deadline = time.monotonic() + _ROLLOUT_SETTLE_SECONDS
-        while time.monotonic() < deadline:
-            deployments = kubectl.list_deployments(namespace)
-            all_settled = True
-            for dep in deployments.items:
-                status = dep.status
-                desired = dep.spec.replicas or 1
-                if (
-                    (status.updated_replicas or 0) < desired
-                    or (status.ready_replicas or 0) < desired
-                    or (status.unavailable_replicas or 0) > 0
-                ):
-                    all_settled = False
-                    break
-            if all_settled:
-                return
-            time.sleep(_ROLLOUT_POLL_INTERVAL)
-        print("⚠️ Timed out waiting for deployments to settle; evaluating current state")
 
     def evaluate(self) -> dict:
         print("== Mitigation Evaluation ==")
@@ -54,7 +27,7 @@ class DeploymentReadinessOracle(Oracle):
         deployment_name = self.problem.faulty_service
         results = {}
 
-        self._wait_for_rollouts(kubectl, namespace)
+        self.settle_rollouts()
 
         # Primary check: the affected deployment has all desired replicas ready.
         # This is the check that the generic MitigationOracle's per-pod walk

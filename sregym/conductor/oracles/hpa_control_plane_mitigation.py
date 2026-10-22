@@ -7,12 +7,23 @@ This oracle evaluates the live HPA status instead.
 Restoring CPU requests is the canonical fix, but replacing the metric with a
 valid raw CPU averageValue target is also accepted, as long as the HPA remains
 correctly wired and healthy.
+
+When the fix is in place (the HPA needs no CPU request, or every target pod has
+one) but the HPA still cannot read its CPU metric because the resource metrics
+API does not answer, the agent's work cannot be judged: the result carries
+``infra_error`` = ``metrics_server_unavailable`` instead of standing as a
+mitigation failure. That holds only if the metrics-server Deployment and the
+metrics APIService are the objects recorded at injection
+(``record_metrics_baseline``), unchanged; if the agent changed or deleted
+either, the outage is its own collateral and the failure stands.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
+from dataclasses import dataclass
 from json import JSONDecodeError
 
 from sregym.conductor.oracles.base import Oracle
@@ -20,6 +31,25 @@ from sregym.conductor.oracles.base import Oracle
 _DEFAULT_TIMEOUT_SECONDS = 60
 _DEFAULT_POLL_INTERVAL_SECONDS = 5
 _DEFAULT_CONSECUTIVE_HEALTHY_POLLS = 2
+
+METRICS_SERVER_UNAVAILABLE = "metrics_server_unavailable"
+
+# What serves the resource metrics API: the Deployment the conductor installs, and the
+# APIService that routes metrics.k8s.io to it. An outage changes only their status.
+_METRICS_SERVER_OBJECTS = (
+    "kubectl get deployment metrics-server -n kube-system -o json",
+    "kubectl get apiservice v1beta1.metrics.k8s.io -o json",
+)
+
+
+@dataclass(frozen=True)
+class _Poll:
+    healthy: bool
+    detail: str
+    # The only thing wrong is that the HPA cannot read its CPU metric although the fault's
+    # fix is in place, so a metrics API outage would explain the failure.
+    metric_only: bool = False
+    selector: str = ""
 
 
 class HPAControlPlaneMitigationOracle(Oracle):
@@ -43,6 +73,8 @@ class HPAControlPlaneMitigationOracle(Oracle):
         self.timeout_seconds = timeout_seconds
         self.poll_interval_seconds = poll_interval_seconds
         self.consecutive_successes = consecutive_successes
+        # Fingerprint of the metrics-server objects at injection; None until recorded.
+        self._metrics_baseline: tuple | None = None
 
     def evaluate(self) -> dict:
         print("== HPA Control Plane Mitigation Evaluation ==")
@@ -53,7 +85,8 @@ class HPAControlPlaneMitigationOracle(Oracle):
         deadline = time.monotonic() + self.timeout_seconds
 
         while True:
-            healthy, detail = self._evaluate_once()
+            poll = self._evaluate_once()
+            healthy, detail = poll.healthy, poll.detail
             last_detail = detail
 
             if healthy:
@@ -68,7 +101,7 @@ class HPAControlPlaneMitigationOracle(Oracle):
                 print(f"❌ HPA not healthy: {detail}")
 
             if time.monotonic() >= deadline:
-                return {
+                result = {
                     "success": False,
                     "details": (
                         f"Timed out after {self.timeout_seconds}s waiting for "
@@ -76,40 +109,86 @@ class HPAControlPlaneMitigationOracle(Oracle):
                         f"Last check: {last_detail}"
                     ),
                 }
+                outage = self._metrics_api_outage(poll.selector) if poll.metric_only else None
+                if outage:
+                    result["details"] += f" Resource metrics API: {outage}"
+                    if self._metrics_server_untouched():
+                        print(f"⚠️ Cannot judge the HPA: {outage}")
+                        result["infra_error"] = METRICS_SERVER_UNAVAILABLE
+                    else:
+                        print("❌ metrics-server objects changed since injection: the outage counts against the agent")
+                        result["details"] += " The metrics-server Deployment or APIService changed since injection."
+                return result
 
             time.sleep(self.poll_interval_seconds)
 
-    def _evaluate_once(self) -> tuple[bool, str]:
+    def _evaluate_once(self) -> _Poll:
         deployment, error = self._kubectl_json(
             f"kubectl get deployment {self.deployment_name} -n {self.problem.namespace} -o json"
         )
         if error:
-            return False, error
+            return _Poll(False, error)
 
-        ready, detail = self._deployment_ready(deployment)
+        ready, detail, pods = self._deployment_ready(deployment)
         if not ready:
-            return False, detail
+            return _Poll(False, detail)
 
         hpas, error = self._kubectl_json(f"kubectl get hpa -n {self.problem.namespace} -o json")
         if error:
-            return False, error
+            return _Poll(False, error)
 
         target_hpas = [hpa for hpa in hpas.get("items", []) if self._hpa_targets_deployment(hpa, self.deployment_name)]
         if not target_hpas:
-            return False, (
+            return _Poll(
+                False,
                 f"No HorizontalPodAutoscaler targets Deployment/{self.deployment_name}. "
-                "Deleting the HPA without replacing it is not a valid mitigation."
+                "Deleting the HPA without replacing it is not a valid mitigation.",
             )
 
         for hpa in target_hpas:
-            healthy, detail = self._hpa_healthy(hpa)
+            healthy, detail, metric_failure = self._hpa_healthy(hpa)
             if not healthy:
-                return False, detail
+                fixed = not self._needs_cpu_request(hpa) or self._pods_request_cpu(pods)
+                return _Poll(False, detail, metric_failure and fixed, self._selector_from_deployment(deployment))
 
         hpa_names = ", ".join(hpa["metadata"]["name"] for hpa in target_hpas)
-        return True, f"Deployment/{self.deployment_name} is Ready and HPA(s) [{hpa_names}] are healthy"
+        return _Poll(True, f"Deployment/{self.deployment_name} is Ready and HPA(s) [{hpa_names}] are healthy")
 
-    def _deployment_ready(self, deployment: dict) -> tuple[bool, str]:
+    def record_metrics_baseline(self) -> None:
+        """Fingerprint the metrics-server Deployment and APIService. Called at injection,
+        before the agent acts; without it an outage is never an infra error."""
+        self._metrics_baseline = self._metrics_server_fingerprint()
+
+    def _metrics_server_untouched(self) -> bool:
+        """The metrics-server objects are the ones recorded at injection, spec unchanged."""
+        return self._metrics_baseline is not None and self._metrics_server_fingerprint() == self._metrics_baseline
+
+    def _metrics_server_fingerprint(self) -> tuple | None:
+        """``(uid, generation, spec hash)`` per object, ``"absent"`` for one that does not
+        exist (a managed cluster names its own), or None if any read failed otherwise."""
+        prints = []
+        for command in _METRICS_SERVER_OBJECTS:
+            obj, error = self._kubectl_json(command)
+            if error:
+                if "NotFound" not in error:
+                    return None
+                prints.append("absent")
+                continue
+            metadata = obj.get("metadata", {})
+            spec = hashlib.sha256(json.dumps(obj.get("spec"), sort_keys=True).encode()).hexdigest()
+            prints.append((metadata.get("uid"), metadata.get("generation"), spec))
+        return tuple(prints)
+
+    def _metrics_api_outage(self, selector: str) -> str | None:
+        """Why the resource metrics API did not answer a pod-metrics query for the target
+        pods, or None if it answered (even with no samples yet)."""
+        _, error = self._kubectl_json(
+            f"kubectl get --raw '/apis/metrics.k8s.io/v1beta1/namespaces/{self.problem.namespace}/pods"
+            f"?labelSelector={selector}'"
+        )
+        return error
+
+    def _deployment_ready(self, deployment: dict) -> tuple[bool, str, list[dict]]:
         desired = deployment.get("spec", {}).get("replicas", 1)
         status = deployment.get("status", {})
         ready = status.get("readyReplicas", 0)
@@ -117,60 +196,81 @@ class HPAControlPlaneMitigationOracle(Oracle):
         unavailable = status.get("unavailableReplicas", 0)
 
         if desired < 1:
-            return False, f"Deployment/{self.deployment_name} has desired replicas={desired}; expected at least 1"
+            return False, f"Deployment/{self.deployment_name} has desired replicas={desired}; expected at least 1", []
 
         if ready < desired or updated < desired or unavailable:
-            return False, (
+            return (
+                False,
                 f"Deployment/{self.deployment_name} rollout not ready: "
-                f"ready={ready}, updated={updated}, unavailable={unavailable}, desired={desired}"
+                f"ready={ready}, updated={updated}, unavailable={unavailable}, desired={desired}",
+                [],
             )
 
         selector = self._selector_from_deployment(deployment)
         pods, error = self._kubectl_json(f"kubectl get pods -n {self.problem.namespace} -l '{selector}' -o json")
         if error:
-            return False, error
+            return False, error, []
 
         items = pods.get("items", [])
         if not items:
-            return False, f"No pods found for Deployment/{self.deployment_name} selector {selector!r}"
+            return False, f"No pods found for Deployment/{self.deployment_name} selector {selector!r}", []
 
         for pod in items:
             pod_name = pod.get("metadata", {}).get("name", "<unknown>")
             if pod.get("metadata", {}).get("deletionTimestamp"):
-                return False, f"Pod {pod_name} is terminating"
+                return False, f"Pod {pod_name} is terminating", items
 
             phase = pod.get("status", {}).get("phase")
             if phase != "Running":
-                return False, f"Pod {pod_name} is in phase {phase}"
+                return False, f"Pod {pod_name} is in phase {phase}", items
 
             for status in pod.get("status", {}).get("containerStatuses", []):
                 if not status.get("ready", False):
-                    return False, f"Container {status.get('name')} in pod {pod_name} is not Ready"
+                    return False, f"Container {status.get('name')} in pod {pod_name} is not Ready", items
 
-        return True, f"Deployment/{self.deployment_name} has {ready}/{desired} ready replicas"
+        return True, f"Deployment/{self.deployment_name} has {ready}/{desired} ready replicas", items
 
-    def _hpa_healthy(self, hpa: dict) -> tuple[bool, str]:
+    def _hpa_healthy(self, hpa: dict) -> tuple[bool, str, bool]:
+        """``(healthy, detail, metric_failure)``: ``metric_failure`` when the HPA is wired
+        correctly and the one problem is that it cannot compute its CPU metric."""
         hpa_name = hpa.get("metadata", {}).get("name", "<unknown>")
 
         if not self._has_cpu_metric_spec(hpa):
-            return False, f"HPA/{hpa_name} does not have a CPU resource metric configured"
+            return False, f"HPA/{hpa_name} does not have a CPU resource metric configured", False
 
         scaling_range_ok, scaling_range_detail = self._has_valid_scaling_range(hpa)
         if not scaling_range_ok:
-            return False, f"HPA/{hpa_name} has invalid scaling range: {scaling_range_detail}"
+            return False, f"HPA/{hpa_name} has invalid scaling range: {scaling_range_detail}", False
 
         metric_readable, metric_detail = self._current_cpu_metric_readable(hpa)
         if not metric_readable:
-            return False, f"HPA/{hpa_name} cannot currently compute its CPU metric: {metric_detail}"
+            return False, f"HPA/{hpa_name} cannot currently compute its CPU metric: {metric_detail}", True
 
         scaling_active, reason, message = self._scaling_active_condition(hpa)
         if not scaling_active:
-            return False, f"HPA/{hpa_name} ScalingActive is not True: reason={reason}; message={message}"
+            detail = f"HPA/{hpa_name} ScalingActive is not True: reason={reason}; message={message}"
+            return False, detail, reason == "FailedGetResourceMetric"
 
         if reason == "FailedGetResourceMetric":
-            return False, f"HPA/{hpa_name} still reports FailedGetResourceMetric: {message}"
+            return False, f"HPA/{hpa_name} still reports FailedGetResourceMetric: {message}", True
 
-        return True, f"HPA/{hpa_name} has readable CPU metrics and ScalingActive=True"
+        return True, f"HPA/{hpa_name} has readable CPU metrics and ScalingActive=True", False
+
+    @staticmethod
+    def _needs_cpu_request(hpa: dict) -> bool:
+        """A CPU Utilization target is computed relative to the pods' CPU requests."""
+        for metric in hpa.get("spec", {}).get("metrics", []):
+            resource = metric.get("resource", {})
+            if resource.get("name") == "cpu" and resource.get("target", {}).get("type") == "Utilization":
+                return True
+        return False
+
+    @staticmethod
+    def _pods_request_cpu(pods: list[dict]) -> bool:
+        """Every container of every pod has a CPU request, as admitted (so a LimitRange
+        default or a limit-only container, which the API defaults, counts)."""
+        containers = [c for pod in pods for c in pod.get("spec", {}).get("containers", [])]
+        return bool(containers) and all(c.get("resources", {}).get("requests", {}).get("cpu") for c in containers)
 
     @staticmethod
     def _hpa_targets_deployment(hpa: dict, deployment_name: str) -> bool:

@@ -372,6 +372,9 @@ class Conductor:
             r = {"success": False, "error": f"{type(e).__name__}: {e}"}
         r = self._apply_safety_veto(r, "mitigation")
         self.results["Mitigation"] = r
+        # The oracle could not judge (Oracle.evaluate): not a grade. A safety veto is a verdict.
+        if r.get("infra_error") and not r.get("safety_vetoed"):
+            self.results.setdefault("infra_error", r["infra_error"])
         self.results["TTM"] = time.time() - self.execution_start_time
         self.logger.info(
             f"[EVAL] Mitigation "

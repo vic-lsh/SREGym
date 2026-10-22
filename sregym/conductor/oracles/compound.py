@@ -53,8 +53,21 @@ class CompoundedOracle(Oracle):
                     }
                 )
 
+        infra_error = self._infra_error(result["oracles"])
+        if infra_error:
+            result["infra_error"] = infra_error
+
         if result["accuracy"] > 100.0 - 1e-3:
             result["accuracy"] = 100.0
         elif result["accuracy"] < 0.0 + 1e-3:
             result["accuracy"] = 0.0
         return result
+
+    @staticmethod
+    def _infra_error(results: list[dict]) -> str | None:
+        """The sub-oracles' ``infra_error`` slugs (``Oracle.evaluate``), joined, when they alone
+        decide the outcome: every sub-oracle that did judge passed. If one that judged failed,
+        the row fails whatever the unjudged ones would have said, so it is a grade."""
+        errors = sorted({r["infra_error"] for r in results if r.get("infra_error")})
+        judged = [r.get("success", False) for r in results if not r.get("infra_error")]
+        return ",".join(errors) if errors and all(judged) else None

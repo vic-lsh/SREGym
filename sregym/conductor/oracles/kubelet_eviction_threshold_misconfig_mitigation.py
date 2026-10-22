@@ -72,7 +72,7 @@ class KubeletEvictionThresholdMisconfigMitigationOracle(MitigationOracle):
         """True when the faulty service no longer runs on a DiskPressure node AND every
         deployment has its desired ready replicas.
         """
-        self._wait_for_rollouts(kubectl, namespace)
+        self.settle_rollouts()
         deployments = kubectl.list_deployments(namespace)
         if not deployments.items:
             print(f"❌ No deployments found in namespace {namespace}")

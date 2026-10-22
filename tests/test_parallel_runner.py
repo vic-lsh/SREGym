@@ -12,9 +12,13 @@ from sregym.parallel_runner import (
     RunTask,
     _args_for_tests,
     _child_command,
+    _load_manifest,
     _manifest_row_is_complete,
+    _read_infra_error,
     _read_solved,
+    _result_row,
     _worker,
+    _write_manifest,
     build_static_plan,
     select_problem_ids,
 )
@@ -126,6 +130,49 @@ def test_read_solved_uses_upstream_flattened_stage_results(tmp_path: Path):
         writer.writeheader()
         writer.writerow({"Diagnosis.success": "True", "Mitigation.success": "true"})
     assert _read_solved(tmp_path / "results") is True
+
+
+def _write_results(results: Path, rows: list[dict[str, str]]) -> None:
+    result_dir = results / "agent" / "problem"
+    result_dir.mkdir(parents=True)
+    with (result_dir / "problem_agent_results.csv").open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=sorted({key for row in rows for key in row}))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def test_a_row_the_mitigation_oracle_could_not_judge_is_recorded_as_an_infra_error(tmp_path: Path):
+    graded = {"Diagnosis.success": "True", "Mitigation.success": "False"}
+    _write_results(tmp_path / "results", [graded, {**graded, "infra_error": "metrics_server_unavailable"}])
+
+    infra_error = _read_infra_error(tmp_path / "results")
+    row = _result_row(RunResult(RunTask(0, "p"), 0, 0, 1.0, str(tmp_path), False, infra_error=infra_error))
+
+    assert infra_error == "metrics_server_unavailable"
+    assert (row["solved"], row["infra_error"]) == ("false", "metrics_server_unavailable")
+
+
+def test_a_graded_row_has_no_infra_error(tmp_path: Path):
+    _write_results(tmp_path / "results", [{"Diagnosis.success": "True", "Mitigation.success": "False"}])
+
+    assert _read_infra_error(tmp_path / "results") == ""
+    assert _read_infra_error(tmp_path / "missing") == ""
+
+
+def test_a_manifest_written_before_the_infra_error_column_is_rewritten_with_it(tmp_path: Path):
+    manifest = tmp_path / "parallel_results.csv"
+    old = {"sequence": "0", "problem_id": "p", "worker_id": "0", "returncode": "0"}
+    old |= {"elapsed_seconds": "1.000", "result_dir": "r", "solved": "true", "error": ""}
+    with manifest.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(old))
+        writer.writeheader()
+        writer.writerow(old)
+
+    rows = _load_manifest(manifest)
+    rows.append(_result_row(RunResult(RunTask(1, "q"), 0, 0, 1.0, "r", False, infra_error="x")))
+    _write_manifest(manifest, rows)
+
+    assert [(r["problem_id"], r["infra_error"]) for r in _load_manifest(manifest)] == [("p", ""), ("q", "x")]
 
 
 def test_manifest_completion_requires_result_artifact(tmp_path: Path):

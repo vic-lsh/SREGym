@@ -53,9 +53,6 @@ from sregym.conductor.oracles.base import Oracle
 logger = logging.getLogger(__name__)
 
 
-_ROLLOUT_SETTLE_SECONDS = 60
-_ROLLOUT_POLL_INTERVAL = 3
-
 # Probe pod
 _PROBE_TIMEOUT_S = 90
 _PROBE_POLL_INTERVAL = 3
@@ -91,11 +88,10 @@ class CumulativeAdmissionWebhookTimeoutMitigationOracle(Oracle):
     def evaluate(self) -> dict:
         print("== Cumulative Webhook Timeout Mitigation Evaluation ==")
 
-        namespace = self.problem.namespace
         target_deployment = self.problem.TARGET_DEPLOYMENT
 
         # Give any agent-triggered rollout a moment to settle.
-        self._wait_for_rollout_settle(namespace)
+        self.settle_rollouts(poll_s=3, only=target_deployment)
 
         # 1. Workload intact: deployment present with its replica count, at
         #    least one webhook remains, policy namespace still exists.
@@ -347,25 +343,6 @@ class CumulativeAdmissionWebhookTimeoutMitigationOracle(Oracle):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    def _wait_for_rollout_settle(self, namespace: str) -> None:
-        deadline = time.monotonic() + _ROLLOUT_SETTLE_SECONDS
-        while time.monotonic() < deadline:
-            deployments = self.apps_v1.list_namespaced_deployment(namespace=namespace)
-            settled = True
-            for dep in deployments.items:
-                desired = dep.spec.replicas or 1
-                ready = dep.status.ready_replicas or 0
-                updated = dep.status.updated_replicas or 0
-                unavailable = dep.status.unavailable_replicas or 0
-                if ready < desired or updated < desired or unavailable > 0:
-                    # only block on the target; let the others settle in background
-                    if dep.metadata.name == self.problem.TARGET_DEPLOYMENT:
-                        settled = False
-                        break
-            if settled:
-                return
-            time.sleep(_ROLLOUT_POLL_INTERVAL)
-
     def _list_sregym_webhooks(self, backend_names) -> list:
         """Return the list of SREGym-created MutatingWebhookConfigurations
         that still exist. The webhook config name equals the backend name
