@@ -80,7 +80,19 @@ def test_unchanged_build_context_skips_the_rebuild_but_still_loads_the_cluster(h
 
     adapter.ensure_images_loaded(cluster_name="fastloop-w0", node_architectures=set())
 
-    assert docker.kinds() == ["docker image inspect", "kind load docker-image"]
+    assert docker.kinds()[0] == "docker image inspect"
+    assert docker.kinds()[-1] == "kind load docker-image"
+
+
+def test_unchanged_build_context_skips_the_kind_load_when_every_node_holds_the_image(hotel, monkeypatch) -> None:
+    source, docker, adapter = hotel
+    monkeypatch.setenv("SREGYM_SOURCE_BUILD_CACHE", "1")
+    docker.labels[_image_ref()] = source_deploy.source_context_digest(source)
+    monkeypatch.setattr(source_deploy, "kind_nodes_hold_image", lambda cluster, image: True)
+
+    adapter.ensure_images_loaded(cluster_name="fastloop-w0", node_architectures=set())
+
+    assert docker.kinds() == ["docker image inspect"]
 
 
 def test_changed_build_context_rebuilds_with_the_digest_label(hotel, monkeypatch) -> None:
@@ -104,3 +116,13 @@ def test_build_cache_is_opt_in(hotel, monkeypatch) -> None:
 
     assert docker.kinds() == ["docker build -t", "kind load docker-image"]
     assert "--label" not in docker.commands[0]
+
+
+def test_kind_load_is_unconditional_without_the_build_cache(hotel, monkeypatch) -> None:
+    _source, docker, adapter = hotel
+    monkeypatch.delenv("SREGYM_SOURCE_BUILD_CACHE", raising=False)
+    monkeypatch.setattr(source_deploy, "kind_nodes_hold_image", lambda cluster, image: True)
+
+    adapter.ensure_images_loaded(cluster_name="fastloop-w0", node_architectures=set())
+
+    assert docker.kinds()[-1] == "kind load docker-image"

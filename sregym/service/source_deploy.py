@@ -17,6 +17,7 @@ import yaml
 
 from sregym.paths import TARGET_MICROSERVICES
 from sregym.service.app_workspace import resolve_app_source_subdir
+from sregym.worker_infra import kind_nodes_hold_image
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _HOTEL_IMAGE_NAME = "yinfangchen/hotelreservation"
@@ -354,6 +355,10 @@ def _is_arm(node_architectures: set[str]) -> bool:
 
 
 def _kind_load_image(*, cluster_name: str, image_ref: str) -> None:
+    # With the build cache on, an image reused from an unchanged context is already on the nodes.
+    if source_build_cache_enabled() and kind_nodes_hold_image(cluster_name, image_ref):
+        print(f"Skipping kind load of {image_ref}: every node already holds it")
+        return
     _run_command(["kind", "load", "docker-image", image_ref, "--name", cluster_name])
 
 

@@ -129,6 +129,16 @@ def _node_has_digest(node: str, image: str, digest: str) -> bool:
         return False
 
 
+def kind_nodes_hold_image(cluster_name: str, image_ref: str) -> bool:
+    """Whether every node of the kind cluster already holds the local ``image_ref`` at its current image id."""
+    try:
+        local = _run(["docker", "image", "inspect", "--format", "{{.Id}}", image_ref]).stdout.strip()
+        nodes = _kind_nodes(cluster_name)
+    except (subprocess.CalledProcessError, OSError):
+        return False
+    return bool(local) and bool(nodes) and all(_node_has_digest(node, image_ref, local) for node in nodes)
+
+
 def ensure_kind_images(cluster_name: str, images: list[str]) -> dict[str, dict[str, str]]:
     expected = {image: _image_digest(image) for image in images}
     nodes = _kind_nodes(cluster_name)
