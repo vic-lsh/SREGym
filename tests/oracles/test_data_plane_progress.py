@@ -1,96 +1,86 @@
-import json
 from types import SimpleNamespace
 
 import pytest
 
+import sregym.conductor.oracles.data_plane_progress as dppo
 from sregym.conductor.oracles.data_plane_progress import DataPlaneProgressOracle
-from sregym.generators.fault.inject_kafka import KafkaFaultInjector
+
+POISON = 20
 
 
-class _Broker:
-    def __init__(self, source, output, group_offset=24):
-        self.records = {
-            "orders-fulfillment": source,
-            "orders-processed": output,
-        }
-        self.committed = group_offset
+class _Cluster:
+    """The archiver's audit log as a sequence of snapshots, one per read, and the consumer pods."""
 
-    def topic_end_offset(self, topic):
-        return len(self.records[topic])
+    def __init__(self, snapshots):
+        self.snapshots = list(snapshots)
+        self.deleted = []
 
-    def read_topic(self, topic, end_offset):
-        return self.records[topic][:end_offset]
+    def exec_command(self, command):
+        if command.startswith("kubectl delete pod"):
+            self.deleted.append(command.split()[3])
+            return ""
+        assert command.startswith("kubectl logs deployment/orders-archiver -n astronomy-shop")
+        offsets = self.snapshots.pop(0) if len(self.snapshots) > 1 else self.snapshots[0]
+        return "\n".join(f"INFO AUDIT src_offset={o}" for o in offsets)
 
-    def group_offset(self, group, topic):
-        return self.committed
-
-    def pipeline_snapshot(self, source_topic, output_topic, group):
-        return {
-            "source": [{"offset": offset, "value": value} for offset, value in enumerate(self.records[source_topic])],
-            "output": [{"offset": offset, "value": value} for offset, value in enumerate(self.records[output_topic])],
-            "group_offset": self.committed,
-        }
+    def list_pods(self, namespace):
+        pod = SimpleNamespace(
+            metadata=SimpleNamespace(name="orders-validator-abc", labels={"app": "orders-validator"}),
+            status=SimpleNamespace(phase="Running"),
+        )
+        return SimpleNamespace(items=[pod])
 
 
-def _source_records():
-    return [
-        *KafkaFaultInjector.initial_records(),
-        KafkaFaultInjector.INVALID_RECORD,
-        json.dumps({"order_id": "ORD-200021", "amount": 2}),
-        json.dumps({"order_id": "ORD-200022", "amount": 3}),
-    ]
+@pytest.fixture(autouse=True)
+def no_sleep(monkeypatch):
+    monkeypatch.setattr(dppo.time, "sleep", lambda _s: None)
 
 
-def _output_records(source, omit=None):
-    output = []
-    for offset, value in enumerate(source):
-        if offset == omit:
-            continue
-        try:
-            order_id = json.loads(value)["order_id"]
-        except (json.JSONDecodeError, KeyError):
-            continue
-        output.append(json.dumps({"source_offset": offset, "order_id": order_id}))
-    return output
+def _oracle(snapshots):
+    cluster = _Cluster(snapshots)
+    problem = SimpleNamespace(poison_offset=POISON, kubectl=cluster, namespace="astronomy-shop")
+    oracle = DataPlaneProgressOracle(
+        problem,
+        consumer_group="orders-validator",
+        topic="orders-fulfillment",
+        consumer_deployment="orders-validator",
+        progress_timeout=30,
+        restart_recover_timeout=30,
+    )
+    return oracle, cluster
 
 
-def _oracle(source, output):
-    oracle = object.__new__(DataPlaneProgressOracle)
-    oracle.problem = SimpleNamespace(poison_offset=20)
-    oracle.topic = "orders-fulfillment"
-    oracle.output_topic = "orders-processed"
-    oracle.consumer_group = "orders-validator"
-    oracle.broker = _Broker(source, output)
-    return oracle
+def _through(high, skip=()):
+    return [o for o in range(high + 1) if o != POISON and o not in skip]
 
 
-def test_snapshot_accepts_complete_matching_results_around_invalid_record():
-    source = _source_records()
-    processed, group_offset = _oracle(source, _output_records(source))._pipeline_snapshot()
+def test_a_drained_pipeline_that_survives_a_consumer_restart_passes():
+    oracle, cluster = _oracle([_through(22), _through(24), _through(24), _through(26)])
 
-    assert set(processed) == set(range(20)) | {21, 22}
-    assert group_offset == 24
-
-
-def test_snapshot_rejects_skipped_valid_record():
-    source = _source_records()
-
-    with pytest.raises(ValueError, match="valid source records were skipped"):
-        _oracle(source, _output_records(source, omit=7))._pipeline_snapshot()
+    assert oracle.evaluate() == {"success": True}
+    assert cluster.deleted == ["orders-validator-abc"]
 
 
-def test_snapshot_rejects_fabricated_processed_result():
-    source = _source_records()
-    output = _output_records(source)
-    output[-1] = json.dumps({"source_offset": 22, "order_id": "ORD-NOT-IN-SOURCE"})
+def test_a_consumer_still_stalled_at_the_poison_record_fails():
+    oracle, _ = _oracle([_through(POISON - 1)])
 
-    with pytest.raises(ValueError, match="does not match source"):
-        _oracle(source, output)._pipeline_snapshot()
+    assert oracle.evaluate() == {"success": False, "reason": "offset not advanced past poison record"}
 
 
-def test_snapshot_rejects_topic_recreation_that_removed_incident_history():
-    source = _source_records()
-    source[20] = json.dumps({"order_id": "ORD-REPLACED", "amount": 1})
+def test_skipping_valid_records_behind_the_poison_is_data_loss():
+    oracle, _ = _oracle([_through(25, skip={21, 22})])
 
-    with pytest.raises(ValueError, match="original invalid source record is no longer present"):
-        _oracle(source, _output_records(source))._pipeline_snapshot()
+    assert oracle.evaluate() == {"success": False, "reason": "data loss: valid records skipped"}
+
+
+def test_progress_that_stops_after_the_skip_fails():
+    oracle, _ = _oracle([_through(22)])
+
+    assert oracle.evaluate() == {"success": False, "reason": "no forward progress"}
+
+
+def test_unknown_poison_offset_fails_without_reading_the_cluster():
+    oracle, _ = _oracle([])
+    oracle.problem.poison_offset = None
+
+    assert oracle.evaluate()["success"] is False

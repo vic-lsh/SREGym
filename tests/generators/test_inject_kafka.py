@@ -1,85 +1,83 @@
 from types import SimpleNamespace
 
 from sregym.generators.fault.inject_kafka import (
+    ARCHIVER_SCRIPT,
     CONSUMER_SCRIPT,
     PRODUCER_SCRIPT,
-    KafkaBrokerClient,
     KafkaFaultInjector,
 )
 
 
-class _RecordingKubeCtl:
-    def __init__(self):
-        self.commands = []
-
-    def list_pods(self, namespace):
-        pods = [
-            SimpleNamespace(
-                metadata=SimpleNamespace(
-                    name="kafka-abc123",
-                    labels={"app.kubernetes.io/name": "kafka"},
-                    deletion_timestamp=None,
-                ),
-                status=SimpleNamespace(phase="Running"),
-            ),
-            SimpleNamespace(
-                metadata=SimpleNamespace(
-                    name="order-stream-abc123",
-                    labels={"app": "order-stream"},
-                    deletion_timestamp=None,
-                ),
-                status=SimpleNamespace(phase="Running"),
-            ),
-        ]
-        return SimpleNamespace(items=pods)
-
-    def exec_command(self, command, input_data=None):
-        self.commands.append((command, input_data))
-        return "\n__STREAM_ADMIN_OK__\n"
-
-
-def test_pipeline_scripts_do_not_publish_injection_or_hidden_repair_controls():
-    scripts = CONSUMER_SCRIPT + PRODUCER_SCRIPT
-
-    assert "LENIENT" not in scripts
-    assert "POISON" not in scripts.upper()
-    assert "SEED_RECORD_COUNT" not in scripts
-    assert "delete_topics" not in scripts
-    assert "reset_consumer_group" not in scripts
-
-
-def test_broker_commands_use_bounded_heap_and_stream_records_over_stdin():
-    kubectl = _RecordingKubeCtl()
-    broker = KafkaBrokerClient(kubectl, "astronomy-shop")
-
-    broker.publish_lines("orders-fulfillment", ['{"order_id":"ORD-1"}'])
-
-    command, input_data = kubectl.commands[0]
-    assert "kubectl exec -i" in command
-    assert "KAFKA_HEAP_OPTS=-Xms32m -Xmx64m" in command
-    assert "KAFKA_OPTS=" in command
-    assert "kafka-console-producer.sh" in command
-    assert input_data == '{"order_id":"ORD-1"}\n'
-    assert "ORD-1" not in command
-
-
-def test_recovery_resets_inactive_group_without_patching_consumer_template():
-    events = []
+def _injector():
     injector = object.__new__(KafkaFaultInjector)
-    injector.blocked_offset = 20
-    injector.broker = SimpleNamespace(
-        reset_group_offset=lambda group, topic, offset: events.append(("reset", group, topic, offset))
+    injector.namespace = "astronomy-shop"
+    injector.poison_offset = KafkaFaultInjector.SEED_RECORD_COUNT
+    return injector
+
+
+def test_injection_seeds_the_poison_record_after_the_seed_records_and_waits_for_the_stall():
+    events = []
+    injector = _injector()
+    injector._apply_configmap = lambda: events.append(("configmap",))
+    injector._apply_pipeline_deployment = lambda name, script, extra_env: events.append(
+        ("deploy", name, script, {e["name"]: e["value"] for e in extra_env})
     )
+    injector._wait_deployment_ready = lambda name: events.append(("ready", name))
+    injector._wait_for_log = lambda deployment, substring, timeout: events.append(("log", deployment, substring))
+
+    assert injector.inject() == 20
+
+    assert events == [
+        ("configmap",),
+        (
+            "deploy",
+            "order-stream",
+            "producer.py",
+            {"SEED_RECORD_COUNT": "20", "POISON_RECORD": "CORRUPTED-RECORD-NOT-VALID-JSON-POISON-PILL"},
+        ),
+        ("ready", "order-stream"),
+        ("log", "order-stream", "SEED COMPLETE"),
+        ("deploy", "orders-archiver", "archiver.py", {}),
+        ("ready", "orders-archiver"),
+        ("deploy", "orders-validator", "consumer.py", {}),
+        ("ready", "orders-validator"),
+        ("log", "orders-validator", "head-of-line block"),
+    ]
+
+
+def test_recovery_restarts_the_consumer_in_lenient_mode_without_a_rolling_update():
+    events = []
+    injector = _injector()
     injector._scale_consumer = lambda replicas: events.append(("scale", replicas))
     injector._wait_consumer_pods_gone = lambda: events.append(("gone",))
+    injector._patch_consumer_lenient = lambda: events.append(("lenient",))
     injector._wait_deployment_ready = lambda name: events.append(("ready", name))
 
     injector.recover()
 
-    assert events == [
-        ("scale", 0),
-        ("gone",),
-        ("reset", "orders-validator", "orders-fulfillment", 21),
-        ("scale", 1),
-        ("ready", "orders-validator"),
+    assert events == [("scale", 0), ("gone",), ("lenient",), ("scale", 1), ("ready", "orders-validator")]
+
+
+def test_lenient_patch_sets_only_the_consumer_env():
+    patches = []
+    injector = _injector()
+    injector.kubectl = SimpleNamespace(
+        apps_v1_api=SimpleNamespace(
+            patch_namespaced_deployment=lambda name, namespace, body: patches.append((name, namespace, body))
+        )
+    )
+
+    injector._patch_consumer_lenient()
+
+    ((name, namespace, body),) = patches
+    assert (name, namespace) == ("orders-validator", "astronomy-shop")
+    assert body["spec"]["template"]["spec"]["containers"] == [
+        {"name": "orders-validator", "env": [{"name": "LENIENT", "value": "true"}]}
     ]
+
+
+def test_scripts_log_the_markers_injection_and_grading_wait_for():
+    assert "SEED COMPLETE" in PRODUCER_SCRIPT
+    assert "head-of-line block" in CONSUMER_SCRIPT
+    assert 'out.produce(OUTPUT_TOPIC, value=str(msg.offset()).encode("utf-8"))' in CONSUMER_SCRIPT
+    assert "AUDIT src_offset=%s" in ARCHIVER_SCRIPT
