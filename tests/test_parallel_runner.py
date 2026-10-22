@@ -89,6 +89,10 @@ def test_child_command_uses_upstream_single_problem_cli():
     assert command[command.index("--problem") + 1] == "target_port"
     assert command[command.index("--n-attempts") + 1] == "1"
     assert command[command.index("--judge-model") + 1] == "gpt-5-mini"
+    assert "--proxy-write-floor" not in command
+
+    args.proxy_write_floor = True
+    assert "--proxy-write-floor" in _child_command(args, RunTask(2, "target_port"))
 
 
 def test_child_command_preserves_source_workspace_mode():

@@ -234,6 +234,8 @@ def _child_command(args: Any, task: RunTask) -> list[str]:
         command.append("--deploy-from-source")
     if getattr(args, "enable_safety_invariants", False):
         command.append("--enable-safety-invariants")
+    if getattr(args, "proxy_write_floor", False):
+        command.append("--proxy-write-floor")
     if args.app_filter:
         command.extend(["--app-filter", args.app_filter])
     if args.application_workspace:

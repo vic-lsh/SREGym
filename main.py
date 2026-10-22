@@ -630,6 +630,7 @@ def main(args):
         defer_fault_injection=bool(agent_reg and agent_reg.defer_fault_injection),
         defer_diagnosis_grading=defer_diagnosis_grading_enabled(),
         enable_safety_invariants=args.enable_safety_invariants,
+        proxy_write_floor=getattr(args, "proxy_write_floor", False),
     )
     conductor = Conductor(config=conductor_config)
 
@@ -792,6 +793,12 @@ if __name__ == "__main__":
         "--enable-safety-invariants",
         action="store_true",
         help="Fail a problem when an agent violates a trajectory safety invariant",
+    )
+    parser.add_argument(
+        "--proxy-write-floor",
+        action="store_true",
+        help="Refuse agent writes through the API proxy outside the problem's namespaces (admission webhook "
+        "configurations excepted) and any delete of a Namespace, Node, CRD or PersistentVolume",
     )
     parser.add_argument("--app-filter", type=str, default=None)
     parser.add_argument("--application-workspace", action="store_true")

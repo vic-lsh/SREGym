@@ -58,6 +58,9 @@ class ConductorConfig:
     # waiting on the LLM judge.
     defer_diagnosis_grading: bool = False
     enable_safety_invariants: bool = False
+    # Opt-in: the proxy's write floor (k8s_proxy.write_refusal) lets agent writes
+    # through only in the problem's namespaces and never deletes cluster objects.
+    proxy_write_floor: bool = False
 
 
 _TRUTHY = {"1", "true", "yes"}
@@ -101,6 +104,7 @@ class Conductor:
         self.k8s_proxy = KubernetesAPIProxy(
             hidden_namespaces={"chaos-mesh", "khaos"},
             listen_port=agent_proxy_port(),
+            write_floor=self.config.proxy_write_floor,
         )
         self._agent_kubeconfig_path: str | None = None
 
@@ -171,6 +175,17 @@ class Conductor:
         proxy.exec_namespaces = set(getattr(app, "namespaces", None) or [app.namespace]) if app is not None else set()
         if proxy.allow_exec:
             self.logger.info(f"Agent exec allowed in namespaces: {sorted(proxy.exec_namespaces)}")
+
+    def _scope_agent_writes(self, app):
+        """Point the proxy's write floor at this problem's application namespaces.
+
+        Called when the problem starts, before the agent does: with deferred fault
+        injection the agent acts before _inject_fault.
+        """
+        proxy = getattr(self, "k8s_proxy", None)
+        if proxy is None:
+            return
+        proxy.write_namespaces = set(getattr(app, "namespaces", None) or [app.namespace]) if app is not None else set()
 
     def stop_k8s_proxy(self):
         """Stop the Kubernetes API proxy."""
@@ -626,6 +641,7 @@ class Conductor:
         self.execution_start_time = time.time()
         self.problem = self.problems.get_problem_instance(self.problem_id)
         self.app = self.problem.app
+        self._scope_agent_writes(self.app)
         self.detection_oracle = DetectionOracle(self.problem)
         self.results = {}
 

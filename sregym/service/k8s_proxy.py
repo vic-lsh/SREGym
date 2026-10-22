@@ -16,6 +16,8 @@ The proxy:
 7. Forwards pod exec/attach/port-forward connection upgrades (SPDY or websocket)
    only when enabled (``SREGYM_AGENT_PROXY_ALLOW_EXEC``); otherwise answers them
    with a Kubernetes ``403 Forbidden`` Status so the agent learns exec is unavailable
+8. With the write floor on (opt-in), returns 403 Forbidden for writes outside the
+   problem's namespaces and for deleting cluster objects (``write_refusal``)
 """
 
 import base64
@@ -31,6 +33,7 @@ import ssl
 import subprocess
 import tempfile
 import threading
+from collections.abc import Collection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -158,6 +161,72 @@ def upstream_request_headers(headers) -> dict[str, str]:
     return {k: v for k, v in headers.items() if k.lower() not in _NOT_FORWARDED}
 
 
+# The write floor: a few rules no agent-side code can remove. Resources are
+# (API group, plural); the core group is "".
+_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_NAMESPACES = ("", "namespaces")
+_NEVER_DELETED = frozenset(
+    {_NAMESPACES, ("", "nodes"), ("", "persistentvolumes"), ("apiextensions.k8s.io", "customresourcedefinitions")}
+)
+# One problem's fix deletes a webhook configuration; they are cluster-scoped.
+_WEBHOOK_CONFIGS = frozenset(
+    {
+        ("admissionregistration.k8s.io", "validatingwebhookconfigurations"),
+        ("admissionregistration.k8s.io", "mutatingwebhookconfigurations"),
+    }
+)
+
+
+def _api_object(path: str) -> tuple[tuple[str, str], str | None, list[str]] | None:
+    """(resource, namespace, the segments after it) of an API path; None if it is not one.
+
+    `/api/v1/namespaces/NS/pods/P` is (("", "pods"), "NS", ["P"]); the Namespace object
+    itself, `/api/v1/namespaces/NS[/status|/finalize]`, is (("", "namespaces"), None,
+    ["NS", ...]). A path with an empty, `.`, `..` or percent-encoded segment is not one:
+    the API server would normalize it to some other object.
+    """
+    parts = path.split("?", 1)[0].split("/")[1:]
+    if any(p in ("", ".", "..") or "%" in p for p in parts):
+        return None
+    if parts[:1] == ["api"] and len(parts) >= 3:
+        group, rest = "", parts[2:]
+    elif parts[:1] == ["apis"] and len(parts) >= 4:
+        group, rest = parts[1], parts[3:]
+    else:
+        return None
+    if rest[0] == "namespaces" and len(rest) >= 3 and not (group == "" and rest[2] in ("status", "finalize")):
+        return (group, rest[2]), rest[1], rest[3:]
+    return (group, rest[0]), None, rest[1:]
+
+
+def write_refusal(method: str, path: str, namespaces: Collection[str]) -> str | None:
+    """Why the write floor refuses this request; None if it lets it through.
+
+    Reads always pass. A write (POST, PUT, PATCH, DELETE) passes only if it is to an
+    object in one of `namespaces` (the problem's application namespaces), a PUT or PATCH
+    of one of those Namespace objects (one problem's fix relabels it), or to an admission
+    webhook configuration. A Namespace, Node, CustomResourceDefinition or
+    PersistentVolume is never deleted. With no namespace set yet, every other write is
+    refused.
+    """
+    method = method.upper()
+    if method not in _WRITE_METHODS:
+        return None
+    target = _api_object(path)
+    if target is None:
+        return "writes are allowed only to Kubernetes API objects"
+    resource, in_namespace, rest = target
+    if method == "DELETE" and resource in _NEVER_DELETED:
+        return f"deleting {resource[1]} is not allowed"
+    if resource in _WEBHOOK_CONFIGS or (in_namespace is not None and in_namespace in namespaces):
+        return None
+    if resource == _NAMESPACES and len(rest) == 1 and rest[0] in namespaces and method in ("PUT", "PATCH"):
+        return None
+    if not namespaces:
+        return "no problem namespace is set"
+    return f"writes are allowed only in namespace(s) {', '.join(sorted(namespaces))}"
+
+
 class KubernetesAPIProxy:
     """Manages the Kubernetes API filtering proxy."""
 
@@ -171,9 +240,12 @@ class KubernetesAPIProxy:
         hidden_labels: dict[str, set[str]] | None = None,
         listen_port: int = 6443,
         allow_exec: bool | None = None,
+        write_floor: bool = False,
     ):
         if allow_exec is not None and not isinstance(allow_exec, bool):
             raise TypeError(f"allow_exec must be a bool or None, got {type(allow_exec).__name__}")
+        if not isinstance(write_floor, bool):
+            raise TypeError(f"write_floor must be a bool, got {type(write_floor).__name__}")
         #: Forward pod exec/attach/port-forward upgrades; ``None`` reads ``SREGYM_AGENT_PROXY_ALLOW_EXEC``.
         self.allow_exec: bool = allow_exec_from_env() if allow_exec is None else allow_exec
         self.hidden_namespaces: set[str] = hidden_namespaces if hidden_namespaces is not None else HIDDEN_NAMESPACES
@@ -182,6 +254,12 @@ class KubernetesAPIProxy:
         #: Namespaces where exec/attach/port-forward may run when ``allow_exec`` is on; the
         #: conductor sets the current problem's application namespaces. Empty denies all.
         self.exec_namespaces: set[str] = set()
+        #: Apply ``write_refusal`` to every request against ``write_namespaces`` as they are
+        #: when the request arrives (the conductor sets them per problem, on a running proxy).
+        #: Off by default: SREGym's own agents may need cluster-scoped writes (nodes,
+        #: PersistentVolumes, other namespaces) for some problems.
+        self.write_floor: bool = write_floor
+        self.write_namespaces: set[str] = set()
         self.server: ThreadingHTTPServer | None = None
         self.server_thread: threading.Thread | None = None
         self._temp_files: list = []
@@ -615,6 +693,14 @@ class KubernetesAPIProxy:
                 except Exception:
                     pass
 
+                # After the record above: a refused write is still an attempt.
+                if proxy.write_floor:
+                    refusal = write_refusal(method, path, frozenset(proxy.write_namespaces))
+                    if refusal:
+                        logger.warning(f"Proxy: write floor refused {method} {path}: {refusal}")
+                        self._send_forbidden(f"Forbidden by the write floor: {refusal}")
+                        return
+
                 # Forward request to upstream
                 try:
                     conn = self._get_upstream_connection()
@@ -708,6 +794,7 @@ class KubernetesAPIProxy:
         logger.info(f"Kubernetes API filtering proxy started on port {self.listen_port}")
         logger.info(f"Hidden namespaces: {self.hidden_namespaces}")
         logger.info(f"Hidden labels: {self.hidden_labels}")
+        logger.info(f"Write floor: {'on' if self.write_floor else 'off'}")
 
     def stop(self):
         """Stop the proxy server."""

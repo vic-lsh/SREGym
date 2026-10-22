@@ -70,3 +70,31 @@ def test_conductor_scopes_agent_exec_to_the_problem_app_namespaces() -> None:
 
     conductor._scope_agent_exec(SimpleNamespace(app=None))
     assert conductor.k8s_proxy.exec_namespaces == set()
+
+
+def test_conductor_scopes_agent_writes_to_the_problem_app_namespaces() -> None:
+    from types import SimpleNamespace
+
+    from sregym.conductor.conductor import Conductor
+
+    conductor = Conductor.__new__(Conductor)
+    conductor.k8s_proxy = SimpleNamespace(write_namespaces={"stale"})
+    conductor._scope_agent_writes(SimpleNamespace(namespace="hotel-reservation"))
+    assert conductor.k8s_proxy.write_namespaces == {"hotel-reservation"}
+
+    conductor._scope_agent_writes(SimpleNamespace(namespace="a", namespaces=["a", "b"]))
+    assert conductor.k8s_proxy.write_namespaces == {"a", "b"}
+
+
+def test_the_write_floor_is_off_by_default(monkeypatch) -> None:
+    from sregym.conductor.conductor import ConductorConfig
+
+    monkeypatch.setattr(k8s_proxy.config, "load_kube_config", lambda config_file: None)
+    monkeypatch.setattr(
+        k8s_proxy.KubernetesAPIProxy,
+        "_load_cluster_config",
+        lambda self, kubeconfig_path: ("127.0.0.1", 6443, "ca", "cert", "key"),
+    )
+    monkeypatch.setattr(k8s_proxy.os.path, "exists", lambda path: False)
+    assert k8s_proxy.KubernetesAPIProxy(listen_port=16445).write_floor is False
+    assert ConductorConfig().proxy_write_floor is False
