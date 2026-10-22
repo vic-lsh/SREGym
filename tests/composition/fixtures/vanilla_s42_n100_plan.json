@@ -1,0 +1,3212 @@
+{
+ "_about": "Planned problems of robust-skills' vanilla Claude Code SREGym run (seed 42, 100 problems, --fault-count-weights 2:1,3:1,5:1, --apps hotel_reservation,social_network,astronomy_shop, --exclude-unreliable-faults), planned at robust-skills a8dd998f. ids = the run's schedule.json problem_ids; draws = that commit's generator output, which matches every fault key/params recorded in the run's result rows.",
+ "seed": 42,
+ "num_problems": 100,
+ "fault_count_weights": "2:1,3:1,5:1",
+ "apps": [
+  "hotel_reservation",
+  "social_network",
+  "astronomy_shop"
+ ],
+ "exclude_unreliable_faults": true,
+ "plans": [
+  {
+   "id": "mf__astronomy_shop__n3__s1416840650__reliable__v_",
+   "draws": [
+    {
+     "key": "loadgenerator_flood_homepage",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "resource_request_too_large",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "shipping",
+      "resource_type": "cpu"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "admission_webhook_tls_mismatch",
+     "params": {
+      "faulty_service": "checkout",
+      "webhook_kind": "mutating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n5__s64878673__reliable__v_",
+   "draws": [
+    {
+     "key": "kafka_queue_problems",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "init_container_dependency_hang",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "shipping",
+      "init_hang_mechanism": "http_ready_check"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "service_dns_resolution_failure_netpol",
+     "params": {
+      "app_name": "astronomy_shop",
+      "dns_failure_layer": "network_policy_block_dns",
+      "dns_response_code": "NXDOMAIN",
+      "faulty_service": "checkout"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "edge_request_filter_cpu_saturation",
+     "params": {},
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "secret_rotation_stale_env_credentials_astronomy_shop",
+     "params": {},
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n2__s3455414167__reliable__v_",
+   "draws": [
+    {
+     "key": "assign_to_non_existent_node",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "admission_webhook_tls_mismatch",
+     "params": {
+      "faulty_service": "nginx-thrift",
+      "webhook_kind": "mutating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n2__s2571351228__reliable__v_",
+   "draws": [
+    {
+     "key": "wrong_dns_policy",
+     "params": {
+      "app_name": "social_network",
+      "dns_misconfiguration_type": "default_policy",
+      "faulty_service": "media-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "init_container_dependency_hang",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "user-service",
+      "init_hang_mechanism": "http_ready_check"
+     },
+     "tier": "RESTARTS_PODS"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n5__s1913342792__reliable__v_",
+   "draws": [
+    {
+     "key": "kafka_poison_pill_hol_block",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "astronomy_shop_ad_service_image_slow_load",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "ad_service_manual_gc",
+     "params": {
+      "faulty_service": "ad",
+      "feature_flag": "adManualGc"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "astronomy_shop_product_catalog_service_failure",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "secret_rotation_stale_env_credentials_astronomy_shop",
+     "params": {},
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n3__s2092627323__reliable__v_",
+   "draws": [
+    {
+     "key": "astronomy_shop_ad_service_high_cpu",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "kafka_queue_problems",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "missing_env_variable",
+     "params": {
+      "env_corruption_mode": "remove",
+      "env_var": "RECOMMENDATION_ADDR",
+      "env_var_value": "recommendation:8080",
+      "faulty_service": "frontend"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n2__s1471960113__reliable__v_",
+   "draws": [
+    {
+     "key": "readiness_probe_misconfiguration",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "shipping",
+      "probe_error_mode": "wrong_port",
+      "replica_count": 3
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "valkey_memory_disruption",
+     "params": {
+      "memory_eviction_policy": "noeviction"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n2__s1969073207__reliable__v_",
+   "draws": [
+    {
+     "key": "missing_configmap",
+     "params": {
+      "app_name": "social_network",
+      "configmap_fault_mode": "delete",
+      "faulty_service": "media-mongodb"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "wrong_service_selector",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "compose-post-service",
+      "replica_count": 3
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n2__s2139970257__reliable__v_",
+   "draws": [
+    {
+     "key": "sidecar_port_conflict",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "currency"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "valkey_memory_disruption",
+     "params": {
+      "memory_eviction_policy": "noeviction"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n5__s2045972234__reliable__v_",
+   "draws": [
+    {
+     "key": "duplicate_pvc_mounts",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "url-shorten-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "assign_to_non_existent_node",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "resource_request_too_large",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "text-service",
+      "resource_type": "cpu"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "service_dns_resolution_failure_netpol",
+     "params": {
+      "app_name": "social_network",
+      "dns_failure_layer": "network_policy_block_dns",
+      "dns_response_code": "NXDOMAIN",
+      "faulty_service": "media-service"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "admission_webhook_outage",
+     "params": {
+      "faulty_service": "social-graph-service",
+      "webhook_kind": "validating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n3__s4226821963__reliable__v_",
+   "draws": [
+    {
+     "key": "rolling_update_misconfigured",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "product-catalog",
+      "init_hang_mode": "crash_loop",
+      "strategy_profile": "stuck_canary"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "ad_service_manual_gc",
+     "params": {
+      "faulty_service": "ad",
+      "feature_flag": "adManualGc"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "env_variable_shadowing",
+     "params": {
+      "faulty_service": "frontend-proxy"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n3__s1276337490__reliable__v_",
+   "draws": [
+    {
+     "key": "finalizer_deadlock_controller",
+     "params": {
+      "rbac_break_mode": "drop_subresource_rule"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "k8s_target_port_misconfig",
+     "params": {
+      "app_name": "hotel_reservation",
+      "bad_port": 8888,
+      "faulty_service": "profile"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "storage_user_unregistered",
+     "params": {
+      "faulty_service": "mongodb-geo"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n5__s2033687357__reliable__v_",
+   "draws": [
+    {
+     "key": "liveness_probe_misconfiguration",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "recommendation",
+      "probe_error_mode": "wrong_port",
+      "replica_count": 1
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "astronomy_shop_ad_service_high_cpu",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "service_port_conflict",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "cart"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "astronomy_shop_payment_service_failure",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "admission_webhook_outage",
+     "params": {
+      "faulty_service": "payment",
+      "webhook_kind": "mutating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n5__s352934401__reliable__v_",
+   "draws": [
+    {
+     "key": "service_port_conflict",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "ad"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "astronomy_shop_failed_readiness_probe",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "readiness_probe_misconfiguration",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "payment",
+      "probe_error_mode": "wrong_protocol",
+      "replica_count": 3
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "astronomy_shop_payment_service_unreachable",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "env_variable_shadowing",
+     "params": {
+      "faulty_service": "frontend-proxy"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n5__s1809510611__reliable__v_",
+   "draws": [
+    {
+     "key": "liveness_probe_misconfiguration",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "frontend",
+      "probe_error_mode": "exec_false",
+      "replica_count": 1
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "sidecar_port_conflict",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "geo"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "wrong_bin_usage",
+     "params": {
+      "faulty_service": "profile"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "revoke_auth_mongodb",
+     "params": {
+      "faulty_service": "mongodb-geo"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "admission_webhook_outage",
+     "params": {
+      "faulty_service": "geo",
+      "webhook_kind": "validating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n2__s3028155043__reliable__v_",
+   "draws": [
+    {
+     "key": "sidecar_port_conflict",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "cart"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "duplicate_pvc_mounts",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "payment"
+     },
+     "tier": "RESTARTS_PODS"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n5__s3233255579__reliable__v_",
+   "draws": [
+    {
+     "key": "hpa_missing_effective_cpu_request",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "pvc_claim_mismatch",
+     "params": {
+      "pvc_failure_scope": "single"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "service_port_conflict",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "reservation"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "duplicate_pvc_mounts",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "geo"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "dev_shm_exhaustion_hotel_reservation",
+     "params": {},
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n2__s1555858305__reliable__v_",
+   "draws": [
+    {
+     "key": "sidecar_port_conflict",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "recommendation"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "service_port_conflict",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "search"
+     },
+     "tier": "RESTARTS_PODS"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n2__s4063296301__reliable__v_",
+   "draws": [
+    {
+     "key": "update_incompatible_correlated",
+     "params": {},
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "ephemeral_port_range_hotel_reservation",
+     "params": {
+      "port_range_severity": "critical",
+      "sysctl_scope": "frontend_only"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n3__s3724766926__reliable__v_",
+   "draws": [
+    {
+     "key": "resource_request_too_large",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "product-catalog",
+      "resource_type": "cpu"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "cart_service_failure",
+     "params": {
+      "faulty_service": "cart",
+      "feature_flag": "cartFailure"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "valkey_auth_disruption",
+     "params": {},
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n5__s721101333__reliable__v_",
+   "draws": [
+    {
+     "key": "missing_configmap",
+     "params": {
+      "app_name": "social_network",
+      "configmap_fault_mode": "delete",
+      "faulty_service": "media-mongodb"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "assign_to_non_existent_node",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "liveness_probe_misconfiguration",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "compose-post-service",
+      "probe_error_mode": "wrong_path",
+      "replica_count": 1
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "k8s_target_port_misconfig",
+     "params": {
+      "app_name": "social_network",
+      "bad_port": 8888,
+      "faulty_service": "text-service"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "mutating_webhook_resource_limits_social_network",
+     "params": {},
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n2__s702904123__reliable__v_",
+   "draws": [
+    {
+     "key": "missing_configmap",
+     "params": {
+      "app_name": "hotel_reservation",
+      "configmap_fault_mode": "delete",
+      "faulty_service": "mongodb-geo"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "ingress_misroute",
+     "params": {},
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n2__s1896224817__reliable__v_",
+   "draws": [
+    {
+     "key": "init_container_dependency_hang",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "search",
+      "init_hang_mechanism": "http_ready_check"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "incorrect_image",
+     "params": {
+      "bad_image_kind": "nonexistent_tag",
+      "faulty_service": "rate"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n5__s3386034926__reliable__v_",
+   "draws": [
+    {
+     "key": "assign_to_non_existent_node",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "duplicate_pvc_mounts",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "home-timeline-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "readiness_probe_misconfiguration",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "text-service",
+      "probe_error_mode": "wrong_protocol",
+      "replica_count": 1
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "resource_request_too_large",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "social-graph-service",
+      "resource_type": "cpu"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "wrong_service_selector",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "media-service",
+      "replica_count": 1
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n5__s3986473097__reliable__v_",
+   "draws": [
+    {
+     "key": "liveness_probe_misconfiguration",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "frontend",
+      "probe_error_mode": "wrong_protocol",
+      "replica_count": 1
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "cronjob_sidecar_blocks_completion_hotel_reservation",
+     "params": {},
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "storage_user_unregistered",
+     "params": {
+      "faulty_service": "mongodb-rate"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "expired_tls_hotel_reservation",
+     "params": {},
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "admission_webhook_tls_mismatch",
+     "params": {
+      "faulty_service": "geo",
+      "webhook_kind": "mutating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n3__s1748934316__reliable__v_",
+   "draws": [
+    {
+     "key": "wrong_dns_policy",
+     "params": {
+      "app_name": "social_network",
+      "dns_misconfiguration_type": "default_policy",
+      "faulty_service": "social-graph-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "duplicate_pvc_mounts",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "home-timeline-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "admission_webhook_tls_mismatch",
+     "params": {
+      "faulty_service": "nginx-thrift",
+      "webhook_kind": "mutating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n2__s2881978044__reliable__v_",
+   "draws": [
+    {
+     "key": "liveness_probe_too_aggressive",
+     "params": {
+      "aggression_profile": "slow_churn",
+      "app_name": "social_network",
+      "faulty_service": "text-service",
+      "startup_probe_guard": "none"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "service_dns_resolution_failure_netpol",
+     "params": {
+      "app_name": "social_network",
+      "dns_failure_layer": "network_policy_block_dns",
+      "dns_response_code": "NXDOMAIN",
+      "faulty_service": "text-service"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n2__s3630353540__reliable__v_",
+   "draws": [
+    {
+     "key": "ephemeral_port_range_hotel_reservation",
+     "params": {
+      "port_range_severity": "degraded",
+      "sysctl_scope": "frontend_only"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "namespace_memory_limit",
+     "params": {},
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n5__s4083866603__reliable__v_",
+   "draws": [
+    {
+     "key": "sidecar_port_conflict",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "product-catalog"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "sidecar_port_conflict",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "email"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "astronomy_shop_ad_service_high_cpu",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "kafka_poison_pill_hol_block",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "cart_service_failure",
+     "params": {
+      "faulty_service": "cart",
+      "feature_flag": "cartFailure"
+     },
+     "tier": "RESTARTS_PODS"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n5__s645571986__reliable__v_",
+   "draws": [
+    {
+     "key": "hpa_missing_effective_cpu_request",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "missing_configmap",
+     "params": {
+      "app_name": "hotel_reservation",
+      "configmap_fault_mode": "delete",
+      "faulty_service": "mongodb-geo"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "misconfig_app_hotel_res",
+     "params": {},
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "revoke_auth_mongodb",
+     "params": {
+      "faulty_service": "mongodb-rate"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "dev_shm_exhaustion_hotel_reservation",
+     "params": {},
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n2__s3496062482__reliable__v_",
+   "draws": [
+    {
+     "key": "rolling_update_misconfigured",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "post-storage-service",
+      "init_hang_mode": "crash_loop",
+      "strategy_profile": "drain_all"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "missing_service",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "post-storage-service"
+     },
+     "tier": "RESTARTS_PODS"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n5__s3836716261__reliable__v_",
+   "draws": [
+    {
+     "key": "wrong_dns_policy",
+     "params": {
+      "app_name": "astronomy_shop",
+      "dns_misconfiguration_type": "default_policy",
+      "faulty_service": "currency"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "kafka_queue_problems",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "internal_traffic_policy_local_astronomy_shop",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "readiness_probe_misconfiguration",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "payment",
+      "probe_error_mode": "wrong_protocol",
+      "replica_count": 1
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "wrong_service_selector",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "product-catalog",
+      "replica_count": 3
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n3__s3444437163__reliable__v_",
+   "draws": [
+    {
+     "key": "kafka_queue_problems",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "duplicate_pvc_mounts",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "frontend"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "k8s_target_port_misconfig",
+     "params": {
+      "app_name": "astronomy_shop",
+      "bad_port": 7777,
+      "faulty_service": "ad"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n5__s2694646745__reliable__v_",
+   "draws": [
+    {
+     "key": "wrong_dns_policy",
+     "params": {
+      "app_name": "social_network",
+      "dns_misconfiguration_type": "external_resolver",
+      "faulty_service": "social-graph-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "missing_configmap",
+     "params": {
+      "app_name": "social_network",
+      "configmap_fault_mode": "delete",
+      "faulty_service": "media-mongodb"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "wrong_service_selector",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "nginx-thrift",
+      "replica_count": 1
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "incorrect_image",
+     "params": {
+      "bad_image_kind": "nonexistent_tag",
+      "faulty_service": "post-storage-service"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "admission_webhook_outage",
+     "params": {
+      "faulty_service": "media-service",
+      "webhook_kind": "validating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n5__s3226866600__reliable__v_",
+   "draws": [
+    {
+     "key": "resource_request_too_large",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "home-timeline-service",
+      "resource_type": "cpu"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "wrong_dns_policy",
+     "params": {
+      "app_name": "social_network",
+      "dns_misconfiguration_type": "external_resolver",
+      "faulty_service": "nginx-thrift"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "pod_anti_affinity_deadlock",
+     "params": {
+      "anti_affinity_topology": "hostname",
+      "faulty_service": "social-graph-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "k8s_target_port_misconfig",
+     "params": {
+      "app_name": "social_network",
+      "bad_port": 8888,
+      "faulty_service": "social-graph-service"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "admission_webhook_tls_mismatch",
+     "params": {
+      "faulty_service": "home-timeline-service",
+      "webhook_kind": "validating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n2__s3230529780__reliable__v_",
+   "draws": [
+    {
+     "key": "resource_request_too_small",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "text-service",
+      "resource_type": "memory"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "service_port_conflict",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "user-service"
+     },
+     "tier": "RESTARTS_PODS"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n2__s775155847__reliable__v_",
+   "draws": [
+    {
+     "key": "liveness_probe_too_aggressive",
+     "params": {
+      "aggression_profile": "aggressive",
+      "app_name": "social_network",
+      "faulty_service": "text-service",
+      "startup_probe_guard": "none"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "admission_webhook_tls_mismatch",
+     "params": {
+      "faulty_service": "user-service",
+      "webhook_kind": "mutating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n2__s934837887__reliable__v_",
+   "draws": [
+    {
+     "key": "sidecar_port_conflict",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "user"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "namespace_memory_limit",
+     "params": {},
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n3__s3785782053__reliable__v_",
+   "draws": [
+    {
+     "key": "resource_request_too_large",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "social-graph-service",
+      "resource_type": "cpu"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "init_container_dependency_hang",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "text-service",
+      "init_hang_mechanism": "dns_lookup_loop"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "mutating_webhook_resource_limits_social_network",
+     "params": {},
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n5__s674263209__reliable__v_",
+   "draws": [
+    {
+     "key": "resource_request_too_large",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "email",
+      "resource_type": "cpu"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "loadgenerator_flood_homepage",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "sidecar_port_conflict",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "recommendation"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "incorrect_port_assignment",
+     "params": {
+      "env_var": "CURRENCY_ADDR",
+      "faulty_service": "checkout",
+      "incorrect_port": "9090"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "valkey_memory_disruption",
+     "params": {
+      "memory_eviction_policy": "noeviction"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n5__s1853805543__reliable__v_",
+   "draws": [
+    {
+     "key": "missing_service",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "recommendation"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "astronomy_shop_product_catalog_service_failure",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "rolling_update_misconfigured",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "frontend",
+      "init_hang_mode": "sleep_infinity",
+      "strategy_profile": "drain_all"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "service_port_conflict",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "checkout"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "valkey_memory_disruption",
+     "params": {
+      "memory_eviction_policy": "noeviction"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n2__s297277464__reliable__v_",
+   "draws": [
+    {
+     "key": "admission_webhook_tls_mismatch",
+     "params": {
+      "faulty_service": "ad",
+      "webhook_kind": "validating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    },
+    {
+     "key": "psa_restricted_blocks_recreation",
+     "params": {
+      "faulty_service": "recommendation"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n5__s1116045224__reliable__v_",
+   "draws": [
+    {
+     "key": "pvc_claim_mismatch",
+     "params": {
+      "pvc_failure_scope": "all"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "duplicate_pvc_mounts",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "user"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "dev_shm_exhaustion_hotel_reservation",
+     "params": {},
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "network_policy_block",
+     "params": {
+      "faulty_service": "geo",
+      "policy_direction": "both",
+      "policy_name_style": "opaque"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "incorrect_image",
+     "params": {
+      "bad_image_kind": "nonexistent_registry",
+      "faulty_service": "search"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n2__s3133605738__reliable__v_",
+   "draws": [
+    {
+     "key": "missing_service",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "shipping"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "network_policy_block",
+     "params": {
+      "faulty_service": "cart",
+      "policy_direction": "ingress_only",
+      "policy_name_style": "descriptive"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n5__s728371040__reliable__v_",
+   "draws": [
+    {
+     "key": "sidecar_port_conflict",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "post-storage-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "missing_configmap",
+     "params": {
+      "app_name": "social_network",
+      "configmap_fault_mode": "delete",
+      "faulty_service": "media-mongodb"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "missing_service",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "media-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "service_dns_resolution_failure_netpol",
+     "params": {
+      "app_name": "social_network",
+      "dns_failure_layer": "network_policy_block_dns",
+      "dns_response_code": "NXDOMAIN",
+      "faulty_service": "url-shorten-service"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "mutating_webhook_resource_limits_social_network",
+     "params": {},
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n5__s83019094__reliable__v_",
+   "draws": [
+    {
+     "key": "service_port_conflict",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "recommendation"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "rolling_update_misconfigured",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "profile",
+      "init_hang_mode": "slow_timeout",
+      "strategy_profile": "drain_all"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "storage_user_unregistered",
+     "params": {
+      "faulty_service": "mongodb-rate"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "revoke_auth_mongodb",
+     "params": {
+      "faulty_service": "mongodb-geo"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "namespace_memory_limit",
+     "params": {},
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n2__s2356987406__reliable__v_",
+   "draws": [
+    {
+     "key": "wrong_dns_policy",
+     "params": {
+      "app_name": "hotel_reservation",
+      "dns_misconfiguration_type": "external_resolver",
+      "faulty_service": "frontend"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "update_incompatible_correlated",
+     "params": {},
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n3__s1228942615__reliable__v_",
+   "draws": [
+    {
+     "key": "service_port_conflict",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "media-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "k8s_target_port_misconfig",
+     "params": {
+      "app_name": "social_network",
+      "bad_port": 9999,
+      "faulty_service": "post-storage-service"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "admission_webhook_outage",
+     "params": {
+      "faulty_service": "compose-post-service",
+      "webhook_kind": "validating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n3__s3224725320__reliable__v_",
+   "draws": [
+    {
+     "key": "missing_configmap",
+     "params": {
+      "app_name": "hotel_reservation",
+      "configmap_fault_mode": "delete",
+      "faulty_service": "mongodb-geo"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "liveness_probe_too_aggressive",
+     "params": {
+      "aggression_profile": "slow_churn",
+      "app_name": "hotel_reservation",
+      "faulty_service": "search",
+      "startup_probe_guard": "short_startup"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "admission_webhook_outage",
+     "params": {
+      "faulty_service": "search",
+      "webhook_kind": "validating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n2__s3022379890__reliable__v_",
+   "draws": [
+    {
+     "key": "k8s_target_port_misconfig",
+     "params": {
+      "app_name": "social_network",
+      "bad_port": 6666,
+      "faulty_service": "home-timeline-service"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "admission_webhook_tls_mismatch",
+     "params": {
+      "faulty_service": "nginx-thrift",
+      "webhook_kind": "validating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n3__s3937936104__reliable__v_",
+   "draws": [
+    {
+     "key": "rolling_update_misconfigured",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "recommendation",
+      "init_hang_mode": "slow_timeout",
+      "strategy_profile": "stuck_canary"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "admission_webhook_outage",
+     "params": {
+      "faulty_service": "rate",
+      "webhook_kind": "validating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    },
+    {
+     "key": "psa_restricted_blocks_recreation",
+     "params": {
+      "faulty_service": "rate"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n5__s3886802652__reliable__v_",
+   "draws": [
+    {
+     "key": "hpa_missing_effective_cpu_request",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "wrong_dns_policy",
+     "params": {
+      "app_name": "hotel_reservation",
+      "dns_misconfiguration_type": "external_resolver",
+      "faulty_service": "geo"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "missing_configmap",
+     "params": {
+      "app_name": "hotel_reservation",
+      "configmap_fault_mode": "delete",
+      "faulty_service": "mongodb-geo"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "revoke_auth_mongodb",
+     "params": {
+      "faulty_service": "mongodb-rate"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "incorrect_image",
+     "params": {
+      "bad_image_kind": "nonexistent_registry",
+      "faulty_service": "recommendation"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n5__s1748146404__reliable__v_",
+   "draws": [
+    {
+     "key": "configmap_drift",
+     "params": {
+      "faulty_service": "geo"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "rolling_update_misconfigured",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "reservation",
+      "init_hang_mode": "sleep_infinity",
+      "strategy_profile": "stuck_canary"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "faulty_image_correlated",
+     "params": {},
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "ingress_misroute",
+     "params": {},
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "cronjob_sidecar_blocks_completion_hotel_reservation",
+     "params": {},
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n3__s167553968__reliable__v_",
+   "draws": [
+    {
+     "key": "rbac_misconfiguration",
+     "params": {
+      "faulty_service": "frontend"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "liveness_probe_too_aggressive",
+     "params": {
+      "aggression_profile": "slow_churn",
+      "app_name": "astronomy_shop",
+      "faulty_service": "shipping",
+      "startup_probe_guard": "none"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "liveness_probe_misconfiguration",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "recommendation",
+      "probe_error_mode": "wrong_path",
+      "replica_count": 1
+     },
+     "tier": "RESTARTS_PODS"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n3__s403117609__reliable__v_",
+   "draws": [
+    {
+     "key": "resource_request_too_large",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "shipping",
+      "resource_type": "cpu"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "admission_webhook_outage",
+     "params": {
+      "faulty_service": "email",
+      "webhook_kind": "validating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    },
+    {
+     "key": "psa_restricted_blocks_recreation",
+     "params": {
+      "faulty_service": "checkout"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n5__s4028818966__reliable__v_",
+   "draws": [
+    {
+     "key": "astronomy_shop_ad_service_image_slow_load",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "valkey_auth_disruption",
+     "params": {},
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "wrong_service_selector",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "frontend",
+      "replica_count": 1
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "edge_request_filter_cpu_saturation",
+     "params": {},
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "admission_webhook_outage",
+     "params": {
+      "faulty_service": "cart",
+      "webhook_kind": "mutating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n2__s2130252279__reliable__v_",
+   "draws": [
+    {
+     "key": "incorrect_image",
+     "params": {
+      "bad_image_kind": "nonexistent_registry",
+      "faulty_service": "currency"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "missing_env_variable",
+     "params": {
+      "env_corruption_mode": "empty_value",
+      "env_var": "CHECKOUT_ADDR",
+      "env_var_value": "checkout:8080",
+      "faulty_service": "frontend"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n5__s2340913570__reliable__v_",
+   "draws": [
+    {
+     "key": "liveness_probe_too_aggressive",
+     "params": {
+      "aggression_profile": "slow_churn",
+      "app_name": "hotel_reservation",
+      "faulty_service": "recommendation",
+      "startup_probe_guard": "none"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "service_wrong_pod_selection_hotel_reservation",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "k8s_target_port_misconfig",
+     "params": {
+      "app_name": "hotel_reservation",
+      "bad_port": 8888,
+      "faulty_service": "geo"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "storage_user_unregistered",
+     "params": {
+      "faulty_service": "mongodb-rate"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "admission_webhook_outage",
+     "params": {
+      "faulty_service": "profile",
+      "webhook_kind": "validating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n3__s1617589235__reliable__v_",
+   "draws": [
+    {
+     "key": "duplicate_pvc_mounts",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "profile"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "service_dns_resolution_failure_netpol",
+     "params": {
+      "app_name": "hotel_reservation",
+      "dns_failure_layer": "network_policy_block_dns",
+      "dns_response_code": "NXDOMAIN",
+      "faulty_service": "profile"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "update_incompatible_correlated",
+     "params": {},
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n3__s4034455244__reliable__v_",
+   "draws": [
+    {
+     "key": "pvc_claim_mismatch",
+     "params": {
+      "pvc_failure_scope": "all"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "network_policy_block",
+     "params": {
+      "faulty_service": "recommendation",
+      "policy_direction": "both",
+      "policy_name_style": "misleading"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "misconfig_app_hotel_res",
+     "params": {},
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n3__s3788426785__reliable__v_",
+   "draws": [
+    {
+     "key": "wrong_dns_policy",
+     "params": {
+      "app_name": "social_network",
+      "dns_misconfiguration_type": "external_resolver",
+      "faulty_service": "home-timeline-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "pod_anti_affinity_deadlock",
+     "params": {
+      "anti_affinity_topology": "hostname",
+      "faulty_service": "compose-post-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "liveness_probe_too_aggressive",
+     "params": {
+      "aggression_profile": "aggressive",
+      "app_name": "social_network",
+      "faulty_service": "url-shorten-service",
+      "startup_probe_guard": "none"
+     },
+     "tier": "RESTARTS_PODS"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n5__s2506747721__reliable__v_",
+   "draws": [
+    {
+     "key": "astronomy_shop_payment_service_unreachable",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "duplicate_pvc_mounts",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "currency"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "missing_service",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "currency"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "service_port_conflict",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "checkout"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "wrong_service_selector",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "payment",
+      "replica_count": 1
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n5__s3007970772__reliable__v_",
+   "draws": [
+    {
+     "key": "liveness_probe_misconfiguration",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "product-catalog",
+      "probe_error_mode": "wrong_path",
+      "replica_count": 3
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "cart_service_failure",
+     "params": {
+      "faulty_service": "cart",
+      "feature_flag": "cartFailure"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "rolling_update_misconfigured",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "cart",
+      "init_hang_mode": "sleep_infinity",
+      "strategy_profile": "stuck_canary"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "valkey_memory_disruption",
+     "params": {
+      "memory_eviction_policy": "noeviction"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "psa_restricted_blocks_recreation",
+     "params": {
+      "faulty_service": "shipping"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n5__s1042150277__reliable__v_",
+   "draws": [
+    {
+     "key": "duplicate_pvc_mounts",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "user-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "duplicate_pvc_mounts",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "text-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "rolling_update_misconfigured",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "social-graph-service",
+      "init_hang_mode": "sleep_infinity",
+      "strategy_profile": "drain_all"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "wrong_dns_policy",
+     "params": {
+      "app_name": "social_network",
+      "dns_misconfiguration_type": "external_resolver",
+      "faulty_service": "media-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "mutating_webhook_resource_limits_social_network",
+     "params": {},
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n5__s356731586__reliable__v_",
+   "draws": [
+    {
+     "key": "init_container_dependency_hang",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "home-timeline-service",
+      "init_hang_mechanism": "tcp_connect_loop"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "missing_service",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "url-shorten-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "service_port_conflict",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "social-graph-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "init_container_dependency_hang",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "user-service",
+      "init_hang_mechanism": "dns_lookup_loop"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "wrong_service_selector",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "post-storage-service",
+      "replica_count": 3
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n3__s1101472872__reliable__v_",
+   "draws": [
+    {
+     "key": "rolling_update_misconfigured",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "frontend",
+      "init_hang_mode": "slow_timeout",
+      "strategy_profile": "stuck_canary"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "k8s_target_port_misconfig",
+     "params": {
+      "app_name": "hotel_reservation",
+      "bad_port": 8888,
+      "faulty_service": "geo"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "service_dns_resolution_failure_netpol",
+     "params": {
+      "app_name": "hotel_reservation",
+      "dns_failure_layer": "network_policy_block_dns",
+      "dns_response_code": "NXDOMAIN",
+      "faulty_service": "geo"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n3__s606723940__reliable__v_",
+   "draws": [
+    {
+     "key": "hpa_missing_effective_cpu_request",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "missing_configmap",
+     "params": {
+      "app_name": "hotel_reservation",
+      "configmap_fault_mode": "delete",
+      "faulty_service": "mongodb-geo"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "revoke_auth_mongodb",
+     "params": {
+      "faulty_service": "mongodb-rate"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n2__s2432760643__reliable__v_",
+   "draws": [
+    {
+     "key": "scale_pod_zero_social_net",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "wrong_service_selector",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "home-timeline-service",
+      "replica_count": 1
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n5__s2844849927__reliable__v_",
+   "draws": [
+    {
+     "key": "service_wrong_pod_selection_hotel_reservation",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "network_policy_block",
+     "params": {
+      "faulty_service": "frontend",
+      "policy_direction": "both",
+      "policy_name_style": "opaque"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "finalizer_deadlock_controller",
+     "params": {
+      "rbac_break_mode": "add_resourcenames_restriction"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "dev_shm_exhaustion_hotel_reservation",
+     "params": {},
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "expired_tls_hotel_reservation",
+     "params": {},
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n5__s972700846__reliable__v_",
+   "draws": [
+    {
+     "key": "cart_service_failure",
+     "params": {
+      "faulty_service": "cart",
+      "feature_flag": "cartFailure"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "rolling_update_misconfigured",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "ad",
+      "init_hang_mode": "crash_loop",
+      "strategy_profile": "stuck_canary"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "resource_request_too_large",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "shipping",
+      "resource_type": "cpu"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "service_dns_resolution_failure_netpol",
+     "params": {
+      "app_name": "astronomy_shop",
+      "dns_failure_layer": "network_policy_block_dns",
+      "dns_response_code": "NXDOMAIN",
+      "faulty_service": "email"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "env_variable_shadowing",
+     "params": {
+      "faulty_service": "frontend-proxy"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n3__s2531892580__reliable__v_",
+   "draws": [
+    {
+     "key": "astronomy_shop_failed_readiness_probe",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "service_port_conflict",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "product-catalog"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "admission_webhook_outage",
+     "params": {
+      "faulty_service": "ad",
+      "webhook_kind": "mutating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n5__s3934604442__reliable__v_",
+   "draws": [
+    {
+     "key": "duplicate_pvc_mounts",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "search"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "pvc_claim_mismatch",
+     "params": {
+      "pvc_failure_scope": "single"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "duplicate_pvc_mounts",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "user"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "service_port_conflict",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "rate"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "rolling_update_misconfigured",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "profile",
+      "init_hang_mode": "slow_timeout",
+      "strategy_profile": "drain_all"
+     },
+     "tier": "RESTARTS_PODS"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n5__s2147236812__reliable__v_",
+   "draws": [
+    {
+     "key": "assign_to_non_existent_node",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "service_port_conflict",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "social-graph-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "init_container_dependency_hang",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "compose-post-service",
+      "init_hang_mechanism": "tcp_connect_loop"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "duplicate_pvc_mounts",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "nginx-thrift"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "duplicate_pvc_mounts",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "post-storage-service"
+     },
+     "tier": "RESTARTS_PODS"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n3__s3762637051__reliable__v_",
+   "draws": [
+    {
+     "key": "service_port_conflict",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "currency"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "incorrect_port_assignment",
+     "params": {
+      "env_var": "PRODUCT_CATALOG_ADDR",
+      "faulty_service": "recommendation",
+      "incorrect_port": "8082"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "incorrect_image",
+     "params": {
+      "bad_image_kind": "nonexistent_tag",
+      "faulty_service": "recommendation"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n3__s3999347024__reliable__v_",
+   "draws": [
+    {
+     "key": "missing_service",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "email"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "astronomy_shop_ad_service_failure",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "incorrect_port_assignment",
+     "params": {
+      "env_var": "PRODUCT_CATALOG_ADDR",
+      "faulty_service": "checkout",
+      "incorrect_port": "9090"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n3__s3939741574__reliable__v_",
+   "draws": [
+    {
+     "key": "wrong_dns_policy",
+     "params": {
+      "app_name": "social_network",
+      "dns_misconfiguration_type": "default_policy",
+      "faulty_service": "compose-post-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "missing_service",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "media-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "service_dns_resolution_failure_netpol",
+     "params": {
+      "app_name": "social_network",
+      "dns_failure_layer": "network_policy_block_dns",
+      "dns_response_code": "NXDOMAIN",
+      "faulty_service": "text-service"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n5__s2141442203__reliable__v_",
+   "draws": [
+    {
+     "key": "missing_configmap",
+     "params": {
+      "app_name": "social_network",
+      "configmap_fault_mode": "delete",
+      "faulty_service": "media-mongodb"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "sidecar_port_conflict",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "user-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "rolling_update_misconfigured",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "url-shorten-service",
+      "init_hang_mode": "slow_timeout",
+      "strategy_profile": "stuck_canary"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "wrong_service_selector",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "post-storage-service",
+      "replica_count": 3
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "mutating_webhook_resource_limits_social_network",
+     "params": {},
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n2__s2377682727__reliable__v_",
+   "draws": [
+    {
+     "key": "duplicate_pvc_mounts",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "email"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "rolling_update_misconfigured",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "payment",
+      "init_hang_mode": "crash_loop",
+      "strategy_profile": "drain_all"
+     },
+     "tier": "RESTARTS_PODS"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n2__s1829670699__reliable__v_",
+   "draws": [
+    {
+     "key": "file_descriptor_exhaustion",
+     "params": {
+      "faulty_service": "user",
+      "ulimit_severity": "moderate"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "namespace_memory_limit",
+     "params": {},
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n5__s663051287__reliable__v_",
+   "draws": [
+    {
+     "key": "configmap_drift",
+     "params": {
+      "faulty_service": "geo"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "sidecar_port_conflict",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "rate"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "expired_tls_hotel_reservation",
+     "params": {},
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "incorrect_image",
+     "params": {
+      "bad_image_kind": "wrong_base_image",
+      "faulty_service": "frontend"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "namespace_memory_limit",
+     "params": {},
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n2__s1761731148__reliable__v_",
+   "draws": [
+    {
+     "key": "missing_service",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "cart"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "incorrect_port_assignment",
+     "params": {
+      "env_var": "PRODUCT_CATALOG_ADDR",
+      "faulty_service": "recommendation",
+      "incorrect_port": "6379"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n5__s4104966524__reliable__v_",
+   "draws": [
+    {
+     "key": "astronomy_shop_payment_service_unreachable",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "astronomy_shop_payment_service_failure",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "wrong_dns_policy",
+     "params": {
+      "app_name": "astronomy_shop",
+      "dns_misconfiguration_type": "default_policy",
+      "faulty_service": "product-catalog"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "admission_webhook_tls_mismatch",
+     "params": {
+      "faulty_service": "ad",
+      "webhook_kind": "mutating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    },
+    {
+     "key": "psa_restricted_blocks_recreation",
+     "params": {
+      "faulty_service": "checkout"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n2__s1993513580__reliable__v_",
+   "draws": [
+    {
+     "key": "storage_user_unregistered",
+     "params": {
+      "faulty_service": "mongodb-rate"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "expired_tls_hotel_reservation",
+     "params": {},
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n5__s1331500599__reliable__v_",
+   "draws": [
+    {
+     "key": "scale_pod_zero_social_net",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "wrong_dns_policy",
+     "params": {
+      "app_name": "social_network",
+      "dns_misconfiguration_type": "external_resolver",
+      "faulty_service": "user-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "rolling_update_misconfigured",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "home-timeline-service",
+      "init_hang_mode": "crash_loop",
+      "strategy_profile": "drain_all"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "resource_request_too_large",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "nginx-thrift",
+      "resource_type": "cpu"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "admission_webhook_outage",
+     "params": {
+      "faulty_service": "post-storage-service",
+      "webhook_kind": "mutating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n5__s283088535__reliable__v_",
+   "draws": [
+    {
+     "key": "astronomy_shop_ad_service_failure",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "wrong_dns_policy",
+     "params": {
+      "app_name": "astronomy_shop",
+      "dns_misconfiguration_type": "external_resolver",
+      "faulty_service": "checkout"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "astronomy_shop_ad_service_high_cpu",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "incorrect_image",
+     "params": {
+      "bad_image_kind": "nonexistent_tag",
+      "faulty_service": "shipping"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "wrong_service_selector",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "checkout",
+      "replica_count": 3
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n3__s3756801706__reliable__v_",
+   "draws": [
+    {
+     "key": "pod_anti_affinity_deadlock",
+     "params": {
+      "anti_affinity_topology": "hostname",
+      "faulty_service": "compose-post-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "k8s_target_port_misconfig",
+     "params": {
+      "app_name": "social_network",
+      "bad_port": 8888,
+      "faulty_service": "compose-post-service"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "incorrect_image",
+     "params": {
+      "bad_image_kind": "nonexistent_tag",
+      "faulty_service": "user-service"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n2__s198885939__reliable__v_",
+   "draws": [
+    {
+     "key": "missing_service",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "url-shorten-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "rolling_update_misconfigured",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "social-graph-service",
+      "init_hang_mode": "slow_timeout",
+      "strategy_profile": "stuck_canary"
+     },
+     "tier": "RESTARTS_PODS"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n5__s1752185331__reliable__v_",
+   "draws": [
+    {
+     "key": "k8s_target_port_misconfig",
+     "params": {
+      "app_name": "hotel_reservation",
+      "bad_port": 7777,
+      "faulty_service": "recommendation"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "dev_shm_exhaustion_hotel_reservation",
+     "params": {},
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "service_dns_resolution_failure_netpol",
+     "params": {
+      "app_name": "hotel_reservation",
+      "dns_failure_layer": "network_policy_block_dns",
+      "dns_response_code": "NXDOMAIN",
+      "faulty_service": "rate"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "finalizer_deadlock_controller",
+     "params": {
+      "rbac_break_mode": "add_resourcenames_restriction"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "namespace_memory_limit",
+     "params": {},
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n5__s15310727__reliable__v_",
+   "draws": [
+    {
+     "key": "liveness_probe_misconfiguration",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "social-graph-service",
+      "probe_error_mode": "wrong_port",
+      "replica_count": 1
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "liveness_probe_too_aggressive",
+     "params": {
+      "aggression_profile": "slow_churn",
+      "app_name": "social_network",
+      "faulty_service": "post-storage-service",
+      "startup_probe_guard": "none"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "resource_request_too_small",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "home-timeline-service",
+      "resource_type": "memory"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "resource_request_too_large",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "compose-post-service",
+      "resource_type": "cpu"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "incorrect_image",
+     "params": {
+      "bad_image_kind": "nonexistent_registry",
+      "faulty_service": "text-service"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n5__s1330044089__reliable__v_",
+   "draws": [
+    {
+     "key": "liveness_probe_misconfiguration",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "url-shorten-service",
+      "probe_error_mode": "wrong_protocol",
+      "replica_count": 1
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "readiness_probe_misconfiguration",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "text-service",
+      "probe_error_mode": "wrong_protocol",
+      "replica_count": 3
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "missing_configmap",
+     "params": {
+      "app_name": "social_network",
+      "configmap_fault_mode": "delete",
+      "faulty_service": "media-mongodb"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "service_port_conflict",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "home-timeline-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "admission_webhook_tls_mismatch",
+     "params": {
+      "faulty_service": "compose-post-service",
+      "webhook_kind": "validating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n2__s3025743669__reliable__v_",
+   "draws": [
+    {
+     "key": "liveness_probe_misconfiguration",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "profile",
+      "probe_error_mode": "wrong_path",
+      "replica_count": 3
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "service_wrong_pod_selection_hotel_reservation",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n3__s1168423455__reliable__v_",
+   "draws": [
+    {
+     "key": "pod_anti_affinity_deadlock",
+     "params": {
+      "anti_affinity_topology": "hostname",
+      "faulty_service": "nginx-thrift"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "wrong_service_selector",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "nginx-thrift",
+      "replica_count": 1
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "admission_webhook_outage",
+     "params": {
+      "faulty_service": "home-timeline-service",
+      "webhook_kind": "validating"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n3__s2159698942__reliable__v_",
+   "draws": [
+    {
+     "key": "duplicate_pvc_mounts",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "frontend"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "init_container_dependency_hang",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "profile",
+      "init_hang_mechanism": "dns_lookup_loop"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "misconfig_app_hotel_res",
+     "params": {},
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__hotel_reservation__n5__s2579321148__reliable__v_",
+   "draws": [
+    {
+     "key": "resource_request_too_large",
+     "params": {
+      "app_name": "hotel_reservation",
+      "faulty_service": "reservation",
+      "resource_type": "memory"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "ephemeral_port_range_hotel_reservation",
+     "params": {
+      "port_range_severity": "degraded",
+      "sysctl_scope": "frontend_only"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "cronjob_sidecar_blocks_completion_hotel_reservation",
+     "params": {},
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "ingress_misroute",
+     "params": {},
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "finalizer_deadlock_controller",
+     "params": {
+      "rbac_break_mode": "remove_write_verbs"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n2__s800109820__reliable__v_",
+   "draws": [
+    {
+     "key": "missing_env_variable",
+     "params": {
+      "env_corruption_mode": "remove",
+      "env_var": "CART_ADDR",
+      "env_var_value": "cart:8080",
+      "faulty_service": "frontend"
+     },
+     "tier": "ORDINARY"
+    },
+    {
+     "key": "wrong_service_selector",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "product-catalog",
+      "replica_count": 1
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n2__s4010434888__reliable__v_",
+   "draws": [
+    {
+     "key": "astronomy_shop_payment_service_unreachable",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "missing_env_variable",
+     "params": {
+      "env_corruption_mode": "empty_value",
+      "env_var": "PRODUCT_CATALOG_ADDR",
+      "env_var_value": "product-catalog:8080",
+      "faulty_service": "frontend"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n3__s3136987831__reliable__v_",
+   "draws": [
+    {
+     "key": "missing_service",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "email"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "init_container_dependency_hang",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "checkout",
+      "init_hang_mechanism": "dns_lookup_loop"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "cart_service_failure",
+     "params": {
+      "faulty_service": "cart",
+      "feature_flag": "cartFailure"
+     },
+     "tier": "RESTARTS_PODS"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n3__s2291743443__reliable__v_",
+   "draws": [
+    {
+     "key": "rolling_update_misconfigured",
+     "params": {
+      "app_name": "astronomy_shop",
+      "faulty_service": "checkout",
+      "init_hang_mode": "sleep_infinity",
+      "strategy_profile": "stuck_canary"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "kafka_poison_pill_hol_block",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "missing_env_variable",
+     "params": {
+      "env_corruption_mode": "remove",
+      "env_var": "CART_ADDR",
+      "env_var_value": "cart:8080",
+      "faulty_service": "frontend"
+     },
+     "tier": "ORDINARY"
+    }
+   ]
+  },
+  {
+   "id": "mf__social_network__n2__s1842493024__reliable__v_",
+   "draws": [
+    {
+     "key": "service_port_conflict",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "text-service"
+     },
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "resource_request_too_large",
+     "params": {
+      "app_name": "social_network",
+      "faulty_service": "nginx-thrift",
+      "resource_type": "memory"
+     },
+     "tier": "RESTARTS_PODS"
+    }
+   ]
+  },
+  {
+   "id": "mf__astronomy_shop__n2__s2319084885__reliable__v_",
+   "draws": [
+    {
+     "key": "astronomy_shop_ad_service_image_slow_load",
+     "params": {},
+     "tier": "RESTARTS_PODS"
+    },
+    {
+     "key": "psa_restricted_blocks_recreation",
+     "params": {
+      "faulty_service": "product-catalog"
+     },
+     "tier": "BLOCKS_ADMISSION"
+    }
+   ]
+  }
+ ]
+}

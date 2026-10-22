@@ -863,6 +863,13 @@ if __name__ == "__main__":
         default="list",
         help="Ordering of single-fault problems within a generated sequence",
     )
+    parser.add_argument(
+        "--exclude-unreliable-faults",
+        action="store_true",
+        help="In a planned sequence, draw N>=2 compositions without the catalog entries flagged unreliable "
+        "(composition/reliability.py). Their ids carry the __reliable suffix, so a run is reproducible "
+        "from its ids. Off by default: existing ids keep their plans.",
+    )
     parser.add_argument("--worker-child", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
@@ -890,14 +897,16 @@ if __name__ == "__main__":
         except ValueError as exc:
             parser.error(f"--fault-count-weights: {exc}")
     if args.composition_apps is not None:
-        from sregym.conductor.problems.composition.catalog import SERVICES
+        from sregym.conductor.problems.composition import catalog
 
         if not args.composition_apps:
             parser.error("--apps must name at least one application")
-        unknown_apps = set(args.composition_apps) - set(SERVICES)
+        unknown_apps = set(args.composition_apps) - catalog.apps()
         if unknown_apps:
             parser.error(f"--apps contains unsupported applications: {sorted(unknown_apps)}")
-    if (args.fault_count_weights or args.composition_apps or args.schedule != "list") and not args.sequence_len:
+    if (
+        args.fault_count_weights or args.composition_apps or args.schedule != "list" or args.exclude_unreliable_faults
+    ) and not args.sequence_len:
         parser.error("--num-problems is required for a planned sequence")
     if args.seed_summary and not Path(args.seed_summary).is_file():
         parser.error("--seed-summary must name an existing file")

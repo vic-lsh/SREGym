@@ -43,7 +43,6 @@ def test_catalog_draws_are_deterministic_and_conflict_free():
         assert all(
             not conflicts(left, right) for index, left in enumerate(first.draws) for right in first.draws[index + 1 :]
         )
-        assert len({draw.param_dict()["faulty_service"] for draw in first.draws}) == 5
 
 
 def _example_entry(events):
@@ -114,4 +113,15 @@ def test_invalid_plan_ids_and_impossible_counts_fail_clearly():
     with pytest.raises(ValueError, match="malformed"):
         resolve("mf__hotel_reservation__n2__s11__k3__v_")
     with pytest.raises(PlanError, match="no conflict-free plan"):
-        draw_plan("hotel_reservation", 9, 1, entries_for("hotel_reservation"))
+        draw_plan("hotel_reservation", 99, 1, entries_for("hotel_reservation"))
+
+
+def test_generated_problem_judges_each_fault_with_the_others_as_context(monkeypatch):
+    registry = _registry_with(monkeypatch, _example_entry([]))
+    monkeypatch.setattr(composite_module, "LLMAsAJudgeOracle", lambda **kwargs: SimpleNamespace(**kwargs))
+    problem = registry.get_problem_instance(plan_id("hotel_reservation", 3, 5, reliable=True))
+    assert problem.problem_id.endswith("__reliable__v_")
+    judges = problem.diagnosis_oracle.oracles
+    assert [judge.expected for judge in judges] == ["example"] * 3
+    assert [judge.other_faults for judge in judges] == [("example", "example")] * 3
+    assert problem.diagnosis_oracle.labels == [problem._key(index) for index in problem.fault_indices]

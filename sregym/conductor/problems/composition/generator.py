@@ -20,6 +20,10 @@ triple and catalog always produce the same draws, so a problem id such as
 An optional take-K suffix, `mf__<app>__n<N>__s<seed>__k<K>__v_`, keeps K of that N-fault plan's
 draws: the first K of a fixed shuffle seeded from (app, N, seed). The K-subsets of one base plan
 are nested (K=1 within K=2 within ... within K=N), so faults can be matched across problems.
+
+An optional `__reliable` suffix (after any take-K), `mf__<app>__n<N>__s<seed>[__k<K>]__reliable__v_`,
+draws from the catalog without the entries `reliability.UNRELIABLE` flags for the app. Ids
+without it draw from the whole catalog, as before.
 """
 
 from __future__ import annotations
@@ -31,6 +35,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from sregym.conductor.problems.composition.reliability import reliable_entries
 from sregym.conductor.problems.composition.spec import CatalogEntry, FaultDraw, conflicts
 
 PLAN_ID_PREFIX = "mf__"
@@ -43,7 +48,7 @@ _ATTEMPTS_PER_FAULT = 50
 
 _PLAN_ID_RE = re.compile(
     r"^mf__(?P<app>[a-z0-9]+(?:_[a-z0-9]+)*)__n(?P<n>[1-9][0-9]*)__s(?P<seed>0|[1-9][0-9]*)"
-    r"(?:__k(?P<take>[1-9][0-9]*))?__v_$"
+    r"(?:__k(?P<take>[1-9][0-9]*))?(?P<reliable>__reliable)?__v_$"
 )
 
 
@@ -53,12 +58,16 @@ class PlanError(ValueError):
 
 @dataclass(frozen=True)
 class PlanRef:
-    """What a multi-fault id names: the N-fault plan for (app, n, seed), or its take-K subset."""
+    """What a multi-fault id names: the N-fault plan for (app, n, seed), or its take-K subset.
+
+    `reliable` draws from the catalog without the entries flagged unreliable for the app.
+    """
 
     app: str
     n: int
     seed: int
     take: int | None = None
+    reliable: bool = False
 
 
 @dataclass(frozen=True)
@@ -84,12 +93,15 @@ class CompositionPlan:
             raise ValueError(f"base_index has {len(self.base_index)} entries for {len(self.draws)} draws")
 
 
-def plan_id(app: str, n: int, seed: int, take: int | None = None) -> str:
+def plan_id(app: str, n: int, seed: int, take: int | None = None, reliable: bool = False) -> str:
     """Return the problem id for a plan (or its take-K subset); `parse_plan_id` inverts it."""
-    suffix = "" if take is None else f"__k{take}"
+    suffix = ("" if take is None else f"__k{take}") + ("__reliable" if reliable else "")
     pid = f"{PLAN_ID_PREFIX}{app}__n{n}__s{seed}{suffix}__v_"
-    if parse_plan_id(pid) != PlanRef(app, n, seed, take):
-        raise ValueError(f"cannot form a multi-fault plan id from app={app!r}, n={n!r}, seed={seed!r}, take={take!r}")
+    if parse_plan_id(pid) != PlanRef(app, n, seed, take, reliable):
+        raise ValueError(
+            f"cannot form a multi-fault plan id from app={app!r}, n={n!r}, seed={seed!r}, take={take!r}, "
+            f"reliable={reliable!r}"
+        )
     return pid
 
 
@@ -102,7 +114,7 @@ def parse_plan_id(problem_id: str) -> PlanRef | None:
     take = None if match["take"] is None else int(match["take"])
     if take is not None and take > n:
         return None
-    return PlanRef(match["app"], n, int(match["seed"]), take)
+    return PlanRef(match["app"], n, int(match["seed"]), take, match["reliable"] is not None)
 
 
 def _seeded_rng(text: str) -> random.Random:
@@ -140,7 +152,10 @@ def take_plan(plan: CompositionPlan, k: int) -> CompositionPlan:
 
 
 def plan_for(ref: PlanRef, entries: Sequence[CatalogEntry]) -> CompositionPlan:
-    """Draw the plan a PlanRef names: `draw_plan`, then `take_plan` when it has a take-K."""
+    """Draw the plan a PlanRef names: `draw_plan` (over the reliable entries when `ref.reliable`),
+    then `take_plan` when it has a take-K."""
+    if ref.reliable:
+        entries = reliable_entries(ref.app, entries)
     plan = draw_plan(ref.app, ref.n, ref.seed, entries)
     return plan if ref.take is None else take_plan(plan, ref.take)
 

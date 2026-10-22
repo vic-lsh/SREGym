@@ -135,7 +135,7 @@ _ASTRONOMY_SHOP_ENV_VARS = {
     "CART_ADDR": "cart:8080",
     "PRODUCT_CATALOG_ADDR": "product-catalog:8080",
     "CURRENCY_ADDR": "currency:8080",
-    "SHIPPING_ADDR": "shipping:8080",
+    "SHIPPING_ADDR": "http://shipping:8080",
     "CHECKOUT_ADDR": "checkout:8080",
     "AD_ADDR": "ad:8080",
     "RECOMMENDATION_ADDR": "recommendation:8080",

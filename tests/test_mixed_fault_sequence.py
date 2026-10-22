@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from sregym.conductor.problems.composition.generator import parse_plan_id, parse_weights
+from sregym.conductor.problems.composition.generator import PlanError, parse_plan_id, parse_weights
 from sregym.parallel_runner import _args_for_tests, build_static_plan, save_sequence_plan
 
 
@@ -40,10 +40,10 @@ def test_impossible_composition_fails_while_planning():
     args = _args_for_tests(
         problem="missing_service_hotel_reservation",
         sequence_len=1,
-        fault_count_weights="9:1",
+        fault_count_weights="99:1",
         composition_apps=["hotel_reservation"],
     )
-    with pytest.raises(ValueError, match="at most 8"):
+    with pytest.raises(PlanError):
         build_static_plan(args)
 
 

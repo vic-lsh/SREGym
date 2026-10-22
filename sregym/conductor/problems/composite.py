@@ -14,7 +14,9 @@ Semantics:
 - The mitigation oracle is the AND of every fault component's own mitigation oracle
   (``CompoundedOracle``). Decoys are never graded: leaving one in place or reverting it are both correct.
 - The diagnosis ground truth lists every fault component's root cause and names each decoy as not
-  a root cause.
+  a root cause. With ``per_fault_diagnosis`` (generated ``mf__`` plans), the diagnosis is instead
+  judged once per fault against that fault's root cause, with the other faults' root causes as
+  ``other_faults``; it succeeds only when every fault is found.
 """
 
 from __future__ import annotations
@@ -239,6 +241,7 @@ class CompositeFaultProblem(Problem):
         *,
         component_factory: Callable[[str], Problem],
         decoy_factories: Mapping[str, DecoyFactory] = DECOY_FACTORIES,
+        per_fault_diagnosis: bool = False,
     ) -> None:
         self.spec = spec
         self.problem_id = spec.problem_id
@@ -273,7 +276,24 @@ class CompositeFaultProblem(Problem):
             **{self._key(index): self.components[index].mitigation_oracle for index in self.fault_indices},
         )
         self.root_cause = self._ground_truth()
-        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
+        if per_fault_diagnosis:
+            self.diagnosis_oracle = self._per_fault_diagnosis_oracle()
+        else:
+            self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
+
+    def _per_fault_diagnosis_oracle(self):
+        from sregym.conductor.problems.composed_failures import PerFaultDiagnosisOracle
+
+        causes = {index: (self.components[index].root_cause or "").strip() for index in self.fault_indices}
+        judges = [
+            LLMAsAJudgeOracle(
+                problem=self,
+                expected=causes[index],
+                other_faults=tuple(cause for other, cause in causes.items() if other != index and cause),
+            )
+            for index in self.fault_indices
+        ]
+        return PerFaultDiagnosisOracle(self, [self._key(index) for index in self.fault_indices], judges)
 
     def _key(self, index: int) -> str:
         return f"{index}-{self.spec.components[index].name}"

@@ -133,10 +133,13 @@ def plan_sequence(
     apps: Sequence[str],
     seed: int,
     single_fault_stream: Iterator[str],
+    reliable: bool = False,
 ) -> list[str]:
     """Return `num_problems` problem ids; see the module docstring for the guarantees.
 
-    `single_fault_stream` is only advanced for N == 1 slots. Raises ValueError if
+    `single_fault_stream` is only advanced for N == 1 slots. `reliable` gives every N >= 2 id the
+    `__reliable` suffix (draws without the entries flagged unreliable); the slot sequence, apps and
+    seeds are unchanged by it, and single-fault ids are not affected. Raises ValueError if
     `num_problems` < 0, `apps` is empty, or the stream runs out.
     """
     if num_problems < 0:
@@ -154,5 +157,5 @@ def plan_sequence(
                 raise ValueError(f"single-fault stream exhausted at slot {slot}")
             sequence.append(pid)
         else:
-            sequence.append(plan_id(rng.choice(app_choices), n, slot_seed(seed, slot)))
+            sequence.append(plan_id(rng.choice(app_choices), n, slot_seed(seed, slot), reliable=reliable))
     return sequence

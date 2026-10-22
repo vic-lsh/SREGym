@@ -154,8 +154,8 @@ def build_static_plan(args: Any) -> list[RunTask]:
         weights_spec = getattr(args, "fault_count_weights", None)
         schedule = getattr(args, "schedule", "list")
         apps = getattr(args, "composition_apps", None)
-        if weights_spec or schedule != "list" or apps:
-            from sregym.conductor.problems.composition.catalog import SERVICES, entries_for
+        if weights_spec or schedule != "list" or apps or getattr(args, "exclude_unreliable_faults", False):
+            from sregym.conductor.problems.composition import catalog
             from sregym.conductor.problems.composition.generator import parse_plan_id, parse_weights, plan_for
             from sregym.conductor.problems.composition.schedule import (
                 DEFAULT_APPS,
@@ -166,20 +166,19 @@ def build_static_plan(args: Any) -> list[RunTask]:
 
             weights = parse_weights(weights_spec or "1:1")
             app_names = apps or DEFAULT_APPS
-            unknown_apps = set(app_names) - set(SERVICES)
+            unknown_apps = set(app_names) - catalog.apps()
             if unknown_apps:
                 raise ValueError(f"unsupported composition applications: {sorted(unknown_apps)}")
-            max_faults = min(len(SERVICES[app]) for app in app_names)
-            if max(weights) > max_faults:
-                raise ValueError(f"generated compositions support at most {max_faults} faults per problem")
             pool = filter_pool_by_apps(selected, app_names)
             pool = [problem_id for problem_id in pool if not problem_id.startswith(("composite_", "mf__"))]
             stream = single_fault_stream(pool, schedule, args.sequence_seed) if 1 in weights else iter(())
-            selected = plan_sequence(args.sequence_len, weights, app_names, args.sequence_seed, stream)
+            reliable = bool(getattr(args, "exclude_unreliable_faults", False))
+            selected = plan_sequence(args.sequence_len, weights, app_names, args.sequence_seed, stream, reliable)
+            # Raises PlanError for a fault count the catalog cannot draw conflict-free.
             for problem_id in selected:
                 ref = parse_plan_id(problem_id)
                 if ref is not None:
-                    plan_for(ref, entries_for(ref.app))
+                    plan_for(ref, catalog.entries_for(ref.app))
         else:
             if not selected:
                 raise ValueError("Cannot generate a sequence from an empty problem selection")
@@ -686,6 +685,7 @@ def _args_for_tests(**overrides: Any) -> SimpleNamespace:
         "sequence_seed": 42,
         "fault_count_weights": None,
         "composition_apps": None,
+        "exclude_unreliable_faults": False,
         "schedule": "list",
         "judge_rounds": 3,
         "judge_voting_temperature": 0.7,
