@@ -45,6 +45,7 @@ from sregym.service.app_workspace import (
     application_workspace_seed_override,
     prepare_application_workspace,
 )
+from sregym.service.developer_source import apply_stage_change
 from sregym.worker_infra import cluster_lock, create_worker_cluster, delete_worker_cluster, kind_cluster_prefix
 
 
@@ -565,6 +566,16 @@ def run_parallel(args: Any) -> int:
             resume=application_workspace_dir(root).is_dir(),
             seed_from=application_workspace_seed_override(),
         )
+    developer_plan = os.getenv("SREGYM_DEVELOPER_SOURCE_PLAN", "").strip()
+    if developer_plan:
+        if not args.application_workspace or planned_tasks is None:
+            raise ValueError("developer source plan requires a persistent workspace and a static stage")
+        receipt = apply_stage_change(
+            application_workspace_dir(root),
+            [task.problem_id for task in planned_tasks],
+            Path(developer_plan),
+        )
+        (root / "developer_source_receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     memory_path = root / "long_term_summary.md"
     if args.seed_summary and not memory_path.exists():
         shutil.copy2(args.seed_summary, memory_path)

@@ -334,3 +334,18 @@ def test_without_offset_worker_ids_and_ports_are_unchanged(tmp_path, monkeypatch
     _run_child(_args_for_tests(), RunTask(0, "target_port"), 1, tmp_path, "kubeconfig", "sregym-w1")
 
     assert (envs[0]["SREGYM_WORKER_ID"], envs[0]["API_PORT"], envs[0]["MCP_SERVER_PORT"]) == ("1", "8001", "9955")
+
+
+def test_child_does_not_reapply_developer_setup(tmp_path, monkeypatch):
+    """Only the supervisor mutates the seeded source, before any child starts."""
+    from types import SimpleNamespace
+
+    from sregym.parallel_runner import _run_child
+
+    monkeypatch.setattr("sregym.parallel_runner._child_command", lambda *_: ["true"])
+    monkeypatch.setenv("SREGYM_DEVELOPER_SOURCE_PLAN", str(tmp_path / "not-read-in-child.json"))
+    monkeypatch.setattr("sregym.parallel_runner.subprocess.run", lambda *a, **k: SimpleNamespace(returncode=0))
+    args = _args_for_tests()
+    args.application_workspace = True
+    result = _run_child(args, RunTask(0, "target_port"), 0, tmp_path, "synthetic-kubeconfig", "synthetic-cluster")
+    assert result.returncode == 0
