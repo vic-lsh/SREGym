@@ -1,5 +1,8 @@
 """Otel demo adServiceHighCpu feature flag fault."""
 
+import json
+import shlex
+
 from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
@@ -37,12 +40,18 @@ class AdServiceHighCpu(Problem):
         print("== Fault Injection ==")
         self.injector.inject_fault(self.feature_flag)
         # Set a tight CPU limit so the high-CPU flag causes observable throttling.
-        patch = (
-            '{"spec":{"template":{"spec":{"containers":[{"name":"ad",'
-            f'"resources":{{"limits":{{"cpu":"{self.cpu_limit}"}}}}}}]}}}}'
-        )
+        patch = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [{"name": self.faulty_service, "resources": {"limits": {"cpu": self.cpu_limit}}}]
+                    }
+                }
+            }
+        }
         self.kubectl.exec_command(
-            f"kubectl patch deployment {self.faulty_service} -n {self.namespace} --type=strategic -p '{patch}'"
+            f"kubectl patch deployment {self.faulty_service} -n {self.namespace} "
+            f"--type=strategic -p {shlex.quote(json.dumps(patch))}"
         )
         print(f"Fault: AdServiceHighCpu | Namespace: {self.namespace}\n")
 
