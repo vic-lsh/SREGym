@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from sregym.conductor.constants import MAX_DIAGNOSIS_CANDIDATES
 from sregym.conductor.oracles import rollouts
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.problems.base import Problem
@@ -1089,9 +1090,16 @@ def test_evaluation_timeout_scales_with_serial_oracles_and_waves_not_with_concur
     eight_with_two_serial = _with_oracles([(True, 240.0)] * 6 + [(False, 240.0), (False, 100.0)])
     nine = _with_oracles([(True, 240.0)] * 9, max_workers=8)
 
-    assert one.evaluation_timeout_s == eight.evaluation_timeout_s
-    assert eight_with_two_serial.evaluation_timeout_s == eight.evaluation_timeout_s + 340.0
-    assert nine.evaluation_timeout_s == eight.evaluation_timeout_s + 240.0
+    def bound(c):
+        return c.mitigation_oracle.time_bound_s()
+
+    assert bound(one) == bound(eight)
+    assert bound(eight_with_two_serial) == bound(eight) + 340.0
+    assert bound(nine) == bound(eight) + 240.0
+    for c in (one, eight, eight_with_two_serial, nine):
+        assert c.evaluation_timeout_s == max(
+            Problem.evaluation_timeout_s, bound(c), c.diagnosis_oracle.deadline_s() + 30.0
+        )
 
 
 def test_evaluation_timeout_covers_settle_deadline_and_probe_and_never_drops_below_the_default():
@@ -1104,8 +1112,9 @@ def test_evaluation_timeout_covers_settle_deadline_and_probe_and_never_drops_bel
     small = _with_oracles([(True, 1.0)])
     small.app = FakeApp(name="Mystery App")  # no traffic probe: the derived bound is under the default
     assert small.mitigation_oracle.time_bound_s() < 300.0
-    assert small.evaluation_timeout_s == Problem.evaluation_timeout_s == 300.0
-    assert c.evaluation_timeout_s >= c.diagnosis_oracle.deadline_s
+    assert small.evaluation_timeout_s >= Problem.evaluation_timeout_s == 300.0
+    # The bound is read before the submission is known, so it covers the most candidates the API accepts.
+    assert c.evaluation_timeout_s >= c.diagnosis_oracle.deadline_s(MAX_DIAGNOSIS_CANDIDATES) + 30.0
 
 
 # --- diagnosis -------------------------------------------------------------------
@@ -1145,6 +1154,64 @@ def test_diagnosis_judge_crash_is_a_per_fault_failure():
     r = CompositeDiagnosisOracle(c, judge_factory=lambda p, others: Crashing()).evaluate("a")
 
     assert r["fault_0_diagnosed"] is False and "judge offline" in r["oracles"][0]["error"]
+
+
+def test_the_diagnosis_deadline_is_270s_per_submitted_candidate():
+    oracle = CompositeDiagnosisOracle(_composite([FakeFault([], "a")], FakeCluster()))
+
+    assert oracle.deadline_s(1) == oracle.deadline_s(0) == 270.0  # robust-skills' single-call deadline
+    assert oracle.deadline_s(3) == 810.0
+    assert oracle.deadline_s() == oracle.deadline_s(MAX_DIAGNOSIS_CANDIDATES + 1) == 270.0 * MAX_DIAGNOSIS_CANDIDATES
+
+
+class HangingJudge:
+    """Never returns until ``release`` is set; any other fault's judge returns its fixed verdict."""
+
+    def __init__(self, release, verdict=None):
+        self.release = release
+        self.verdict = verdict
+
+    def evaluate(self, solution):
+        if self.verdict is None:
+            self.release.wait(timeout=10)  # bound only guards a broken test run
+            return {"success": True}
+        return {"success": self.verdict}
+
+
+def _judge_with_hang(verdicts, solution, candidate_deadline_s=0.05):
+    """Judge ``solution`` with fault i's judge returning ``verdicts[i]``, or hanging where it is None."""
+    subs = [FakeFault([], f"f{i}") for i in range(len(verdicts))]
+    c = _composite(subs, FakeCluster())
+    release = threading.Event()
+    judges = {sub.label: HangingJudge(release, verdict) for sub, verdict in zip(subs, verdicts, strict=True)}
+    oracle = CompositeDiagnosisOracle(c, judge_factory=lambda p, others: judges[p.label])
+    oracle.candidate_deadline_s = candidate_deadline_s
+    try:
+        return oracle.evaluate(solution)
+    finally:
+        release.set()
+
+
+@pytest.mark.parametrize(("solution", "deadline_s"), [("one", 0.05), (["one"], 0.05), (["one", "two"], 0.1)])
+def test_the_diagnosis_deadline_scales_with_the_candidates_submitted(solution, deadline_s):
+    r = _judge_with_hang([None], solution)
+
+    assert r["oracles"][0]["error"] == f"judge timed out after {deadline_s:g}s"
+
+
+def test_a_judge_timeout_that_alone_decides_the_outcome_is_an_infra_error():
+    r = _judge_with_hang([True, None], "x")
+
+    assert r["fault_1_diagnosed"] is False and r["success"] is False
+    assert r["fault_1_infra_error"] == "judge_timeout" and r["infra_error"] == "judge_timeout"
+    assert "fault_0_infra_error" not in r
+
+
+def test_a_judge_timeout_in_a_diagnosis_that_failed_anyway_stays_per_fault():
+    r = _judge_with_hang([False, None], "x")
+
+    assert r["fault_1_infra_error"] == "judge_timeout"
+    assert "infra_error" not in r and r["success"] is False
 
 
 def test_diagnosis_judge_reads_root_cause_at_evaluation_time():

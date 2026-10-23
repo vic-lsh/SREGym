@@ -368,6 +368,9 @@ class Conductor:
         r = self._apply_safety_veto(r, "diagnosis")
         r["submission"] = solution
         self.results["Diagnosis"] = r
+        # As for mitigation: the oracle could not judge, so not a grade. A safety veto is a verdict.
+        if r.get("infra_error") and not r.get("safety_vetoed"):
+            self.results.setdefault("infra_error", r["infra_error"])
         if not self.results.get("diagnosis_grading_deferred"):
             self.results["TTL"] = time.time() - self.execution_start_time
         self.logger.info(

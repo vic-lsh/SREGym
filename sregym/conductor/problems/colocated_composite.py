@@ -41,6 +41,7 @@ import threading
 import time
 from typing import Any, Protocol
 
+from sregym.conductor.constants import MAX_DIAGNOSIS_CANDIDATES
 from sregym.conductor.oracles import rollouts
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.problems.base import Problem
@@ -488,11 +489,12 @@ class ColocatedComposite(Problem):
     @property
     def evaluation_timeout_s(self) -> float:
         """Bound on either stage's evaluation, derived from the faults drawn
-        (``CompositeMitigationOracle.time_bound_s``); never below the single-problem default."""
+        (``CompositeMitigationOracle.time_bound_s``) and, read before any submission, the judges'
+        deadline for the most candidates a submission may hold; never below the single-problem default."""
         return max(
             Problem.evaluation_timeout_s,
             self.mitigation_oracle.time_bound_s(),
-            self.diagnosis_oracle.deadline_s + 30.0,
+            self.diagnosis_oracle.deadline_s() + 30.0,
         )
 
     # --- injection and liveness -----------------------------------------------------
@@ -824,10 +826,19 @@ class CompositeDiagnosisOracle(Oracle):
     the judge for sub-problem ``p``; ``other_faults`` holds the other sub-problems' root causes
     in declared order, so a judge does not count the submission's (correct) account of the other
     injected faults as over-attribution.
+
+    A judge that has not returned by the deadline could not judge its fault: it is recorded as
+    ``fault_i_infra_error``, and as the oracle's ``infra_error`` only when that fault alone could
+    still flip the outcome (every other fault diagnosed), as ``CompositeMitigationOracle`` does.
     """
 
-    # Judges run concurrently, so N does not change this; under Problem.evaluation_timeout_s.
-    deadline_s = 270.0
+    # One judge's deadline for one candidate. Judges run concurrently, so N does not change it;
+    # a judge tries a submission's candidates one after another (LLMAsAJudgeOracle.evaluate).
+    candidate_deadline_s = 270.0
+
+    def deadline_s(self, candidates: int = MAX_DIAGNOSIS_CANDIDATES) -> float:
+        """Deadline for judging a submission of *candidates* candidates (default: the most the API accepts)."""
+        return self.candidate_deadline_s * min(max(1, candidates), MAX_DIAGNOSIS_CANDIDATES)
 
     def __init__(self, problem, judge_factory=None):
         super().__init__(problem)
@@ -853,22 +864,30 @@ class CompositeDiagnosisOracle(Oracle):
         results: dict[str, Any] = {"oracles": []}
         total = len(self.sub_problems)
         diagnosed = 0
+        infra_errors, judged = [], []
+        deadline_s = self.deadline_s(len(solution) if isinstance(solution, list) else 1)
         pool = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, total), thread_name_prefix="composite-judge")
         try:
             futures = [pool.submit(self._judge_one, i, solution) for i in range(total)]
-            deadline = time.monotonic() + self.deadline_s
+            deadline = time.monotonic() + deadline_s
             for i, (p, fut) in enumerate(zip(self.sub_problems, futures, strict=True)):
                 name = type(p).__name__
                 try:
                     detail = fut.result(timeout=max(0.0, deadline - time.monotonic()))
                     ok = bool(detail.get("success", False))
                 except concurrent.futures.TimeoutError:
-                    ok, detail = False, {"success": False, "error": f"judge timed out after {self.deadline_s:g}s"}
+                    error = f"judge timed out after {deadline_s:g}s"
+                    ok, detail = False, {"success": False, "error": error, "infra_error": "judge_timeout"}
                 except Exception as e:
                     ok, detail = False, {"success": False, "error": f"{type(e).__name__}: {e}"}
                 diagnosed += int(ok)
                 results[f"fault_{i}_class"] = name
                 results[f"fault_{i}_diagnosed"] = ok
+                if detail.get("infra_error"):
+                    infra_errors.append(detail["infra_error"])
+                    results[f"fault_{i}_infra_error"] = detail["infra_error"]
+                else:
+                    judged.append(ok)
                 detail = dict(detail)
                 detail["name"] = f"fault_{i}:{name}"
                 results["oracles"].append(detail)
@@ -877,6 +896,10 @@ class CompositeDiagnosisOracle(Oracle):
 
         results["faults_total"] = total
         results["faults_diagnosed"] = diagnosed
+        # An unjudged fault makes the row ungradeable only if judging it could still flip the
+        # outcome (every judged fault diagnosed); otherwise the infra error stays per fault.
+        if infra_errors and all(judged):
+            results["infra_error"] = ",".join(sorted(set(infra_errors)))
         results["success"] = diagnosed == total
         results["accuracy"] = 100.0 * diagnosed / max(1, total)
         results.update(self.problem.report_fields())

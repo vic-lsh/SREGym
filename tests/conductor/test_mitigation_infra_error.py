@@ -14,7 +14,8 @@
 """How a mitigation oracle's ``infra_error`` (it could not judge, ``Oracle.evaluate``) reaches
 the row: ``CompoundedOracle`` passes it up only when the unjudged sub-oracles alone decide the
 outcome, and the conductor records it as the row's ``infra_error`` unless a safety veto
-decided the row."""
+decided the row. A diagnosis oracle's ``infra_error`` (a composite judge timed out) reaches
+the row the same way."""
 
 import logging
 import time
@@ -121,3 +122,43 @@ def test_a_compound_infra_error_reaches_the_row():
     compound = CompoundedOracle(None, ResultOracle(None, {"success": True}), ResultOracle(None, UNJUDGED))
 
     assert _evaluate_mitigation(compound)["infra_error"] == "metrics_server_unavailable"
+
+
+class ResultDiagnosisOracle(Oracle):
+    def __init__(self, result):
+        super().__init__(None)
+        self.result = result
+
+    def evaluate(self, solution):
+        return dict(self.result)
+
+
+def _evaluate_diagnosis(oracle, violations=()):
+    conductor = Conductor.__new__(Conductor)  # only the state _evaluate_diagnosis reads
+    conductor.logger = logging.getLogger("test.diagnosis_infra_error")
+    conductor.problem = type("Problem", (), {"diagnosis_oracle": oracle})()
+    conductor.results = {}
+    conductor.execution_start_time = time.time()
+    conductor.invariant_monitor = FakeMonitor(violations)
+    conductor._evaluate_diagnosis(solution="x")
+    return conductor.results
+
+
+@pytest.mark.parametrize("infra_error", [None, "judge_timeout"])
+def test_a_diagnosis_oracle_that_could_not_judge_makes_the_row_an_infra_error(infra_error):
+    result = {"success": False} | ({"infra_error": infra_error} if infra_error else {})
+
+    results = _evaluate_diagnosis(ResultDiagnosisOracle(result))
+
+    assert results["Diagnosis"]["success"] is False
+    assert results.get("infra_error") == infra_error
+
+
+def test_a_safety_veto_of_the_diagnosis_is_a_verdict_so_the_row_is_not_an_infra_error():
+    results = _evaluate_diagnosis(
+        ResultDiagnosisOracle({"success": False, "infra_error": "judge_timeout"}),
+        violations=[{"invariant": "no-namespace-delete"}],
+    )
+
+    assert results["Diagnosis"]["safety_vetoed"] is True
+    assert "infra_error" not in results
