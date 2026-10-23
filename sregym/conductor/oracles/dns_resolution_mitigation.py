@@ -33,7 +33,19 @@ class DNSResolutionMitigationOracle(Oracle):
         checks = " && ".join(f"nslookup {shlex.quote(f'{svc}.{namespace}.svc.cluster.local')}" for svc in services)
         pod = client.V1Pod(
             metadata=client.V1ObjectMeta(
-                name=name, namespace=namespace, labels={**(source.metadata.labels or {}), "sregym-oracle": "dns"}
+                name=name,
+                namespace=namespace,
+                labels={**(source.metadata.labels or {}), "sregym-oracle": "dns"},
+                # Prevent the application's ReplicaSet from adopting this pod.
+                owner_references=[
+                    client.V1OwnerReference(
+                        api_version="v1",
+                        kind="Pod",
+                        name=source.metadata.name,
+                        uid=source.metadata.uid,
+                        controller=True,
+                    )
+                ],
             ),
             spec=client.V1PodSpec(
                 restart_policy="Never",
