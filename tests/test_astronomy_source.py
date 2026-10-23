@@ -89,3 +89,31 @@ def test_astronomy_workspace_preserves_audit_but_allows_historical_advisories(tm
         assert "<NuGetAudit>true</NuGetAudit>" in content
         assert "<TreatWarningsAsErrors>true</TreatWarningsAsErrors>" in content
         assert "NU1901;NU1902;NU1903;NU1904" in content
+
+
+def test_astronomy_deploy_preserves_settings_with_source_images(tmp_path, monkeypatch):
+    from sregym.service.apps import astronomy_shop
+
+    monkeypatch.setenv("SREGYM_APP_SOURCE_DIR", str(tmp_path))
+    monkeypatch.setenv("SREGYM_KIND_CLUSTER_NAME", "luna-pilot-52")
+    monkeypatch.setenv("SREGYM_DEPLOY_FROM_SOURCE", "1")
+    monkeypatch.setattr(source_deploy, "_BUILT_IMAGES", set())
+    monkeypatch.setattr(source_deploy, "_build_image", lambda *args, **kwargs: None)
+    monkeypatch.setattr(source_deploy, "_kind_load_image", lambda **kwargs: None)
+    installs = []
+    monkeypatch.setattr(astronomy_shop.Helm, "install", lambda **kwargs: installs.append(kwargs))
+    monkeypatch.setattr(astronomy_shop.Helm, "assert_if_deployed", lambda namespace: True)
+    app = astronomy_shop.AstronomyShop.__new__(astronomy_shop.AstronomyShop)
+    app.name = APP
+    app.namespace = "astronomy-shop"
+    app.helm_configs = {"namespace": app.namespace, "release_name": app.namespace}
+    app.kubectl = SimpleNamespace(
+        create_namespace_if_not_exist=lambda namespace: None, get_node_architectures=lambda: {"amd64"}
+    )
+    app.deploy()
+    args = installs[0]["extra_args"]
+    assert "prometheus.enabled=false" in args
+    assert "components.load-generator.envOverrides[0].value=false" in args
+    assert any(arg.startswith("default.image.tag=sregym-src-") for arg in args)
+    assert installs[0]["namespace"] == "astronomy-shop"
+    assert not any(arg.startswith("default.image.tag=") for arg in app.helm_configs["extra_args"])
