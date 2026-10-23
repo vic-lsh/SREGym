@@ -117,9 +117,18 @@ from sregym.service.kubectl import KubeCtl
 
 
 # fmt: off
+from sregym.conductor.problems.source_memory_pilot import (
+    NamedInitImage, TracingHealthyObservation, named_target_port, sidecar_target_port,
+)
+
+
 class ProblemRegistry:
     def __init__(self):
         self.PROBLEM_REGISTRY = {
+            "sp1_sidecar_hotel_reservation": sidecar_target_port,
+            "sp1_tracing_healthy_hotel_reservation": TracingHealthyObservation,
+            "sp1_init_image_hotel_reservation": NamedInitImage,
+            "sp1_named_port_hotel_reservation": named_target_port,
             # ==================== APPLICATION FAULT INJECTOR ====================
             # --- CORRELATED PROBLEMS ---
             "faulty_image_correlated": FaultyImageCorrelated,
