@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 PROTOCOL_VERSION = 2
+SEED_RECOVERY_CONTRACT = "seed-compatible/v1"
 
 
 @dataclass(frozen=True)

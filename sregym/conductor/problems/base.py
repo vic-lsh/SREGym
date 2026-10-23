@@ -5,6 +5,16 @@ from collections.abc import Iterable
 
 
 class Problem(ABC):
+    """Fault lifecycle, with optional warm-lane seed recovery hooks.
+
+    ``recover_to_baseline()`` may override ordinary mitigation recovery when external state
+    must match the immutable application seed (for example, database credentials).
+    Full warm-lane cleanup uses that hook instead of ``recover_fault``. After the caller
+    restores seed manifests, ``refresh_after_recovery()`` refreshes runtime connections.
+    Both hooks must be idempotent, raise on failure, and never emit credential material.
+    Ordinary conductor recovery retains ``recover_fault`` semantics.
+    """
+
     # Upper bound, in seconds, on one stage evaluation (one oracle's evaluate()). The harness
     # waits this long for a pending evaluation before tearing the problem down (main.py).
     # Problems whose grading takes longer derive a larger value (composites, see

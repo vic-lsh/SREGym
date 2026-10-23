@@ -339,8 +339,8 @@ def test_recovering_a_composition_reverts_every_fault_in_reverse_order() -> None
 
     assert worker.handle({"op": "recover"})["recovered"] == [2, 1, 0]
     assert order == [2, 1, 0]
-    with pytest.raises(RuntimeError, match="no injected incident"):
-        worker.handle({"op": "recover"})
+    assert worker.handle({"op": "recover"})["success"]
+    assert order == [2, 1, 0]
 
 
 def test_a_fault_is_recovered_at_most_once() -> None:
@@ -447,8 +447,7 @@ def test_a_registry_composite_exposes_its_fault_components_as_the_faults() -> No
     assert partial["recovered"] == [0]
     assert composites[0].events == ["inject", "recover component 0", "recover [2, 1]"]
     assert rest["recovered"] == [1]
-    with pytest.raises(RuntimeError, match="no injected incident"):
-        worker.handle({"op": "recover"})
+    assert worker.handle({"op": "recover"})["success"]
 
 
 def test_a_whole_registry_composite_is_graded_by_its_own_oracle() -> None:

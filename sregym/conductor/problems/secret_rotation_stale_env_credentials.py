@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import shlex
+import subprocess
 import time
 
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
@@ -71,9 +72,14 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
         self.mitigation_oracle = SecretRotationStaleEnvMitigation(problem=self)
 
     def _run(self, command: str, input_data: str | None = None) -> str:
-        """Run a kubectl command through the repository wrapper."""
-        logger.debug("[secret-rotation] %s", command)
-        return self.kubectl.exec_command(command, input_data=input_data)
+        """Capture sensitive kubectl I/O without logging command text or error output."""
+        try:
+            result = subprocess.run(shlex.split(command), input=input_data, text=True, capture_output=True, check=False)
+        except OSError:
+            raise RuntimeError("credential recovery could not start kubectl") from None
+        if result.returncode != 0:
+            raise RuntimeError(f"credential kubectl operation failed (exit {result.returncode})")
+        return result.stdout
 
     def _apply_secret(self, conn_string: str) -> None:
         """Create or update the DB connection Secret with the given connection string."""
@@ -93,7 +99,7 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
             f"--containers={self.faulty_service} --from=secret/{self.secret_name} --keys={self.secret_key}"
         )
         if "error" in output.lower() or "invalid" in output.lower():
-            raise RuntimeError(f"Failed to set {self.secret_key} from Secret: {output}")
+            raise RuntimeError(f"Failed to set {self.secret_key} from Secret")
 
     def _set_product_catalog_literal_env(self, conn_string: str) -> None:
         """Make product-catalog use a literal DB_CONNECTION_STRING value (used for reset)."""
@@ -102,7 +108,7 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
             f"--containers={self.faulty_service} {self.secret_key}={shlex.quote(conn_string)}"
         )
         if "error" in output.lower() or "invalid" in output.lower():
-            raise RuntimeError(f"Failed to set literal {self.secret_key}: {output}")
+            raise RuntimeError(f"Failed to set literal {self.secret_key}")
 
     def _set_literal_db_clients_password(self, password: str) -> None:
         """Update non-faulty pods' credentials so only product-catalog keeps wrong credentials."""
@@ -113,7 +119,7 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
                 f"--containers={deployment} {self.secret_key}={shlex.quote(conn_strings[conn_index])}"
             )
             if "error" in output.lower() or "invalid" in output.lower():
-                raise RuntimeError(f"Failed to set literal {self.secret_key} for {deployment}: {output}")
+                raise RuntimeError(f"Failed to set literal {self.secret_key} for {deployment}")
             self._run(f"kubectl rollout status deployment/{deployment} -n {self.namespace} --timeout=180s")
 
     def _rollout_restart(self, deployment: str, timeout: str = "180s") -> None:
@@ -145,7 +151,7 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
                 return
             if attempt < self._POSTGRES_ROTATION_ATTEMPTS - 1:
                 time.sleep(self._POSTGRES_PASSWORD_CHECK_INTERVAL_SECONDS)
-        raise RuntimeError(f"Failed to rotate PostgreSQL password for {self.db_user}: {last_output}")
+        raise RuntimeError(f"Failed to rotate PostgreSQL password for {self.db_user}")
 
     def _drop_postgres_connections(self, password: str) -> None:
         """Terminate existing app DB sessions so product-catalog reconnect."""
@@ -156,7 +162,7 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
             tuples_only=True,
         )
         if "FATAL" in output or "ERROR" in output:
-            raise RuntimeError(f"Failed to terminate existing PostgreSQL sessions: {output}")
+            raise RuntimeError("Failed to terminate existing PostgreSQL sessions")
 
     def _postgres_accepts_password(self, password: str) -> bool:
         """Return whether PostgreSQL accepts the given password for otelu."""
@@ -218,7 +224,7 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
             f"--type=merge -p {shlex.quote(patch)}"
         )
         if "error" in output.lower() or "invalid" in output.lower():
-            raise RuntimeError(f"Failed to patch {self.postgresql_init_configmap}: {output}")
+            raise RuntimeError(f"Failed to patch {self.postgresql_init_configmap}")
 
     def _get_product_catalog_pod(self):
         """Return the current product-catalog pod object, preferring a running pod."""
@@ -327,6 +333,26 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
         self._rollout_restart(self.faulty_service)
         self._clear_stale_product_catalog_pod_uid()
 
+    def recover_to_baseline(self) -> None:
+        """Reset backend and client configuration so immutable seed manifests are safe to restore.
+
+        Ordinary ``recover_fault`` deliberately retains rotated credentials for its oracle.
+        Warm-lane cleanup must instead restore the original backend state before seed reuse.
+        """
+        try:
+            self._recover_to_baseline()
+        except Exception:
+            raise RuntimeError("credential baseline recovery failed") from None
+
+    def refresh_after_recovery(self) -> None:
+        """Refresh sessions and every database client after seed manifests have been restored."""
+        try:
+            self._drop_postgres_connections(self.old_password)
+            for deployment in (*self.literal_db_clients, self.faulty_service):
+                self._rollout_restart(deployment)
+        except Exception:
+            raise RuntimeError("credential client refresh failed") from None
+
     @mark_fault_injected
     def inject_fault(self):
         """Inject stale product-catalog DB credentials after rotating PostgreSQL and the Secret."""
@@ -346,7 +372,7 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
 
         product_env = self._get_product_catalog_env()
         if product_env != self.old_conn:
-            raise RuntimeError(f"product-catalog did not start with old connection string; got {product_env!r}")
+            raise RuntimeError("product-catalog did not start with old connection string")
 
         logger.info("[secret-rotation] Rotating PostgreSQL backend password to the new password.")
         self._rotate_postgres_password(self.old_password, self.new_password)
