@@ -16,7 +16,7 @@ from pathlib import Path
 import yaml
 
 from sregym.paths import TARGET_MICROSERVICES
-from sregym.service.app_workspace import resolve_app_source_subdir
+from sregym.service.app_workspace import _astronomy_source_root, resolve_app_source_subdir
 from sregym.worker_infra import kind_nodes_hold_image
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -242,12 +242,77 @@ class _SocialNetworkAdapter(_BaseAdapter):
         yield SourceDeploymentPlan(helm_extra_args=tuple(helm_args))
 
 
+class _AstronomyShopAdapter(_BaseAdapter):
+    app_name = "OpenTelemetry Demo Astronomy Shop"
+
+    # The upstream 2.2.0 Docker Compose application images. Infrastructure uses
+    # the chart's pinned images; the mock LLM is built locally like every service.
+    components = (
+        "accounting",
+        "ad",
+        "cart",
+        "checkout",
+        "currency",
+        "email",
+        "fraud-detection",
+        "frontend",
+        "frontend-proxy",
+        "image-provider",
+        "load-generator",
+        "payment",
+        "product-catalog",
+        "product-reviews",
+        "quote",
+        "recommendation",
+        "shipping",
+        "flagd-ui",
+        "kafka",
+        "llm",
+    )
+
+    def _source_dir(self) -> Path:
+        return _resolve_app_source_dir(self.app_name, _astronomy_source_root())
+
+    def ensure_images_loaded(self, *, cluster_name: str, node_architectures: set[str]) -> None:
+        del node_architectures  # Docker builds for the configured local builder.
+        source_dir = self._source_dir()
+        tag = source_image_tag(self.app_name, cluster_name)
+        for component in self.components:
+            image = f"ghcr.io/open-telemetry/demo:{tag}-{component}"
+            if (cluster_name, image) in _BUILT_IMAGES:
+                continue
+            dockerfile = source_dir / "src" / component / "Dockerfile"
+            if component == "cart":
+                dockerfile = source_dir / "src/cart/src/Dockerfile"
+            command = ["docker", "build", "-t", image, "-f", str(dockerfile)]
+            if component in {"ad", "fraud-detection", "kafka"}:
+                command.extend(["--build-arg", "OTEL_JAVA_AGENT_VERSION=2.23.0"])
+            elif component == "currency":
+                command.extend(["--build-arg", "OPENTELEMETRY_CPP_VERSION=1.24.0"])
+            command.append(str(source_dir))
+            _build_image(image, command, context_dir=source_dir)
+            _kind_load_image(cluster_name=cluster_name, image_ref=image)
+            _BUILT_IMAGES.add((cluster_name, image))
+
+    @contextlib.contextmanager
+    def plan(self, *, cluster_name: str, node_architectures: set[str]):
+        self.ensure_images_loaded(cluster_name=cluster_name, node_architectures=node_architectures)
+        # The chart appends the component name, including the flagd-ui sidecar.
+        # A single default override preserves every other value and list entry.
+        yield SourceDeploymentPlan(
+            helm_extra_args=(
+                "--set-string",
+                f"default.image.tag={source_image_tag(self.app_name, cluster_name)}",
+            )
+        )
+
+
 _SUPPORTED_ADAPTERS: dict[str, _BaseAdapter] = {
     "Hotel Reservation": _HotelReservationAdapter(),
     "Social Network": _SocialNetworkAdapter(),
+    "OpenTelemetry Demo Astronomy Shop": _AstronomyShopAdapter(),
 }
 _UNSUPPORTED_APPS: dict[str, str] = {
-    "OpenTelemetry Demo Astronomy Shop": "no local source build workflow is defined in this repo",
     "Fleet Cast": "no local source build workflow is defined in this repo",
     "Blueprint Hotel Reservation": "no local source build workflow is defined in this repo",
 }
@@ -399,7 +464,12 @@ def _resolve_app_source_dir(app_name: str, default_dir: Path) -> Path:
     if not override:
         return default_dir
     try:
-        resolve_app_source_subdir(_sanitize_identifier(app_name).replace("-", "_"))
+        app_filter = (
+            "astronomy_shop"
+            if app_name == "OpenTelemetry Demo Astronomy Shop"
+            else _sanitize_identifier(app_name).replace("-", "_")
+        )
+        resolve_app_source_subdir(app_filter)
     except ValueError:
         return default_dir
     return Path(override)

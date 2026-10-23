@@ -12,6 +12,7 @@ from sregym.paths import TARGET_MICROSERVICES
 APP_SOURCE_SUBDIRS = {
     "hotel_reservation": "hotelReservation",
     "social_network": "socialNetwork",
+    "astronomy_shop": "astronomy-shop",
 }
 
 _INITIAL_COMMIT_MESSAGE = "Initial application workspace snapshot"
@@ -22,6 +23,33 @@ _WORKSPACE_SEED_ENV_VAR = "SREGYM_APP_WORKSPACE_SEED_DIR"
 
 def _target_microservices_root() -> Path:
     return TARGET_MICROSERVICES
+
+
+def _astronomy_source_root() -> Path:
+    # astronomy-shop in SREGym-applications is a Helm chart, not demo source.
+    return Path(__file__).resolve().parents[2] / "source_apps" / "astronomy_shop"
+
+
+def prepare_astronomy_source(source_dir: Path) -> None:
+    """Keep historical dependency audit findings visible without changing pins.
+
+    Only newly created evaluation workspaces call this before their initial Git
+    snapshot. Seeded accepted repositories are copied unchanged.
+    """
+    for component in ("accounting", "cart"):
+        props = source_dir / "src" / component / "Directory.Build.props"
+        if not props.is_file():
+            continue
+        content = props.read_text(encoding="utf-8")
+        marker = "<!-- SREGym pinned-version audit policy -->"
+        if marker in content:
+            continue
+        policy = (
+            "\n  " + marker + "\n  <PropertyGroup>\n"
+            "    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>\n"
+            "  </PropertyGroup>\n"
+        )
+        props.write_text(content.replace("</Project>", policy + "</Project>"), encoding="utf-8")
 
 
 def application_workspace_dir(experiment_dir: str | Path) -> Path:
@@ -85,7 +113,8 @@ def prepare_application_workspace(
         shutil.copytree(seed_dir, workspace_dir)
         return workspace_dir
 
-    source_dir = _target_microservices_root() / resolve_app_source_subdir(app_filter)
+    subdir = resolve_app_source_subdir(app_filter)
+    source_dir = _astronomy_source_root() if subdir == "astronomy-shop" else _target_microservices_root() / subdir
     if not source_dir.is_dir():
         raise FileNotFoundError(f"Application source directory does not exist: {source_dir}")
 
@@ -94,6 +123,8 @@ def prepare_application_workspace(
         workspace_dir,
         ignore=shutil.ignore_patterns(".git", ".gitmodules"),
     )
+    if subdir == "astronomy-shop":
+        prepare_astronomy_source(workspace_dir)
     _initialize_git_repository(workspace_dir)
     return workspace_dir
 
@@ -114,6 +145,10 @@ def resolve_app_relative_path(app_filter: str, relative_path: str | Path) -> Pat
 def resolve_workspace_path(relative_path: str | Path) -> Path:
     workspace_dir = application_source_override()
     rel_path = Path(relative_path)
+    # Astronomy's chart and application source are independently pinned. Its
+    # upstream source checkout has no Helm chart; always use the harness chart.
+    if rel_path.parts and rel_path.parts[0] == "astronomy-shop":
+        return _target_microservices_root() / rel_path
     if workspace_dir is not None:
         source_roots = set(APP_SOURCE_SUBDIRS.values())
         if rel_path.parts and rel_path.parts[0] in source_roots:

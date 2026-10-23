@@ -1,3 +1,6 @@
 [submodule "SREGym-applications"]
 	path = SREGym-applications
 	url = https://github.com/vic-lsh/SREGym-applications.git
+[submodule "source_apps/astronomy_shop"]
+	path = source_apps/astronomy_shop
+	url = https://github.com/open-telemetry/opentelemetry-demo.git
