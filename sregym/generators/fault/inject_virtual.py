@@ -2937,9 +2937,11 @@ class VirtualizationFaultInjector(FaultInjector):
 
             # The pod spec's dnsConfig is empty under dnsPolicy ClusterFirst/Default, so read the
             # resolv.conf the pod actually got: it carries both nameservers and search domains.
+            # A failed exec (e.g. the new pod not running yet) is not yet propagated: exec_command
+            # would return its stderr, which a check for a missing nameserver would pass.
             for pod in target_pods:
                 try:
-                    resolv = self.kubectl.exec_command(
+                    resolv = self.kubectl.exec_command_checked(
                         f"kubectl exec {pod} -n {self.namespace} -- cat /etc/resolv.conf"
                     )
                 except Exception:
