@@ -207,7 +207,15 @@ async def inject_fault():
             detail=f"fault injection requires {AWAITING_FAULT_INJECTION}, got {_conductor.submission_stage!r}",
         )
     await asyncio.to_thread(_conductor.inject_deferred_fault)
-    return {"status": "ok", "stage": _conductor.submission_stage}
+    from sregym.conductor.problems.lifecycle import PROTOCOL_VERSION, InjectionResult
+
+    failure = _conductor.results.get("Injection") if _conductor.injection_invalid else None
+    return {
+        "status": "ok",
+        "stage": _conductor.submission_stage,
+        "protocol_version": PROTOCOL_VERSION,
+        "injection": InjectionResult.from_failure(failure).to_dict(),
+    }
 
 
 @app.post("/cleanup")

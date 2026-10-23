@@ -34,6 +34,7 @@ from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.compound import CompoundedOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem, serial_evaluation_timeout_s
+from sregym.conductor.problems.lifecycle import FaultComponent, RecoveryFailure, RecoveryResult, run_recovery
 
 COMPOSITE_SPECS_PATH = Path(__file__).with_name("composite_specs.json")
 COMPOSITE_PREFIX = "composite_"
@@ -295,6 +296,8 @@ class CompositeFaultProblem(Problem):
         self.fault_indices: tuple[int, ...] = tuple(sorted(faults))
         self._injected: list[int] = []
         self._recovered: set[int] = set()
+        self._recovery_timeouts: dict[int, str] = {}
+        self.recover_timeout_s = 240.0
 
         for index in self.fault_indices:
             if self.components[index].mitigation_oracle is None:
@@ -345,18 +348,26 @@ class CompositeFaultProblem(Problem):
 
     def inject_fault(self) -> None:
         self._injected, self._recovered = [], set()
+        self._recovery_timeouts = {}
         for index, component in enumerate(self.components):
             print(f"== Composite {self.problem_id}: injecting {self.spec.components[index].name} ==")
+            # Include the component that raises: an injector can fail after its first write.
+            self._injected.append(index)
             try:
                 component.inject_fault()
             except Exception as error:
-                try:
-                    self.recover_fault()
-                except CompositeRecoveryError as rollback:
-                    error.add_note(f"rollback of the injected components also failed: {rollback}")
+                rollback = self.recovery_result()
+                if not rollback["success"]:
+                    error.add_note(f"rollback of the injected components also failed: {rollback['errors']}")
                 raise
-            self._injected.append(index)
         self.fault_injected = True
+
+    def injection_failure(self) -> dict[str, Any] | None:
+        for index in self._injected:
+            failure = self.components[index].injection_failure()
+            if failure is not None:
+                return {"component_index": index, "problem_id": self.spec.components[index].name, "details": failure}
+        return None
 
     def _recover(self, index: int) -> None:
         print(f"== Composite {self.problem_id}: recovering {self.spec.components[index].name} ==")
@@ -380,7 +391,46 @@ class CompositeFaultProblem(Problem):
 
         return tuple(index for index in reversed(self._injected) if index not in self._recovered)
 
-    def recover_fault(self) -> None:
+    def fault_components(self) -> list[dict[str, Any]]:
+        return [
+            FaultComponent(
+                index,
+                index,
+                {
+                    "class": type(self.components[index]).__name__,
+                    "problem_id": self.spec.components[index].name,
+                },
+            ).to_dict()
+            for index in self.fault_indices
+        ]
+
+    def recovery_result(self, index: int | None = None) -> dict[str, Any]:
+        pending = self.pending_components if index is None else (index,)
+        if index is not None and index not in self.pending_components:
+            raise ValueError(f"{self.problem_id}: component {index} is not pending recovery")
+        result = RecoveryResult()
+        for i in pending:
+            if i in self._recovery_timeouts:
+                status, error = "timeout", self._recovery_timeouts[i]
+            else:
+                status, error = run_recovery(self.components[i].recover_fault, self.recover_timeout_s)
+            if status == "recovered":
+                self._recovered.add(i)
+                self.components[i].fault_injected = False
+                result.recovered.append(i)
+            else:
+                if status == "timeout":
+                    self._recovery_timeouts[i] = error
+                result.errors.append(RecoveryFailure(i, status, error).to_dict())
+        result.pending = list(self.pending_components)
+        self.fault_injected = bool(result.pending)
+        return result.to_dict()
+
+    def recover_fault(self, *, mode: str | None = None) -> dict[str, Any] | None:
+        if mode == "full":
+            return self.recovery_result()
+        if mode is not None:
+            raise ValueError(f"unknown recovery mode {mode!r}")
         errors: list[tuple[str, Exception]] = []
         for index in self.pending_components:
             try:

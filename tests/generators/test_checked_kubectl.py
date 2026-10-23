@@ -5,6 +5,11 @@ import pytest
 from sregym.service.kubectl import KubeCtl
 
 
+@pytest.fixture(autouse=True)
+def offline_kubectl(monkeypatch):
+    monkeypatch.setattr(KubeCtl, "__init__", lambda self: None)
+
+
 def test_checked_command_returns_stdout(monkeypatch):
     completed = subprocess.CompletedProcess(args="kubectl version", returncode=0, stdout=b"ok\n", stderr=b"")
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: completed)

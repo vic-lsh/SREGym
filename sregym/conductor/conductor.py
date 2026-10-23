@@ -333,10 +333,15 @@ class Conductor:
         problem = self.current_problem
         self._verify_agent_kubeconfig()
         self._scope_agent_exec(problem)
-        problem.inject_fault()
+        try:
+            problem.inject_fault()
+            failure = problem.injection_failure()
+        except Exception as error:
+            # An injector may have installed part of a fault before raising. Retain it for
+            # cleanup and record a terminal infrastructure outcome, never open an agent stage.
+            failure = {"error": f"{type(error).__name__}: {error}"}
         self.results["fault_injected_at"] = time.time()
         self.fault_injected = True
-        failure = problem.injection_failure()
         if failure is not None:
             self.logger.error(f"[ENV] Fault injection invalid for {self.problem_id}; skipping the agent and grading")
             self.results["infra_error"] = StartProblemResult.INJECTION_INVALID.value

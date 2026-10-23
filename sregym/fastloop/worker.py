@@ -34,6 +34,14 @@ import time
 from collections.abc import Callable, Iterator
 from typing import IO, Any, Protocol
 
+from sregym.conductor.problems.lifecycle import (
+    PROTOCOL_VERSION,
+    InjectionResult,
+    RecoveryFailure,
+    RecoveryResult,
+    run_recovery,
+)
+
 logger = logging.getLogger("all.sregym.fastloop")
 
 
@@ -100,6 +108,12 @@ class FastloopWorker:
         self._faults: list[tuple[int, int | None]] = []
         self._recovered: set[int] = set()
         self._proxy: dict[str, Any] | None = None
+        self._components: list[dict[str, Any]] = []
+        self._invalid: set[int] = set()
+        self._recovery_failed = False
+        self._cleanup_errors: dict[int, list[dict[str, Any]]] = {}
+        self._recovery_timeouts: dict[int, str] = {}
+        self._injection_span = 0
 
     def handle(self, request: dict[str, Any]) -> dict[str, Any]:
         op = request.get("op")
@@ -178,6 +192,10 @@ class FastloopWorker:
         (``CompositeFaultProblem``) contributes one fault per fault component, never its decoys.
         """
 
+        if self._recovery_failed:
+            raise RuntimeError("recovery failed; clean up successfully before another injection")
+        if self._invalid:
+            raise RuntimeError("invalid injection must be recovered before another injection")
         # A fresh instance per incident, as SREGym constructs one per problem run; its oracle
         # snapshots the healthy deployment before the fault.
         problem = self._problem_factory(str(request["problem_id"]))
@@ -186,14 +204,54 @@ class FastloopWorker:
             self._verify_agent_kubeconfig(self._proxy)
         if not request.get("compose"):
             self._incidents, self._faults, self._recovered = [], [], set()
+            self._components = []
+            self._recovery_timeouts = {}
+            self._cleanup_errors = {}
+            self._injection_span = 0
         incident = len(self._incidents)
         self._incidents.append(problem)
         first = len(self._faults)
         self._faults.extend((incident, component) for component in _fault_components(problem))
         started = self._clock()
-        problem.inject_fault()
+        try:
+            problem.inject_fault()
+            check = getattr(problem, "injection_failure", lambda: None)
+            failure = check()
+        except Exception as error:
+            failure = {"error": f"{type(error).__name__}: {error}"}
+        injection = InjectionResult.from_failure(failure)
+        if not injection.valid:
+            self._invalid.add(incident)
+        describe = getattr(problem, "fault_components", None)
+        descriptions = {part["component_index"]: part for part in describe()} if describe else {}
         faults = list(range(first, len(self._faults)))
-        return {"started_at": started, "finished_at": self._clock(), "fault": first, "faults": faults}
+        for fault in faults:
+            _, component = self._faults[fault]
+            part = descriptions.get(component, {})
+            self._components.append(
+                {
+                    "fault": fault,
+                    "incident": incident,
+                    "problem_id": str(request["problem_id"]),
+                    "component_index": component,
+                    "injection_order": self._injection_span + part.get("injection_order", fault - first),
+                    "identity": part.get("identity", {"class": type(problem).__name__}),
+                }
+            )
+        self._injection_span += max(len(getattr(problem, "components", ())), len(faults))
+        if hasattr(problem, "pending_components"):
+            pending_components = set(problem.pending_components)
+            # Catalog injection may already have rolled back, or stopped before later components.
+            self._recovered.update(f for f in faults if self._faults[f][1] not in pending_components)
+        return {
+            "protocol_version": PROTOCOL_VERSION,
+            "injection": injection.to_dict(),
+            "started_at": started,
+            "finished_at": self._clock(),
+            "fault": first,
+            "faults": faults,
+            "components": self._components[first:],
+        }
 
     @property
     def _incident(self) -> _Problem | None:
@@ -223,67 +281,114 @@ class FastloopWorker:
 
     def _oracle(self, request: dict[str, Any]) -> dict[str, Any]:
         self._current()
+        if self._invalid:
+            raise RuntimeError("cannot grade an invalid injection")
+        if self._recovery_failed:
+            raise RuntimeError("cannot grade after failed recovery")
         index = self._fault(request)
         if index is not None:
             incident, component = self._faults[index]
             problem = self._incidents[incident]
             if component is None:
-                return self._grade(problem)
-            return self._grade(problem, problem.component_oracle(component))  # type: ignore[attr-defined]
-        if len(self._incidents) == 1:
-            return self._grade(self._incidents[0])
-        grades = [self._grade(problem) for problem in self._incidents]
+                grade = self._grade(problem)
+            else:
+                oracle = problem.component_oracle(component)  # type: ignore[attr-defined]
+                if oracle is None:
+                    raise RuntimeError(f"component {component} has no mitigation oracle")
+                grade = self._grade(problem, oracle)
+        elif len(self._incidents) == 1:
+            grade = self._grade(self._incidents[0])
+        else:
+            grades = [self._grade(problem) for problem in self._incidents]
+            grade = {
+                "kind": "composition",
+                "success": all(part["success"] for part in grades),
+                "details": {"faults": grades},
+            }
         return {
-            "kind": "composition",
-            "success": all(grade["success"] for grade in grades),
-            "details": {"faults": grades},
+            **grade,
+            "protocol_version": PROTOCOL_VERSION,
+            "components": self._components if index is None else [self._components[index]],
         }
 
     def _recover(self, request: dict[str, Any]) -> dict[str, Any]:
-        """Recover one fault (``fault``) or every unrecovered fault, the last injected first.
-
-        Recovering everything recovers each problem the harness's way (a composite recovers its
-        remaining components, decoys included, in reverse); every problem is attempted even when an
-        earlier one raises, and the errors are raised together.
-        """
-
+        """Full warm-lane cleanup; failed or timed-out recoverers are never credited."""
         self._current()
+        if request.get("mode", "full") != "full":
+            raise ValueError("worker recovery mode must be 'full' (no namespace teardown follows)")
         index = self._fault(request)
+        if index is not None and index in self._recovered:
+            raise ValueError(f"fault {index} is already recovered")
         started = self._clock()
-        if index is not None:
-            if index in self._recovered:
-                raise ValueError(f"fault {index} is already recovered")
-            incident, component = self._faults[index]
-            problem = self._incidents[incident]
-            if component is None:
-                problem.recover_fault()
-            else:
-                problem.recover_component(component)  # type: ignore[attr-defined]
-            self._recovered.add(index)
-            return {"seconds": self._clock() - started, "recovered": [index]}
-
-        pending = [incident for incident in reversed(range(len(self._incidents))) if self._pending(incident)]
+        pending = (
+            [self._faults[index][0]]
+            if index is not None
+            else [
+                incident
+                for incident in reversed(range(len(self._incidents)))
+                if self._pending(incident) or incident in self._invalid
+            ]
+        )
         if not pending:
             raise RuntimeError("no injected incident is left to recover; send an inject request first")
-        recovered: list[int] = []
-        errors: list[Exception] = []
+        result = RecoveryResult()
+        requested: list[int] = []
         for incident in pending:
+            problem = self._incidents[incident]
             faults = [
                 fault
-                for fault in reversed(range(len(self._faults)))
-                if self._faults[fault][0] == incident and fault not in self._recovered
+                for fault in range(len(self._faults))
+                if self._faults[fault][0] == incident
+                and fault not in self._recovered
+                and (index is None or fault == index)
             ]
-            try:
-                self._incidents[incident].recover_fault()
-            except Exception as error:
-                errors.append(error)
-            self._recovered.update(faults)
-            recovered.extend(faults)
-        if len(errors) == 1:
-            raise errors[0]
-        if errors:
-            raise ExceptionGroup("recovery failed for several injected problems", errors)
-        return {"seconds": self._clock() - started, "recovered": recovered}
+            faults.sort(key=lambda f: self._components[f]["injection_order"], reverse=True)
+            requested.extend(faults)
+            component = self._faults[index][1] if index is not None else None
+            recover = getattr(problem, "recovery_result", None)
+            if recover is not None:
+                cleanup = recover(component)
+                recovered_components = set(cleanup["recovered"])
+                restored = [f for f in faults if self._faults[f][1] in recovered_components]
+                errors = cleanup["errors"]
+            else:
+                # Plain problems and compatible third-party composites also need bounded cleanup.
+                # Native composites use recovery_result, including decoys and per-component errors.
+                if incident in self._recovery_timeouts:
+                    status, error = "timeout", self._recovery_timeouts[incident]
+                else:
+                    call = (
+                        problem.recover_fault
+                        if component is None
+                        else (lambda problem=problem, component=component: problem.recover_component(component))
+                    )
+                    status, error = run_recovery(call, getattr(problem, "recover_timeout_s", 240.0))
+                    if status == "timeout":
+                        self._recovery_timeouts[incident] = error
+                restored = faults if status == "recovered" else []
+                errors = [] if status == "recovered" else [RecoveryFailure(component, status, error).to_dict()]
+            previous_errors = self._cleanup_errors.get(incident, [])
+            if index is not None:
+                previous_errors = [e for e in previous_errors if e["component_index"] != component]
+            else:
+                previous_errors = []
+            self._cleanup_errors[incident] = previous_errors + errors
+            self._recovered.update(restored)
+            result.recovered.extend(restored)
+            result.errors.extend({"incident": incident, **error} for error in errors)
+            if not self._pending(incident):
+                self._invalid.discard(incident)
+        result.pending = [fault for fault in range(len(self._faults)) if fault not in self._recovered]
+        self._recovery_failed = any(self._cleanup_errors.values())
+        # Other live faults are expected after a single-component cleanup.
+        reply = result.to_dict()
+        return {
+            **reply,
+            "seconds": self._clock() - started,
+            "protocol_version": PROTOCOL_VERSION,
+            "mode": "full",
+            "components": [self._components[f] for f in requested],
+        }
 
     def _pending(self, incident: int) -> bool:
         problem = self._incidents[incident]

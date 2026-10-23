@@ -4,6 +4,7 @@ import ast
 import importlib
 import inspect
 import json
+import os
 import textwrap
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,7 +14,9 @@ import pytest
 from sregym.conductor.problems.registry import ProblemRegistry
 from sregym.service.kubectl import KubeCtl
 
-_STREAM_DIR = Path(__file__).resolve().parents[4] / "benchmarks/sregym/experiments/fastloop"
+# A standalone harness checkout can point at the same fixtures as a nested SDO submodule.
+_SDO_ROOT = Path(os.environ.get("SREGYM_SDO_ROOT", Path(__file__).resolve().parents[4]))
+_STREAM_DIR = _SDO_ROOT / "tests/fixtures/sregym/fastloop"
 _STREAM_NAMES = ("pbprog_repeat", "pbprog_compose", "pbprog_explicit")
 _PROBLEM_MODULES = (
     "target_port",

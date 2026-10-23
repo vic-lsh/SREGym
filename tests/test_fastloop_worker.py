@@ -128,7 +128,13 @@ def test_each_incident_uses_a_fresh_problem_that_recovers_and_grades_its_own_fau
     worker.handle({"op": "inject", "problem_id": "p"})
 
     assert injected["started_at"] <= injected["finished_at"]
-    assert oracle == {"kind": "sregym-mitigation-oracle", "success": True, "details": {"success": True}}
+    assert oracle == {
+        "kind": "sregym-mitigation-oracle",
+        "success": True,
+        "details": {"success": True},
+        "protocol_version": 2,
+        "components": injected["components"],
+    }
     assert [problem.events for problem in fakes.problems] == [["inject", "recover"], ["inject"]]
 
 
@@ -362,7 +368,13 @@ def test_the_oracle_of_a_composition_passes_only_when_every_fault_is_mitigated()
 
     assert combined["success"] is False
     assert [part["success"] for part in combined["details"]["faults"]] == [True, False]
-    assert single == {"kind": "sregym-mitigation-oracle", "success": True, "details": {"success": True}}
+    assert single == {
+        "kind": "sregym-mitigation-oracle",
+        "success": True,
+        "details": {"success": True},
+        "protocol_version": 2,
+        "components": combined["components"][:1],
+    }
 
 
 def test_a_new_uncomposed_injection_starts_a_fresh_composition() -> None:
@@ -425,7 +437,13 @@ def test_a_registry_composite_exposes_its_fault_components_as_the_faults() -> No
     rest = worker.handle({"op": "recover"})
 
     assert (injected["fault"], injected["faults"]) == (0, [0, 1])
-    assert second == {"kind": "sregym-mitigation-oracle", "success": False, "details": {"success": False}}
+    assert second == {
+        "kind": "sregym-mitigation-oracle",
+        "success": False,
+        "details": {"success": False},
+        "protocol_version": 2,
+        "components": injected["components"][1:],
+    }
     assert partial["recovered"] == [0]
     assert composites[0].events == ["inject", "recover component 0", "recover [2, 1]"]
     assert rest["recovered"] == [1]

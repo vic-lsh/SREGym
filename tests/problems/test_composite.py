@@ -224,7 +224,7 @@ def test_a_failed_injection_rolls_back_the_components_already_injected() -> None
     with pytest.raises(RuntimeError, match="b cannot inject"):
         problem.inject_fault()
 
-    assert events == ["inject a", "recover a"]
+    assert events == ["inject a", "recover b", "recover a"]
 
 
 def test_components_must_share_one_application_namespace() -> None:
@@ -430,3 +430,93 @@ def test_benign_env_drift_restores_a_value_that_was_already_set() -> None:
 def test_benign_env_drift_validates_its_parameters(kwargs, message) -> None:
     with pytest.raises(ValueError, match=message):
         BenignEnvDrift(_App(), kubectl=_KubeCtl(None), **kwargs)
+
+
+def test_full_worker_recovery_reports_fault_and_decoy_failures_and_retries():
+    from sregym.fastloop.worker import FastloopWorker
+
+    events = []
+    faults = {"a": _Fault("a", events), "b": _Fault("b", events, fail_recover=True)}
+    spec = _spec(
+        ComponentSpec(role="fault", problem="a"),
+        ComponentSpec(role="decoy", decoy="benign_env_drift", params={"deployment": "geo"}),
+        ComponentSpec(role="fault", problem="b"),
+    )
+    p = _build(spec, faults, events)
+    worker = FastloopWorker(
+        problem_factory=lambda _: p,
+        deployer=lambda *args: None,
+        health_probe=lambda _: {},
+        cluster_factory=lambda *args: ("fake", "fake"),
+    )
+    injected = worker.handle({"op": "inject", "problem_id": spec.problem_id})
+    assert injected["faults"] == [0, 1]
+    assert [c["component_index"] for c in injected["components"]] == [0, 2]
+    assert [c["injection_order"] for c in injected["components"]] == [0, 2]
+    assert [c["identity"]["problem_id"] for c in injected["components"]] == ["a", "b"]
+    # Component oracle/recovery never touches its sibling or the decoy.
+    faults["b"].mitigation_oracle.success = False
+    assert worker.handle({"op": "oracle", "fault": 0})["success"] is True
+    assert worker.handle({"op": "oracle", "fault": 1})["success"] is False
+    events.clear()
+    p.components[1].recover_fault = lambda: (_ for _ in ()).throw(RuntimeError("decoy failed"))
+    result = worker.handle({"op": "recover", "mode": "full"})
+    assert not result["success"] and result["recovered"] == [0] and result["pending"] == [1]
+    assert [e["component_index"] for e in result["errors"]] == [2, 1]
+    assert p.pending_components == (2, 1)
+    with pytest.raises(RuntimeError, match="recovery"):
+        worker.handle({"op": "inject", "problem_id": "next"})
+    faults["b"].fail_recover = False
+    p.components[1].recover_fault = lambda: events.append("recover decoy")
+    retry = worker.handle({"op": "recover", "mode": "full"})
+    assert retry["success"] and retry["recovered"] == [1] and not p.pending_components
+    assert events == ["recover b", "recover a", "recover b", "recover decoy"]
+
+
+def test_catalog_full_recovery_can_address_only_one_component():
+    events = []
+    problem, _ = _two_faults(events)
+    problem.inject_fault()
+    result = problem.recovery_result(0)
+    assert result["success"] and result["recovered"] == [0] and result["pending"] == [1]
+    assert problem.pending_components == (1,)
+    assert events == ["inject a", "inject b", "recover a"]
+
+
+def test_partial_catalog_injection_is_invalid_and_restores_the_failed_component():
+    from sregym.fastloop.worker import FastloopWorker
+
+    events = []
+    problem, faults = _two_faults(events)
+    dirty = set()
+
+    def fail_after_write():
+        dirty.add("b")
+        raise RuntimeError("b failed after write")
+
+    faults["b"].inject_fault = fail_after_write
+    original_recover = faults["b"].recover_fault
+
+    def restore_b():
+        original_recover()
+        dirty.discard("b")
+
+    faults["b"].recover_fault = restore_b
+    worker = FastloopWorker(
+        problem_factory=lambda _: problem,
+        deployer=lambda *args: None,
+        health_probe=lambda _: {},
+        cluster_factory=lambda *args: ("fake", "fake"),
+    )
+    result = worker.handle({"op": "inject", "problem_id": problem.problem_id})
+    assert not result["injection"]["valid"]
+    assert not dirty
+    assert events == ["inject a", "recover b", "recover a"]
+    assert worker.handle({"op": "recover", "mode": "full"})["success"]
+
+
+def test_catalog_reports_a_nonraising_invalid_component():
+    problem, faults = _two_faults([])
+    faults["b"].injection_failure = lambda: {"synthetic": "invalid component b"}
+    problem.inject_fault()
+    assert problem.injection_failure() is not None

@@ -128,3 +128,55 @@ def test_the_flag_is_cleared_for_the_next_problem():
     conductor._build_stage_sequence()
 
     assert not conductor.injection_invalid
+
+
+@pytest.mark.parametrize("failure", [None, FAILURE])
+def test_deferred_http_reply_explicitly_reports_injection_validity(failure):
+    from fastapi.testclient import TestClient
+
+    from sregym.conductor import conductor_api
+
+    conductor, problem = _conductor(failure, defer=True)
+    conductor._begin_agent_stages()
+    conductor_api.set_conductor(conductor)
+    try:
+        with TestClient(conductor_api.app) as http:
+            response = http.post("/inject_fault")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["protocol_version"] == 2
+            assert body["injection"] == {
+                "valid": failure is None,
+                "infra_error": None if failure is None else "injection_invalid",
+                "details": failure or {},
+            }
+            assert body["stage"] == ("diagnosis" if failure is None else "done")
+            assert "Injection" not in http.get("/status").json()
+    finally:
+        conductor_api.set_conductor(None)
+
+
+def test_deferred_http_injection_exception_is_a_terminal_infrastructure_result():
+    from fastapi.testclient import TestClient
+
+    from sregym.conductor import conductor_api
+
+    conductor, problem = _conductor(None, defer=True)
+
+    def fail():
+        raise RuntimeError("partial injection")
+
+    problem.inject_fault = fail
+    conductor._begin_agent_stages()
+    conductor_api.set_conductor(conductor)
+    try:
+        with TestClient(conductor_api.app) as http:
+            body = http.post("/inject_fault").json()
+            assert body["injection"]["valid"] is False
+            assert body["injection"]["infra_error"] == "injection_invalid"
+            assert "partial injection" in body["injection"]["details"]["error"]
+            assert body["stage"] == "done"
+        assert problem.recovered == problem.app.cleaned == 1
+        assert problem.diagnosis_oracle.calls == problem.mitigation_oracle.calls == 0
+    finally:
+        conductor_api.set_conductor(None)

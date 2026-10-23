@@ -47,6 +47,7 @@ from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.problems.base import Problem
 from sregym.conductor.problems.composition import grading, liveness, recovery
 from sregym.conductor.problems.composition.spec import FaultDraw, Footprint, Tier
+from sregym.conductor.problems.lifecycle import FaultComponent, RecoveryFailure, RecoveryResult, run_recovery
 from sregym.utils.decorators import mark_fault_injected
 
 
@@ -206,25 +207,6 @@ def _parse_config_text(text: str):
     return yaml.safe_load(text)
 
 
-def _run_with_limit(fn, limit_s: float) -> str:
-    """Run ``fn`` in a daemon thread; return "" on success, else its error or a timeout note."""
-    outcome: dict[str, str] = {}
-
-    def target():
-        try:
-            fn()
-            outcome["error"] = ""
-        except BaseException as e:  # noqa: BLE001 - recovery must never propagate, not even SystemExit
-            outcome["error"] = f"{type(e).__name__}: {e}"
-
-    t = threading.Thread(target=target, daemon=True, name="composite-recover")
-    t.start()
-    t.join(limit_s)
-    if t.is_alive():
-        return f"timeout after {limit_s:g}s"
-    return outcome.get("error", "")
-
-
 class _TimedOut:
     """Outcome of a call that had not returned when the deadline passed."""
 
@@ -377,6 +359,10 @@ class ColocatedComposite(Problem):
             if tuple(self.footprints[i]) != draw.footprints or self.tiers[i] != draw.tier:
                 raise ValueError(f"fault {i} ({draw.key}): explicit footprints/tier disagree with its FaultDraw")
         self.injection_order = sorted(range(n), key=lambda i: self.tiers[i])  # stable
+        self.fault_indices = tuple(range(n))
+        self._injected: list[int] = []
+        self._recovered: set[int] = set()
+        self._recovery_timeouts: dict[int, str] = {}
 
         # Safety violations are recorded, never flip success (Conductor._apply_safety_veto).
         self.safety_report_only = True
@@ -526,6 +512,8 @@ class ColocatedComposite(Problem):
         ``composite_injection_retried`` lists the faults retried. Never raises: a run still
         invalid after the retry is reported by ``injection_failure``.
         """
+        self._injected, self._recovered = [], set()
+        self._recovery_timeouts = {}
         n = len(self.problems)
         print(f"== Composite Fault Injection ({n} faults, order {self.injection_order}) ==")
         self.rebind_workload_handles()
@@ -562,6 +550,10 @@ class ColocatedComposite(Problem):
             p = self.problems[i]
             print(f"  injecting fault_{i} {type(p).__name__} (tier {self.tiers[i].name}) | ns={p.namespace}")
             inject_errors.pop(i, None)
+            # Retain even a failed attempt: it may have installed part of its fault.
+            if i in self._injected:
+                self._injected.remove(i)
+            self._injected.append(i)
             try:
                 p.inject_fault()
             except Exception as e:  # recorded: the run becomes invalid, not crashed
@@ -616,33 +608,90 @@ class ColocatedComposite(Problem):
             host_level=self.problems[i].requires_khaos(),
         )
 
-    @mark_fault_injected
-    def recover_fault(self):
-        """Best-effort recovery in reverse injection order, each under a time limit; never raises.
+    def fault_components(self) -> list[dict[str, Any]]:
+        """Declared identities and actual injection positions, benchmark control plane only."""
+        return [
+            FaultComponent(
+                i,
+                (self._injected or self.injection_order).index(i),
+                {
+                    **(self.draws[i].to_json() if self.draws[i] is not None else {}),
+                    "class": type(self.problems[i]).__name__,
+                },
+            ).to_dict()
+            for i in self.fault_indices
+        ]
 
-        The conductor then deletes the app namespace and reconciles cluster state to baseline,
-        so a fault whose writes are all namespace-scoped is skipped. Per fault, ``self.recovery``
-        records ``fault_i_recovery`` (recovered | skipped), ``fault_i_recovery_reason`` and, when
-        recovered, ``fault_i_recover_error`` ("" on success).
+    def component_oracle(self, index: int):
+        if index not in self.fault_indices:
+            raise ValueError(f"no fault component {index}")
+        return self.problems[index].mitigation_oracle
+
+    @property
+    def pending_components(self) -> tuple[int, ...]:
+        return tuple(i for i in reversed(self._injected) if i not in self._recovered)
+
+    def recover_component(self, index: int) -> dict[str, Any]:
+        if index not in self._injected or index in self._recovered:
+            raise ValueError(f"component {index} is not pending recovery")
+        return self.recovery_result(index)
+
+    def recovery_result(self, index: int | None = None) -> dict[str, Any]:
+        """Full cleanup, including namespace-local writes; failures stay pending for retry."""
+        pending = self.pending_components if index is None else (index,)
+        if index is not None and index not in self.pending_components:
+            raise ValueError(f"component {index} is not pending recovery")
+        result = RecoveryResult()
+        for i in pending:
+            if i in self._recovery_timeouts:
+                status, error = "timeout", self._recovery_timeouts[i]
+            else:
+                status, error = run_recovery(self.problems[i].recover_fault, self.recover_timeout_s)
+            self.recovery[f"fault_{i}_recovery"] = status
+            self.recovery[f"fault_{i}_recovery_reason"] = "full recovery; no namespace teardown"
+            self.recovery[f"fault_{i}_recover_error"] = error
+            if status == "recovered":
+                self._recovered.add(i)
+                self.problems[i].fault_injected = False
+                result.recovered.append(i)
+            else:
+                if status == "timeout":
+                    self._recovery_timeouts[i] = error
+                result.errors.append(RecoveryFailure(i, status, error).to_dict())
+        result.pending = list(self.pending_components)
+        self.fault_injected = bool(result.pending)
+        return result.to_dict()
+
+    def recover_fault(self, *, mode: str = "namespace_teardown") -> dict[str, Any] | None:
+        """Use explicit ``full`` on a warm lane; the default assumes namespace teardown.
+
+        The conductor's default is best effort and keeps its namespace-local optimization.
+        Full recovery returns a structured result and never marks failed work recovered.
         """
+        if mode == "full":
+            return self.recovery_result()
+        if mode != "namespace_teardown":
+            raise ValueError(f"unknown recovery mode {mode!r}")
         print(f"== Composite Fault Recovery ({len(self.problems)} faults) ==")
         report: dict[str, str] = {}
         for i in reversed(self.injection_order):
+            if i in self._recovered:
+                continue
             p = self.problems[i]
             decision = self.recovery_decision(i)
             report[f"fault_{i}_recovery_reason"] = decision.reason
             if not decision.recover:
                 report[f"fault_{i}_recovery"] = "skipped"
-                print(f"  skipping fault_{i} {type(p).__name__}: {decision.reason}")
                 continue
-            print(f"  recovering fault_{i} {type(p).__name__} | ns={p.namespace} ({decision.reason})")
-            error = _run_with_limit(p.recover_fault, self.recover_timeout_s)
-            report[f"fault_{i}_recovery"] = "recovered"
+            status, error = run_recovery(p.recover_fault, self.recover_timeout_s)
+            report[f"fault_{i}_recovery"] = status
             report[f"fault_{i}_recover_error"] = error
-            if error:
-                print(f"  ⚠️ fault_{i} recovery failed: {error}")
+            if status == "recovered":
+                self._recovered.add(i)
             time.sleep(self.inject_pause_s)
         self.recovery = report
+        self.fault_injected = bool(self.pending_components)
+        return None
 
 
 class CompositeMitigationOracle(Oracle):
