@@ -32,7 +32,9 @@ class DNSResolutionMitigationOracle(Oracle):
         name = f"sregym-dns-{uuid.uuid4().hex[:12]}"
         checks = " && ".join(f"nslookup {shlex.quote(f'{svc}.{namespace}.svc.cluster.local')}" for svc in services)
         pod = client.V1Pod(
-            metadata=client.V1ObjectMeta(name=name, namespace=namespace, labels={"sregym-oracle": "dns"}),
+            metadata=client.V1ObjectMeta(
+                name=name, namespace=namespace, labels={**(source.metadata.labels or {}), "sregym-oracle": "dns"}
+            ),
             spec=client.V1PodSpec(
                 restart_policy="Never",
                 automount_service_account_token=False,
@@ -45,6 +47,9 @@ class DNSResolutionMitigationOracle(Oracle):
                         name="dns",
                         image="busybox:1.36.1",
                         command=["sh", "-c", checks],
+                        # Copy selectors so DNS-blocking NetworkPolicies apply,
+                        # but never join the application's ready Service endpoints.
+                        readiness_probe=client.V1Probe(_exec=client.V1ExecAction(command=["false"])),
                         resources=client.V1ResourceRequirements(
                             requests={"cpu": "10m", "memory": "8Mi"},
                             limits={"cpu": "100m", "memory": "32Mi"},
