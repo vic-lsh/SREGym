@@ -10,7 +10,10 @@ def test_probe_copies_each_pods_dns_environment_and_cleans_up():
     spec = SimpleNamespace(
         dns_policy="None", dns_config={"nameservers": ["8.8.8.8"]}, node_name="worker", host_network=False
     )
-    source = SimpleNamespace(spec=spec, metadata=SimpleNamespace(labels={"opentelemetry.io/name": "checkout"}))
+    source = SimpleNamespace(
+        spec=spec,
+        metadata=SimpleNamespace(name="checkout-abc", uid="source-uid", labels={"opentelemetry.io/name": "checkout"}),
+    )
     api = SimpleNamespace(
         create_namespaced_pod=lambda **kw: created.append(kw["body"]),
         read_namespaced_pod=lambda **kw: SimpleNamespace(status=SimpleNamespace(phase="Succeeded")),
@@ -24,6 +27,8 @@ def test_probe_copies_each_pods_dns_environment_and_cleans_up():
     assert pod.spec.dns_policy == "None"
     assert pod.spec.dns_config == spec.dns_config
     assert pod.spec.node_name == "worker"
+    assert pod.metadata.owner_references[0].uid == "source-uid"
+    assert pod.metadata.owner_references[0].controller is True
     assert pod.metadata.labels == {"opentelemetry.io/name": "checkout", "sregym-oracle": "dns"}
     assert pod.spec.containers[0].readiness_probe._exec.command == ["false"]
     assert "nslookup" in pod.spec.containers[0].command[-1]
@@ -39,7 +44,7 @@ def test_failed_probe_image_is_infrastructure_error():
         SimpleNamespace(namespace="astronomy-shop", kubectl=SimpleNamespace(core_v1_api=api))
     )
     source = SimpleNamespace(
-        metadata=SimpleNamespace(labels={}),
+        metadata=SimpleNamespace(name="checkout-abc", uid="source-uid", labels={}),
         spec=SimpleNamespace(dns_policy="ClusterFirst", dns_config=None, node_name="worker", host_network=False),
     )
     with pytest.raises(RuntimeError, match="image unavailable"):
