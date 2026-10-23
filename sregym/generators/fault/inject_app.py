@@ -256,7 +256,11 @@ class ApplicationFaultInjector(FaultInjector):
             if exc.status != 409:
                 raise
             job = batch_v1.read_namespaced_job(name="valkey-memory-flood", namespace=self.namespace)
-            if job.metadata.deletion_timestamp or job.spec.suspend or job.status.succeeded or job.status.failed:
+            terminal = any(
+                condition.type in {"Failed", "Complete"} and condition.status == "True"
+                for condition in job.status.conditions or []
+            )
+            if job.metadata.deletion_timestamp or job.spec.suspend or job.status.succeeded or terminal:
                 raise RuntimeError("Existing valkey-memory-flood Job is not active; recover before retry") from exc
             print("Reusing the existing Valkey memory flood Job.")
         print("Valkey memory flood job submitted.")

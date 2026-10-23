@@ -7,11 +7,12 @@ import sregym.generators.fault.inject_app as module
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
 
 
-def test_retry_reuses_only_active_flood_job(monkeypatch):
+@pytest.mark.parametrize("failed_pods", [0, 1])
+def test_retry_reuses_only_active_flood_job(monkeypatch, failed_pods):
     job = SimpleNamespace(
         metadata=SimpleNamespace(deletion_timestamp=None),
         spec=SimpleNamespace(suspend=False),
-        status=SimpleNamespace(active=1, succeeded=None, failed=None),
+        status=SimpleNamespace(active=1, succeeded=None, failed=failed_pods, conditions=[]),
     )
     calls = []
 
@@ -31,7 +32,14 @@ def test_retry_reuses_only_active_flood_job(monkeypatch):
     assert container["resources"]["limits"]["cpu"] == "250m"
 
 
-def test_retry_does_not_accept_terminal_job(monkeypatch):
+@pytest.mark.parametrize(
+    "succeeded,conditions",
+    [
+        (1, []),
+        (None, [SimpleNamespace(type="Failed", status="True")]),
+    ],
+)
+def test_retry_does_not_accept_terminal_job(monkeypatch, succeeded, conditions):
     def create(**_):
         raise ApiException(status=409)
 
@@ -40,7 +48,7 @@ def test_retry_does_not_accept_terminal_job(monkeypatch):
         read_namespaced_job=lambda **_: SimpleNamespace(
             metadata=SimpleNamespace(deletion_timestamp=None),
             spec=SimpleNamespace(suspend=False),
-            status=SimpleNamespace(active=None, succeeded=1, failed=None),
+            status=SimpleNamespace(active=None, succeeded=succeeded, failed=1, conditions=conditions),
         ),
     )
     monkeypatch.setattr(module.client, "BatchV1Api", lambda: api)
