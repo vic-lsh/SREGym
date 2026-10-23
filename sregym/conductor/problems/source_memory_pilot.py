@@ -126,4 +126,4 @@ def sidecar_target_port() -> ObservedTargetPortMisconfig:
 
 
 def named_target_port() -> ObservedTargetPortMisconfig:
-    return ObservedTargetPortMisconfig(app_name="hotel_reservation", faulty_service="geo", bad_port="missing-app-port")
+    return ObservedTargetPortMisconfig(app_name="hotel_reservation", faulty_service="geo", bad_port="missing-app")
