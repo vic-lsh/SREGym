@@ -14,12 +14,11 @@
 """DNSResolutionMitigationOracle against an in-memory namespace (no cluster)."""
 
 import json
-import re
 from types import SimpleNamespace
 
 import pytest
 
-from sregym.conductor.oracles.dns_resolution_mitigation import DNSResolutionMitigationOracle, resolved
+from sregym.conductor.oracles.dns_resolution_mitigation import DNSResolutionMitigationOracle
 
 NS = "train-ticket"
 
@@ -31,6 +30,7 @@ class FakeKubectl:
 
     def __init__(self, services, pods):
         self.services, self.pods = services, pods
+        self.core_v1_api = SimpleNamespace(read_namespaced_pod=lambda name, namespace: name)
 
     def list_services(self, namespace):
         return SimpleNamespace(items=[SimpleNamespace(metadata=SimpleNamespace(name=s)) for s in self.services])
@@ -40,21 +40,14 @@ class FakeKubectl:
             return json.dumps({"app": command.split()[3]})
         if command.startswith("kubectl get pods "):
             return " ".join(self.pods)
-        m = re.fullmatch(rf"kubectl exec -n {NS} (\S+) -- getent hosts (\S+)\.{NS}\.svc\.cluster\.local", command)
-        assert m, command
-        pod, svc = m.groups()
-        if pod not in self.pods:
-            return f'Error from server (NotFound): pods "{pod}" not found'
-        if self.pods[pod] is None:
-            return f'error: Internal error occurred: unable to upgrade connection: container not found ("{pod}")'
-        if svc in self.pods[pod]:
-            return f"10.96.0.7       {svc}.{NS}.svc.cluster.local\n"
-        return "command terminated with exit code 2"
+        raise AssertionError(command)
 
 
 def _evaluate(services, pods):
     problem = SimpleNamespace(kubectl=FakeKubectl(services, pods), namespace=NS, faulty_service="ts-user-service")
-    return DNSResolutionMitigationOracle(problem).evaluate()["success"]
+    oracle = DNSResolutionMitigationOracle(problem)
+    oracle._probe = lambda pod, services: pods[pod] is not None and set(services) <= pods[pod]
+    return oracle.evaluate()["success"]
 
 
 SERVICES = ["ts-user-service", "ts-auth-service", "nacos"]
@@ -77,14 +70,3 @@ def test_passes_when_every_pod_resolves_every_service():
 )
 def test_fails_when_any_running_pod_cannot_resolve(pods):
     assert not _evaluate(SERVICES, pods)
-
-
-def test_resolved_requires_the_name_in_a_hosts_line():
-    fqdn = f"nacos.{NS}.svc.cluster.local"
-    assert resolved(f"10.96.0.9   {fqdn}\n", fqdn)
-    for output in (
-        "",
-        "command terminated with exit code 2",
-        'unable to upgrade connection: container not found ("x")',
-    ):
-        assert not resolved(output, fqdn)

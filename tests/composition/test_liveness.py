@@ -315,3 +315,22 @@ def test_config_data_uses_the_given_parser_and_keeps_unparsable_text():
         "num": "7",
     }
     assert lv.normalize("ConfigMap", cm)["data"]["num"] == "7"  # json.loads -> 7, not a mapping: kept as text
+
+
+def test_flood_job_is_a_tracked_fault_spec():
+    assert "Job" in lv.NAMESPACED_KINDS
+    before = _snap(Job=[])
+    after = _snap(
+        Job=[
+            {
+                "metadata": {"name": "valkey-memory-flood"},
+                "spec": {
+                    "template": {
+                        "spec": {"containers": [{"name": "flooder", "image": "valkey/valkey:9.0.1-alpine3.23"}]}
+                    }
+                },
+            }
+        ]
+    )
+    verdict = lv.spec_verdict(lv.diff(before, after), after)
+    assert verdict.live and verdict.basis == lv.BASIS_SPEC_DIFF

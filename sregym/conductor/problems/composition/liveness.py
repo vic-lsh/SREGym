@@ -44,6 +44,7 @@ NAMESPACED_KINDS: tuple[str, ...] = (
     "Deployment",
     "StatefulSet",
     "DaemonSet",
+    "Job",
     "Service",
     "ConfigMap",
     "Secret",
