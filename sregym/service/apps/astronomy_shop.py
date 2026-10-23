@@ -8,6 +8,7 @@ from sregym.paths import ASTRONOMY_SHOP_METADATA
 from sregym.service.apps.base import Application
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
+from sregym.service.source_deploy import plan_for_app, source_deploy_enabled
 
 
 class AstronomyShop(Application):
@@ -50,7 +51,15 @@ class AstronomyShop(Application):
             "components.load-generator.envOverrides[0].value=false",
         ]
 
-        Helm.install(**self.helm_configs)
+        if source_deploy_enabled():
+            with plan_for_app(self, node_architectures=self.kubectl.get_node_architectures()) as plan:
+                configs = dict(self.helm_configs)
+                configs["extra_args"] = [*configs.get("extra_args", []), *plan.helm_extra_args]
+                if plan.helm_chart_path is not None:
+                    configs["chart_path"] = str(plan.helm_chart_path)
+                Helm.install(**configs)
+        else:
+            Helm.install(**self.helm_configs)
         Helm.assert_if_deployed(self.helm_configs["namespace"])
 
     def _read_flagd_config(self) -> dict[str, Any]:
