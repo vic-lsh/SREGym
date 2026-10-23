@@ -8,6 +8,7 @@ from sregym.paths import ASTRONOMY_SHOP_METADATA
 from sregym.service.apps.base import Application
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
+from sregym.service.source_deploy import plan_for_app, source_deploy_enabled
 
 
 class AstronomyShop(Application):
@@ -50,7 +51,13 @@ class AstronomyShop(Application):
             "components.load-generator.envOverrides[0].value=false",
         ]
 
-        Helm.install(**self.helm_configs)
+        if source_deploy_enabled():
+            with plan_for_app(self, node_architectures=self.kubectl.get_node_architectures()) as plan:
+                helm_configs = dict(self.helm_configs)
+                helm_configs["extra_args"] = [*self.helm_configs["extra_args"], *plan.helm_extra_args]
+                Helm.install(**helm_configs)
+        else:
+            Helm.install(**self.helm_configs)
         Helm.assert_if_deployed(self.helm_configs["namespace"])
 
     def _read_flagd_config(self) -> dict[str, Any]:
