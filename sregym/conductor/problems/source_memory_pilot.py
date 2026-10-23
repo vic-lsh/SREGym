@@ -78,7 +78,8 @@ class NamedInitImage(Problem):
 class HealthyObservationOracle(Oracle):
     importance = 1.0
 
-    def evaluate(self) -> dict[str, bool]:
+    def evaluate(self, solution: Any = None) -> dict[str, bool]:
+        """Grade observed health for diagnosis and mitigation submission shapes."""
         deployments = self.problem.kubectl.apps_v1_api.list_namespaced_deployment(self.problem.namespace).items
         names = {d.metadata.name for d in deployments}
         return {

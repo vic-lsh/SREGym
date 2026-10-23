@@ -77,6 +77,37 @@ def test_healthy_tracing_performs_no_mutation(wired, monkeypatch):
     problem.recover_fault()
 
 
+@pytest.mark.parametrize(
+    "names,available,expected",
+    [
+        (["otel-collector", "search"], 1, True),
+        (["otel-collector", "search", "jaeger"], 1, False),
+        (["search"], 1, False),
+        (["otel-collector", "search"], 0, False),
+        ([], 1, False),
+    ],
+)
+@pytest.mark.parametrize("stage", ["diagnosis", "mitigation"])
+def test_healthy_tracing_grading_accepts_both_call_shapes(wired, names, available, expected, stage):
+    problem = pilot.TracingHealthyObservation()
+    deployments = [
+        SimpleNamespace(
+            metadata=SimpleNamespace(name=name),
+            status=SimpleNamespace(available_replicas=available),
+            spec=SimpleNamespace(replicas=1),
+        )
+        for name in names
+    ]
+    problem.kubectl.apps_v1_api = SimpleNamespace(
+        list_namespaced_deployment=lambda namespace: SimpleNamespace(items=deployments)
+    )
+    if stage == "diagnosis":
+        result = problem.diagnosis_oracle.evaluate("No fault; the source replaces Jaeger with the collector.")
+    else:
+        result = problem.mitigation_oracle.evaluate()
+    assert result == {"success": expected}
+
+
 def test_port_factories_select_expected_binding_and_named_bad_target(monkeypatch):
     seen = []
     monkeypatch.setattr(pilot, "ObservedTargetPortMisconfig", lambda **kwargs: seen.append(kwargs))
