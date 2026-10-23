@@ -1,20 +1,17 @@
+import contextlib
 import json
+import shlex
+import time
+import uuid
+
+from kubernetes import client
+from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
 
 
-def resolved(getent_output: str, fqdn: str) -> bool:
-    """True iff `getent hosts <fqdn>` printed a hosts line for `fqdn`.
-
-    `KubeCtl.exec_command` returns stderr when the command fails, so the output alone must
-    prove success: a kubectl error ("container not found", "pod not found") or an empty
-    getent result never contains the name as a whitespace-separated token.
-    """
-    return fqdn in getent_output.split()
-
-
 class DNSResolutionMitigationOracle(Oracle):
-    """Every Running pod of the faulty service resolves every Service name in the namespace.
+    """Every Running pod's DNS configuration resolves every Service name in the namespace.
 
     Checking every pod (not only the first) matters during a stalled rollout: the previous
     ReplicaSet's pod still resolves while the pod carrying the fault cannot start, and a
@@ -22,6 +19,77 @@ class DNSResolutionMitigationOracle(Oracle):
     """
 
     importance = 1.0
+    concurrent_safe = False
+
+    def _probe(self, source, services: list[str]) -> bool:
+        """Resolve from an owned tool image using the source pod's DNS settings.
+
+        Application images may be distroless. Probe failures to start are infra
+        errors; only a terminated resolver process supplies a DNS verdict.
+        """
+        namespace = self.problem.namespace
+        api = self.problem.kubectl.core_v1_api
+        name = f"sregym-dns-{uuid.uuid4().hex[:12]}"
+        checks = " && ".join(f"nslookup {shlex.quote(f'{svc}.{namespace}.svc.cluster.local')}" for svc in services)
+        pod = client.V1Pod(
+            metadata=client.V1ObjectMeta(
+                name=name,
+                namespace=namespace,
+                labels={**(source.metadata.labels or {}), "sregym-oracle": "dns"},
+                # Prevent the application's ReplicaSet from adopting this pod.
+                owner_references=[
+                    client.V1OwnerReference(
+                        api_version="v1",
+                        kind="Pod",
+                        name=source.metadata.name,
+                        uid=source.metadata.uid,
+                        controller=True,
+                    )
+                ],
+            ),
+            spec=client.V1PodSpec(
+                restart_policy="Never",
+                automount_service_account_token=False,
+                dns_policy=source.spec.dns_policy,
+                dns_config=source.spec.dns_config,
+                node_name=source.spec.node_name,
+                host_network=source.spec.host_network,
+                containers=[
+                    client.V1Container(
+                        name="dns",
+                        image="busybox:1.36.1",
+                        command=["sh", "-c", checks],
+                        # Copy selectors so DNS-blocking NetworkPolicies apply,
+                        # but never join the application's ready Service endpoints.
+                        readiness_probe=client.V1Probe(_exec=client.V1ExecAction(command=["false"])),
+                        resources=client.V1ResourceRequirements(
+                            requests={"cpu": "10m", "memory": "8Mi"},
+                            limits={"cpu": "100m", "memory": "32Mi"},
+                        ),
+                    )
+                ],
+            ),
+        )
+        try:
+            api.create_namespaced_pod(namespace=namespace, body=pod)
+            deadline = time.monotonic() + 90
+            while time.monotonic() < deadline:
+                current = api.read_namespaced_pod(name=name, namespace=namespace)
+                if current.status.phase == "Succeeded":
+                    return True
+                if current.status.phase == "Failed":
+                    statuses = current.status.container_statuses or []
+                    if not statuses or not statuses[0].state.terminated:
+                        raise RuntimeError("DNS probe failed without a resolver exit status")
+                    exit_code = statuses[0].state.terminated.exit_code
+                    if exit_code != 1:
+                        raise RuntimeError(f"DNS probe terminated with infrastructure exit code {exit_code}")
+                    return False
+                time.sleep(1)
+            raise RuntimeError("DNS oracle probe did not terminate within 90s")
+        finally:
+            with contextlib.suppress(ApiException):
+                api.delete_namespaced_pod(name=name, namespace=namespace, grace_period_seconds=0)
 
     def evaluate(self) -> dict:
         print("== DNS Resolution Mitigation Check ==")
@@ -59,14 +127,9 @@ class DNSResolutionMitigationOracle(Oracle):
             return {"success": False}
 
         for pod in pod_names:
-            for svc in service_names:
-                fqdn = f"{svc}.{namespace}.svc.cluster.local"
-                output = kubectl.exec_command(f"kubectl exec -n {namespace} {pod} -- getent hosts {fqdn}")
-                if not resolved(output, fqdn):
-                    print(
-                        f"[❌] Faulty Service: {faulty_service} | pod {pod} cannot resolve {svc}: {output.strip()[:200]}"
-                    )
-                    return {"success": False}
-            print(f"[✅] All {len(service_names)} service names resolved inside pod {pod}")
+            source = kubectl.core_v1_api.read_namespaced_pod(name=pod, namespace=namespace)
+            if not self._probe(source, service_names):
+                print(f"[FAIL] DNS settings of {pod} cannot resolve every namespace service")
+                return {"success": False}
 
         return {"success": True}

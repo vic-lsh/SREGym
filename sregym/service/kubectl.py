@@ -280,11 +280,6 @@ class KubeCtl:
         else:
             display_name = f"namespace '{namespace}'"
 
-        # As robust-skills does (its runs had no otel-collector-agent pods): the astronomy-shop
-        # chart's collector DaemonSet binds hostPort 4317, which deadlocks deploys sharing a node.
-        with contextlib.suppress(Exception):
-            self.apps_v1_api.delete_namespaced_daemon_set(name="otel-collector-agent", namespace=namespace)
-
         console.log(f"[bold yellow]Waiting for all pods in {display_name} to be ready...")
 
         wait = 0

@@ -1,10 +1,9 @@
 """Inject faults at the application layer: Code, MongoDB, Redis, etc."""
 
-import base64
-import textwrap
 import time
 
 from kubernetes import client
+from kubernetes.client.rest import ApiException
 
 from sregym.generators.fault.base import FaultInjector
 from sregym.service.kubectl import KubeCtl
@@ -210,34 +209,14 @@ class ApplicationFaultInjector(FaultInjector):
     def inject_valkey_memory_disruption(self):
         print("Injecting Valkey memory disruption via in-cluster job...")
 
-        script = textwrap.dedent(
-            """
-            import redis
-            import threading
-            import time
-
-            def flood_redis():
-                client = redis.Redis(host='valkey-cart', port=6379)
-                while True:
-                    try:
-                        payload = 'x' * 1000000
-                        client.set(f"key_{time.time()}", payload)
-                    except Exception as e:
-                        print(f"Error: {e}")
-                        time.sleep(1)
-
-            threads = []
-            for _ in range(10):
-                t = threading.Thread(target=flood_redis)
-                t.start()
-                threads.append(t)
-
-            for t in threads:
-                t.join()
-        """
-        ).strip()
-
-        encoded_script = base64.b64encode(script.encode()).decode()
+        # Use the application's pinned Valkey CLI: no runtime package download and
+        # only one bounded producer. Unique keys still exhaust the cache's memory.
+        script = (
+            "head -c 1000000 /dev/zero | tr '\\000' x > /tmp/payload; "
+            "i=0; while true; do "
+            "valkey-cli -h valkey-cart -x SET po1-flood-$i < /tmp/payload; "
+            "i=$((i+1)); sleep 0.02; done"
+        )
 
         job_spec = {
             "apiVersion": "batch/v1",
@@ -253,11 +232,15 @@ class ApplicationFaultInjector(FaultInjector):
                         "containers": [
                             {
                                 "name": "flooder",
-                                "image": "python:3.10-slim",
+                                "image": "valkey/valkey:9.0.1-alpine3.23",
+                                "resources": {
+                                    "requests": {"cpu": "50m", "memory": "16Mi"},
+                                    "limits": {"cpu": "250m", "memory": "64Mi"},
+                                },
                                 "command": [
                                     "sh",
                                     "-c",
-                                    f"pip install redis && python3 -c \"import base64; exec(base64.b64decode('{encoded_script}'))\"",
+                                    script,
                                 ],
                             }
                         ],
@@ -267,7 +250,19 @@ class ApplicationFaultInjector(FaultInjector):
         }
 
         batch_v1 = client.BatchV1Api()
-        batch_v1.create_namespaced_job(namespace=self.namespace, body=job_spec)
+        try:
+            batch_v1.create_namespaced_job(namespace=self.namespace, body=job_spec)
+        except ApiException as exc:
+            if exc.status != 409:
+                raise
+            job = batch_v1.read_namespaced_job(name="valkey-memory-flood", namespace=self.namespace)
+            terminal = any(
+                condition.type in {"Failed", "Complete"} and condition.status == "True"
+                for condition in job.status.conditions or []
+            )
+            if job.metadata.deletion_timestamp or job.spec.suspend or job.status.succeeded or terminal:
+                raise RuntimeError("Existing valkey-memory-flood Job is not active; recover before retry") from exc
+            print("Reusing the existing Valkey memory flood Job.")
         print("Valkey memory flood job submitted.")
 
     def recover_valkey_memory_disruption(self):

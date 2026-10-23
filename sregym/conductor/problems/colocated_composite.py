@@ -90,6 +90,7 @@ class KubeClusterIO:
         "Deployment": ("apps", "list_namespaced_deployment", True),
         "StatefulSet": ("apps", "list_namespaced_stateful_set", True),
         "DaemonSet": ("apps", "list_namespaced_daemon_set", True),
+        "Job": ("batch", "list_namespaced_job", True),
         "Service": ("core", "list_namespaced_service", True),
         "ConfigMap": ("core", "list_namespaced_config_map", True),
         "Secret": ("core", "list_namespaced_secret", True),
@@ -118,6 +119,7 @@ class KubeClusterIO:
             apis = {
                 "core": client.CoreV1Api(),
                 "apps": client.AppsV1Api(),
+                "batch": client.BatchV1Api(),
                 "networking": client.NetworkingV1Api(),
                 "rbac": client.RbacAuthorizationV1Api(),
                 "admission": client.AdmissionregistrationV1Api(),

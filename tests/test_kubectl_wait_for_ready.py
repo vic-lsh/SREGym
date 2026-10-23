@@ -120,3 +120,11 @@ def test_pods_slow_for_other_reasons_still_wait_for_the_full_timeout() -> None:
         k.wait_for_ready(NS, sleep=2, max_wait=100, image_pull_fail_after=60)
     assert not isinstance(err.value, kubectl_mod.ImagePullStuckError)
     assert k._sleep.slept == 100
+
+
+def test_readiness_observation_does_not_delete_application_telemetry():
+    deleted = []
+    k = _kubectl([[_ready("checkout")]])
+    k.apps_v1_api = SimpleNamespace(delete_namespaced_daemon_set=lambda **kw: deleted.append(kw))
+    k.wait_for_ready(NS)
+    assert deleted == []
