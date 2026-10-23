@@ -36,6 +36,7 @@ from typing import IO, Any, Protocol
 
 from sregym.conductor.problems.lifecycle import (
     PROTOCOL_VERSION,
+    SEED_RECOVERY_CONTRACT,
     InjectionResult,
     RecoveryFailure,
     RecoveryResult,
@@ -111,8 +112,10 @@ class FastloopWorker:
         self._components: list[dict[str, Any]] = []
         self._invalid: set[int] = set()
         self._recovery_failed = False
+        self._refresh_failed = False
         self._cleanup_errors: dict[int, list[dict[str, Any]]] = {}
         self._recovery_timeouts: dict[int, str] = {}
+        self._refresh_timeouts: dict[int, str] = {}
         self._injection_span = 0
 
     def handle(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -125,6 +128,7 @@ class FastloopWorker:
             "inject": self._inject,
             "oracle": self._oracle,
             "recover": self._recover,
+            "refresh": self._refresh,
             "proxy": self._start_proxy,
             "codex_prompt": self._codex_prompt,
             "shutdown": lambda _request: {},
@@ -192,7 +196,7 @@ class FastloopWorker:
         (``CompositeFaultProblem``) contributes one fault per fault component, never its decoys.
         """
 
-        if self._recovery_failed:
+        if self._recovery_failed or self._refresh_failed:
             raise RuntimeError("recovery failed; clean up successfully before another injection")
         if self._invalid:
             raise RuntimeError("invalid injection must be recovered before another injection")
@@ -206,6 +210,7 @@ class FastloopWorker:
             self._incidents, self._faults, self._recovered = [], [], set()
             self._components = []
             self._recovery_timeouts = {}
+            self._refresh_timeouts = {}
             self._cleanup_errors = {}
             self._injection_span = 0
         incident = len(self._incidents)
@@ -283,7 +288,7 @@ class FastloopWorker:
         self._current()
         if self._invalid:
             raise RuntimeError("cannot grade an invalid injection")
-        if self._recovery_failed:
+        if self._recovery_failed or self._refresh_failed:
             raise RuntimeError("cannot grade after failed recovery")
         index = self._fault(request)
         if index is not None:
@@ -329,8 +334,6 @@ class FastloopWorker:
                 if self._pending(incident) or incident in self._invalid
             ]
         )
-        if not pending:
-            raise RuntimeError("no injected incident is left to recover; send an inject request first")
         result = RecoveryResult()
         requested: list[int] = []
         for incident in pending:
@@ -358,7 +361,7 @@ class FastloopWorker:
                     status, error = "timeout", self._recovery_timeouts[incident]
                 else:
                     call = (
-                        problem.recover_fault
+                        getattr(problem, "recover_to_baseline", problem.recover_fault)
                         if component is None
                         else (lambda problem=problem, component=component: problem.recover_component(component))
                     )
@@ -387,8 +390,31 @@ class FastloopWorker:
             "seconds": self._clock() - started,
             "protocol_version": PROTOCOL_VERSION,
             "mode": "full",
+            "recovery_contract": SEED_RECOVERY_CONTRACT,
             "components": [self._components[f] for f in requested],
         }
+
+    def _refresh(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Refresh runtime clients after full recovery and the caller's seed-manifest restore."""
+        self._current()
+        if any(self._pending(i) for i in range(len(self._incidents))) or any(self._cleanup_errors.values()):
+            raise RuntimeError("client refresh requires successful full recovery")
+        result = RecoveryResult()
+        for incident in reversed(range(len(self._incidents))):
+            problem = self._incidents[incident]
+            refresh = getattr(problem, "refresh_after_recovery", None)
+            if refresh is None:
+                continue
+            if incident in self._refresh_timeouts:
+                status, error = "timeout", self._refresh_timeouts[incident]
+            else:
+                status, error = run_recovery(refresh, getattr(problem, "recover_timeout_s", 240.0))
+                if status == "timeout":
+                    self._refresh_timeouts[incident] = error
+            if status != "recovered":
+                result.errors.append({"incident": incident, **RecoveryFailure(None, status, error).to_dict()})
+        self._refresh_failed = bool(result.errors)
+        return {**result.to_dict(), "protocol_version": PROTOCOL_VERSION, "recovery_contract": SEED_RECOVERY_CONTRACT}
 
     def _pending(self, incident: int) -> bool:
         problem = self._incidents[incident]

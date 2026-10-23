@@ -239,3 +239,23 @@ def test_real_two_fault_mf_registry_id_returns_two_addressable_identities(monkey
         "psa_restricted_blocks_recreation",
     ]
     assert w.handle({"op": "recover", "mode": "full"})["success"]
+
+
+def test_colocated_full_recovery_resets_credentials_before_seed_and_refreshes_afterward():
+    events = []
+    problem = composite(events)
+    problem.problems[1].recover_to_baseline = lambda: events.append(("baseline", "quota"))
+    problem.problems[1].refresh_after_recovery = lambda: events.append(("refresh", "quota"))
+    w = worker(lambda _: problem)
+    w.handle({"op": "inject", "problem_id": "toy-composite"})
+    events.clear()
+    assert w.handle({"op": "recover", "mode": "full"})["success"]
+    events.append(("seed", "all"))
+    assert w.handle({"op": "refresh"})["success"]
+    assert events == [
+        ("recover", "psa"),
+        ("baseline", "quota"),
+        ("recover", "mongodb-auth"),
+        ("seed", "all"),
+        ("refresh", "quota"),
+    ]

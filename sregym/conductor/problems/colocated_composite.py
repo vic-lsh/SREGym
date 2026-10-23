@@ -648,7 +648,9 @@ class ColocatedComposite(Problem):
             if i in self._recovery_timeouts:
                 status, error = "timeout", self._recovery_timeouts[i]
             else:
-                status, error = run_recovery(self.problems[i].recover_fault, self.recover_timeout_s)
+                problem = self.problems[i]
+                call = getattr(problem, "recover_to_baseline", problem.recover_fault)
+                status, error = run_recovery(call, self.recover_timeout_s)
             self.recovery[f"fault_{i}_recovery"] = status
             self.recovery[f"fault_{i}_recovery_reason"] = "full recovery; no namespace teardown"
             self.recovery[f"fault_{i}_recover_error"] = error
@@ -663,6 +665,15 @@ class ColocatedComposite(Problem):
         result.pending = list(self.pending_components)
         self.fault_injected = bool(result.pending)
         return result.to_dict()
+
+    def refresh_after_recovery(self) -> None:
+        """Refresh recovered clients after the caller restores immutable seed manifests."""
+        if self.pending_components:
+            raise RuntimeError("client refresh requires successful full recovery")
+        for index in reversed(self._injected):
+            refresh = getattr(self.problems[index], "refresh_after_recovery", None)
+            if refresh is not None:
+                refresh()
 
     def recover_fault(self, *, mode: str = "namespace_teardown") -> dict[str, Any] | None:
         """Use explicit ``full`` on a warm lane; the default assumes namespace teardown.

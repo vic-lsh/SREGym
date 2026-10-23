@@ -413,7 +413,9 @@ class CompositeFaultProblem(Problem):
             if i in self._recovery_timeouts:
                 status, error = "timeout", self._recovery_timeouts[i]
             else:
-                status, error = run_recovery(self.components[i].recover_fault, self.recover_timeout_s)
+                component = self.components[i]
+                call = getattr(component, "recover_to_baseline", component.recover_fault)
+                status, error = run_recovery(call, self.recover_timeout_s)
             if status == "recovered":
                 self._recovered.add(i)
                 self.components[i].fault_injected = False
@@ -425,6 +427,15 @@ class CompositeFaultProblem(Problem):
         result.pending = list(self.pending_components)
         self.fault_injected = bool(result.pending)
         return result.to_dict()
+
+    def refresh_after_recovery(self) -> None:
+        """Refresh clients only after every component and the caller's seed restore succeed."""
+        if self.pending_components:
+            raise RuntimeError("client refresh requires successful full recovery")
+        for index in reversed(self._injected):
+            refresh = getattr(self.components[index], "refresh_after_recovery", None)
+            if refresh is not None:
+                refresh()
 
     def recover_fault(self, *, mode: str | None = None) -> dict[str, Any] | None:
         if mode == "full":
