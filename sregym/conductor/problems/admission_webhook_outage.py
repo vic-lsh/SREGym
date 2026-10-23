@@ -160,9 +160,14 @@ class AdmissionWebhookOutage(Problem):
 
     def _restore_webhook_baseline(self) -> Path:
         state_path = self._webhook_state_path()
-        if not state_path.exists():
+        state = (
+            json.loads(state_path.read_text())
+            if state_path.exists()
+            else getattr(self, "_restored_webhook_state", None)
+        )
+        if state is None:
             raise RuntimeError(f"Saved webhook configuration is missing: {state_path}")
-        state = json.loads(state_path.read_text())
+        self._restored_webhook_state = state
         if not state["existed"]:
             try:
                 self._webhook_method("delete")(name=self.WEBHOOK_NAME)
@@ -305,5 +310,5 @@ class AdmissionWebhookOutage(Problem):
             self._wait_for_target_ready()
         except Exception as exc:
             print(f"Warning: {self.faulty_service} not Ready after webhook recovery: {exc}")
-        state_path.unlink()
+        state_path.unlink(missing_ok=True)
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")

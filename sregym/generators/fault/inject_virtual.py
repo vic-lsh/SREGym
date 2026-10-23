@@ -172,7 +172,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
             modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
 
-            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace} --ignore-not-found=true"
             self.kubectl.exec_command(delete_command)
 
             apply_command = f"kubectl apply -f {modified_yaml_path} -n {self.namespace}"
@@ -372,7 +372,7 @@ class VirtualizationFaultInjector(FaultInjector):
         """Recover the fault by restoring the original resource request of a service."""
         for service in microservices:
             # Delete the deployment and re-apply
-            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace} --ignore-not-found=true"
             apply_command = f"kubectl apply -f {self._backup_path('resource_request', service)} -n {self.namespace}"
             self.kubectl.exec_command(delete_command)
             self.kubectl.exec_command(apply_command)
@@ -668,7 +668,21 @@ class VirtualizationFaultInjector(FaultInjector):
                 )
             else:
                 patch = recovery_patch
-            patch_cmd = f"kubectl patch deployment {service} -n {self.namespace} --type json -p '{patch}'"
+            # Strategic merge treats deletion of an already absent DNS field as
+            # success; JSON Patch's remove operation instead returns 422.
+            restored = {}
+            for operation in json.loads(patch):
+                if operation["path"] not in {"/spec/template/spec/dnsPolicy", "/spec/template/spec/dnsConfig"}:
+                    raise ValueError("unsupported DNS recovery field")
+                field = operation["path"].rsplit("/", 1)[1]
+                if operation["op"] == "remove":
+                    restored[field] = None
+                elif operation["op"] in {"add", "replace"}:
+                    restored[field] = operation["value"]
+                else:
+                    raise ValueError("unsupported DNS recovery operation")
+            patch = json.dumps({"spec": {"template": {"spec": restored}}})
+            patch_cmd = f"kubectl patch deployment {service} -n {self.namespace} --type strategic -p '{patch}'"
             result = self.kubectl.exec_command(patch_cmd)
             print(f"Patch result for {service}: {result}")
 
@@ -927,7 +941,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def recover_sidecar_port_conflict(self, microservices: list[str]):
         for service in microservices:
-            delete_cmd = f"kubectl delete deployment {service} -n {self.namespace}"
+            delete_cmd = f"kubectl delete deployment {service} -n {self.namespace} --ignore-not-found=true"
             apply_cmd = f"kubectl apply -f {self._backup_path('sidecar_port_conflict', service)} -n {self.namespace}"
 
             delete_result = self.kubectl.exec_command(delete_cmd)
