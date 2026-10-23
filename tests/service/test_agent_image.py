@@ -134,3 +134,35 @@ def test_the_context_hash_changes_with_any_file_path_mode_or_content(tmp_path):
 
 def test_the_real_context_hash_is_stable():
     assert container_runner.agent_context_hash() == container_runner.agent_context_hash()
+
+
+_FAKE_DOCKER_CLI = """#!/usr/bin/env bash
+echo "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  images) cat "$FAKE_DOCKER_STATE" ;;
+  build) echo sha256:new > "$FAKE_DOCKER_STATE" ;;
+esac
+"""
+
+
+@pytest.mark.parametrize(("context_hash", "removes_old"), [(HASH, False), ("", True)])
+def test_build_sh_keeps_the_replaced_image_when_sregym_drives_the_build(tmp_path, context_hash, removes_old):
+    # Another SREGym process may have checked the replaced image and be about to run it by ID.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "docker").write_text(_FAKE_DOCKER_CLI)
+    (bin_dir / "docker").chmod(0o755)
+    log, state = tmp_path / "docker.log", tmp_path / "image_id"
+    state.write_text("sha256:old\n")
+    env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "FAKE_DOCKER_LOG": str(log),
+        "FAKE_DOCKER_STATE": str(state),
+        "SREGYM_AGENT_IMAGE": "sregym-agent-test:tag",
+        "SREGYM_AGENT_CONTEXT_HASH": context_hash,
+    }
+
+    result = subprocess.run(["bash", str(container_runner.BUILD_SCRIPT)], env=env, capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert ("rmi sha256:old" in log.read_text().splitlines()) == removes_old

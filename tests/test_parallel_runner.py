@@ -7,6 +7,9 @@ import queue
 import threading
 from pathlib import Path
 
+import pytest
+
+from sregym import parallel_runner
 from sregym.parallel_runner import (
     RunResult,
     RunTask,
@@ -20,6 +23,8 @@ from sregym.parallel_runner import (
     _worker,
     _write_manifest,
     build_static_plan,
+    prepare_agent_image,
+    run_parallel,
     select_problem_ids,
 )
 
@@ -97,6 +102,58 @@ def test_child_command_uses_upstream_single_problem_cli():
 
     args.proxy_write_floor = True
     assert "--proxy-write-floor" in _child_command(args, RunTask(2, "target_port"))
+
+
+def test_children_never_get_force_build():
+    args = _args_for_tests(problem="target_port")
+    args.agent = "codex"
+    args.model = "gpt-5"
+    args.agent_timeout = 90
+    args.judge_model = None
+    args.reasoning_effort = None
+    args.noise = False
+    args.force_build = True
+    args.use_external_harness = False
+
+    assert "--force-build" not in _child_command(args, RunTask(0, "target_port"))
+
+
+class _FakeContainerRunner:
+    def __init__(self, calls):
+        self.calls = calls
+
+    def ensure_image_exists(self, force_build=False):
+        self.calls.append(force_build)
+
+
+@pytest.mark.parametrize(("agent", "builds"), [("boxed", True), ("host_only", False), (None, True)])
+def test_the_parent_prepares_the_agent_image_only_for_containerized_agents(tmp_path, monkeypatch, agent, builds):
+    registry = tmp_path / "agents.yaml"
+    registry.write_text(
+        "agents:\n  - name: boxed\n  - name: host_only\n    container_isolation: false\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("SREGYM_AGENT_REGISTRY", str(registry))
+    calls = []
+    monkeypatch.setattr(parallel_runner, "ContainerRunner", lambda: _FakeContainerRunner(calls))
+
+    prepare_agent_image(_args_for_tests(agent=agent, force_build=True))
+
+    assert calls == ([True] if builds else [])
+
+
+def test_the_agent_image_is_prepared_before_any_worker_starts(tmp_path, monkeypatch):
+    workers = []
+    monkeypatch.setattr(parallel_runner, "_worker", lambda *args: workers.append(args))
+
+    def failing_build(args):
+        raise RuntimeError("image failed the isolation check")
+
+    monkeypatch.setattr(parallel_runner, "prepare_agent_image", failing_build)
+    args = _args_for_tests(problem="target_port", parallel=2, experiment_dir=str(tmp_path), agent="boxed")
+
+    with pytest.raises(RuntimeError, match="isolation check"):
+        run_parallel(args)
+    assert workers == []
 
 
 def test_child_command_preserves_source_workspace_mode():

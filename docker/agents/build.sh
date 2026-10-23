@@ -59,8 +59,10 @@ if ! "$SCRIPT_DIR/check_image.sh" "$IMAGE"; then
     exit 1
 fi
 
-# Remove the previous image (now untagged) to avoid dangling buildup
-if [ -n "$OLD_IMAGE_ID" ]; then
+# Remove the previous image (now untagged) to avoid dangling buildup. Not when
+# SREGym drives the build: another SREGym process may have checked that image
+# and be about to run it by ID.
+if [ -n "$OLD_IMAGE_ID" ] && [ -z "$CONTEXT_HASH" ]; then
     NEW_IMAGE_ID="$(docker images -q "$IMAGE")"
     if [ "$OLD_IMAGE_ID" != "$NEW_IMAGE_ID" ]; then
         echo "==> Removing previous image $OLD_IMAGE_ID..."

@@ -29,6 +29,7 @@ import yaml
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
 
 from logger import console
+from sregym.agent_registry import get_agent
 from sregym.conductor.problem_sets import PROBLEM_SETS
 from sregym.conductor.problems.variant_generator import (
     AdaptiveScheduler,
@@ -45,6 +46,7 @@ from sregym.service.app_workspace import (
     application_workspace_seed_override,
     prepare_application_workspace,
 )
+from sregym.service.container_runner import ContainerRunner
 from sregym.worker_infra import cluster_lock, create_worker_cluster, delete_worker_cluster, kind_cluster_prefix
 
 
@@ -230,8 +232,6 @@ def _child_command(args: Any, task: RunTask) -> list[str]:
         command.extend(["--max-turns", str(args.max_turns)])
     if args.noise:
         command.append("--noise")
-    if args.force_build:
-        command.append("--force-build")
     if args.use_external_harness:
         command.append("--use-external-harness")
     if args.deploy_from_source:
@@ -245,6 +245,18 @@ def _child_command(args: Any, task: RunTask) -> list[str]:
     if args.application_workspace:
         command.append("--application-workspace")
     return command
+
+
+def prepare_agent_image(args: Any) -> None:
+    """Build (when missing, stale or forced) and check the agent image once, before any worker starts.
+
+    Children only reuse it and never get ``--force-build``: they run the agent by image ID, so one
+    child's rebuild would delete the image another child already checked and is about to run.
+    """
+    registry = Path(os.environ.get("SREGYM_AGENT_REGISTRY", Path(__file__).resolve().parent.parent / "agents.yaml"))
+    agent = get_agent(args.agent, path=registry) if args.agent else None
+    if agent is None or agent.container_isolation:
+        ContainerRunner().ensure_image_exists(force_build=args.force_build)
 
 
 def _truthy(value: str | None) -> bool:
@@ -553,6 +565,7 @@ def run_parallel(args: Any) -> int:
     adaptive = args.variants and args.variant_order == "adaptive" and not args.sequence_len
     planned_tasks = None if adaptive else build_static_plan(args)
     remote_worker_clusters(args)
+    prepare_agent_image(args)
     root = _experiment_root(args)
     root.mkdir(parents=True, exist_ok=True)
     if args.sequence_len:
