@@ -245,6 +245,19 @@ def test_manifest_completion_requires_result_artifact(tmp_path: Path):
     assert _manifest_row_is_complete(row) is True
 
 
+def test_manifest_completion_accepts_invalid_injection_row(tmp_path: Path):
+    result_dir = tmp_path / "run"
+    result_dir.mkdir()
+    (result_dir / "attempt_results.csv").write_text(
+        "problem_id,infra_error\nexample,injection_invalid\n",
+        encoding="utf-8",
+    )
+    row = {"returncode": "0", "result_dir": str(result_dir), "infra_error": "injection_invalid"}
+
+    assert _manifest_row_is_complete(row) is True
+    assert _manifest_row_is_complete({**row, "infra_error": ""}) is False
+
+
 def test_worker_waits_for_supervisor_ack_before_next_task(tmp_path, monkeypatch):
     tasks = queue.Queue()
     results = queue.Queue()

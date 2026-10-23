@@ -30,6 +30,7 @@ from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, T
 
 from logger import console
 from sregym.agent_registry import get_agent
+from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.problem_sets import PROBLEM_SETS
 from sregym.conductor.problems.variant_generator import (
     AdaptiveScheduler,
@@ -292,6 +293,10 @@ def _manifest_row_is_complete(row: dict[str, str]) -> bool:
     result_dir = Path(row.get("result_dir", ""))
     if not result_dir.is_dir():
         return False
+    # An invalid injection is a final, ungraded row (no Diagnosis columns): rerunning it
+    # would redeploy and inject the same draw again.
+    if row.get("infra_error") == StartProblemResult.INJECTION_INVALID:
+        return True
     for result_csv in result_dir.rglob("*_results.csv"):
         with result_csv.open(newline="", encoding="utf-8") as stream:
             reader = csv.DictReader(stream)
