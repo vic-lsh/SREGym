@@ -57,6 +57,13 @@ def should_replay_completed_run(
 
 def resolve_app_source_subdir(app_filter: str) -> str:
     normalized = app_filter.strip().lower()
+    from sregym.service.generic_source import configured_declaration
+
+    declaration = configured_declaration()
+    if declaration is not None:
+        if normalized != declaration.app_filter:
+            raise ValueError(f"App filter {app_filter!r} does not match configured build declaration")
+        return declaration.source_root.name
     if normalized in APP_SOURCE_SUBDIRS:
         return APP_SOURCE_SUBDIRS[normalized]
     raise ValueError(f"Application workspace is not supported for app filter {app_filter!r}")
@@ -85,7 +92,11 @@ def prepare_application_workspace(
         shutil.copytree(seed_dir, workspace_dir)
         return workspace_dir
 
-    source_dir = _target_microservices_root() / resolve_app_source_subdir(app_filter)
+    from sregym.service.generic_source import configured_declaration
+
+    declaration = configured_declaration()
+    subdir = resolve_app_source_subdir(app_filter)
+    source_dir = declaration.source_root if declaration else _target_microservices_root() / subdir
     if not source_dir.is_dir():
         raise FileNotFoundError(f"Application source directory does not exist: {source_dir}")
 
@@ -108,14 +119,24 @@ def resolve_app_relative_path(app_filter: str, relative_path: str | Path) -> Pat
                 return workspace_dir / Path(*rel_path.parts[1:])
         except IndexError:
             pass
+    from sregym.service.generic_source import configured_declaration
+
+    declaration = configured_declaration()
+    if declaration is not None:
+        if rel_path.parts and rel_path.parts[0] == source_subdir:
+            rel_path = Path(*rel_path.parts[1:])
+        return (workspace_dir or declaration.source_root) / rel_path
     return _target_microservices_root() / rel_path
 
 
 def resolve_workspace_path(relative_path: str | Path) -> Path:
-    workspace_dir = application_source_override()
+    from sregym.service.generic_source import configured_declaration
+
+    declaration = configured_declaration()
+    workspace_dir = application_source_override() or (declaration.source_root if declaration else None)
     rel_path = Path(relative_path)
     if workspace_dir is not None:
-        source_roots = set(APP_SOURCE_SUBDIRS.values())
+        source_roots = {declaration.source_root.name} if declaration else set(APP_SOURCE_SUBDIRS.values())
         if rel_path.parts and rel_path.parts[0] in source_roots:
             rel_path = Path(*rel_path.parts[1:])
         return workspace_dir / rel_path

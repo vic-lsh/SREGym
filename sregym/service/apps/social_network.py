@@ -71,6 +71,8 @@ class SocialNetwork(Application):
 
         if source_deploy_enabled():
             with plan_for_app(self, node_architectures=node_architectures) as plan:
+                if plan.helm_chart_path is not None:
+                    helm_configs["chart_path"] = str(plan.helm_chart_path)
                 extra_args.extend(plan.helm_extra_args)
                 helm_configs["extra_args"] = extra_args
                 Helm.install(**helm_configs)

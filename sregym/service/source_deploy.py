@@ -54,6 +54,8 @@ class SourceDeployUnsupportedError(RuntimeError):
 class SourceDeploymentPlan:
     manifest_path: Path | None = None
     helm_extra_args: tuple[str, ...] = ()
+    helm_chart_path: Path | None = None
+    namespace: str | None = None
 
 
 class _BaseAdapter:
@@ -320,6 +322,11 @@ def source_image_tag(app_name: str, cluster_name: str) -> str:
 
 
 def unsupported_reason(app_name: str) -> str | None:
+    from sregym.service.generic_source import configured_declaration
+
+    declaration = configured_declaration()
+    if declaration is not None:
+        return None if declaration.name == app_name else "app does not match the configured build declaration"
     if app_name in _SUPPORTED_ADAPTERS:
         return None
     return _UNSUPPORTED_APPS.get(app_name, "no source deployment adapter is registered")
@@ -332,11 +339,14 @@ def ensure_app_supported(app_name: str) -> None:
 
 
 def is_supported(app_name: str) -> bool:
-    return app_name in _SUPPORTED_ADAPTERS
+    return unsupported_reason(app_name) is None
 
 
 def all_declared_apps() -> set[str]:
-    return set(_SUPPORTED_ADAPTERS) | set(_UNSUPPORTED_APPS)
+    from sregym.service.generic_source import configured_declaration
+
+    declaration = configured_declaration()
+    return set(_SUPPORTED_ADAPTERS) | set(_UNSUPPORTED_APPS) | ({declaration.name} if declaration else set())
 
 
 @contextlib.contextmanager
@@ -345,7 +355,14 @@ def plan_for_app(app, *, node_architectures: set[str] | None = None):
     cluster_name = os.getenv("SREGYM_KIND_CLUSTER_NAME", "").strip()
     if not cluster_name:
         raise RuntimeError("Source deploy requires SREGYM_KIND_CLUSTER_NAME to be set")
-    adapter = _SUPPORTED_ADAPTERS[app.name]
+    from sregym.service.generic_source import GenericSourceAdapter, configured_declaration
+
+    declaration = configured_declaration()
+    adapter = GenericSourceAdapter(declaration) if declaration else _SUPPORTED_ADAPTERS[app.name]
+    if declaration and app.namespace != declaration.deployment.namespace:
+        raise ValueError(
+            f"App namespace {app.namespace!r} does not match declaration {declaration.deployment.namespace!r}"
+        )
     with adapter.plan(cluster_name=cluster_name, node_architectures=node_architectures or set()) as plan:
         yield plan
 
