@@ -86,3 +86,4 @@ def test_port_factories_select_expected_binding_and_named_bad_target(monkeypatch
     assert seen[0]["correct_port"] == 8083
     assert seen[1]["faulty_service"] == "geo"
     assert isinstance(seen[1]["bad_port"], str)
+    assert len(seen[1]["bad_port"]) <= 15, "Kubernetes target port names are at most 15 characters"
