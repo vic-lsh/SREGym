@@ -57,13 +57,17 @@ class EdgeRequestFilterCPUSaturation(Problem):
 
         deployment = self.kubectl.get_deployment(self.faulty_service, self.namespace)
         self._baseline_template = copy.deepcopy(deployment.spec.template)
+        self._recovered_template = None
 
     def _restore_baseline_template(self):
-        if self._baseline_template is None:
+        baseline = self._baseline_template
+        if baseline is None:
+            baseline = getattr(self, "_recovered_template", None)
+        if baseline is None:
             raise RuntimeError("Cannot recover edge filter fault without a captured baseline template")
 
         deployment = self.kubectl.get_deployment(self.faulty_service, self.namespace)
-        deployment.spec.template = copy.deepcopy(self._baseline_template)
+        deployment.spec.template = copy.deepcopy(baseline)
         self.kubectl.apps_v1_api.replace_namespaced_deployment(
             name=self.faulty_service,
             namespace=self.namespace,
@@ -287,6 +291,8 @@ class EdgeRequestFilterCPUSaturation(Problem):
         self.kubectl.exec_command(
             f"kubectl rollout status deployment/{self.faulty_service} -n {self.namespace} --timeout=120s"
         )
+        if self._baseline_template is not None:
+            self._recovered_template = copy.deepcopy(self._baseline_template)
         self._baseline_template = None
         print(
             f"Recovered: stopped crafted requests and restored deployment/{self.faulty_service} "

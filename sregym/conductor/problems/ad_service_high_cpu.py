@@ -38,6 +38,9 @@ class AdServiceHighCpu(Problem):
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
+        deployment = self.kubectl.get_deployment(self.faulty_service, self.namespace)
+        container = next(c for c in deployment.spec.template.spec.containers if c.name == self.faulty_service)
+        self._baseline_cpu_limit = (container.resources.limits or {}).get("cpu") if container.resources else None
         self.injector.inject_fault(self.feature_flag)
         # Set a tight CPU limit so the high-CPU flag causes observable throttling.
         patch = {
@@ -59,8 +62,23 @@ class AdServiceHighCpu(Problem):
     def recover_fault(self):
         print("== Fault Recovery ==")
         self.injector.recover_fault(self.feature_flag)
-        # Remove the CPU limit added during injection.
-        patch = '[{"op":"remove","path":"/spec/template/spec/containers/0/resources/limits/cpu"}]'
+        # Restore the captured limit, including absence, even after a responder
+        # has already restored it. Preserve other resources and containers.
+        patch = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": self.faulty_service,
+                                "resources": {"limits": {"cpu": getattr(self, "_baseline_cpu_limit", None)}},
+                            }
+                        ]
+                    }
+                }
+            }
+        }
         self.kubectl.exec_command(
-            f"kubectl patch deployment {self.faulty_service} -n {self.namespace} --type=json -p '{patch}'"
+            f"kubectl patch deployment {self.faulty_service} -n {self.namespace} "
+            f"--type=strategic -p {shlex.quote(json.dumps(patch))}"
         )

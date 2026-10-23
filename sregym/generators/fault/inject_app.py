@@ -275,8 +275,10 @@ class ApplicationFaultInjector(FaultInjector):
                 propagation_policy="Foreground",
             )
             print("Job deleted.")
-        except Exception as e:
-            print(f"Error deleting job: {e}")
+        except ApiException as error:
+            if error.status != 404:
+                raise
+            print("Job already absent.")
 
     # A.5 incorrect_port_assignment: Update an env var to use the wrong port value
     def inject_incorrect_port_assignment(

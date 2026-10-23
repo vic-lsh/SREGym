@@ -1,4 +1,5 @@
 from kubernetes import client
+from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.dns_resolution_mitigation import DNSResolutionMitigationOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
@@ -145,8 +146,12 @@ class ServiceDNSResolutionFailure(Problem):
                 microservices=[self.faulty_service],
             )
         elif self.dns_failure_layer == "network_policy_block_dns":
-            self._networking_v1.delete_namespaced_network_policy(
-                name=self._dns_policy_name,
-                namespace=self.namespace,
-            )
+            try:
+                self._networking_v1.delete_namespaced_network_policy(
+                    name=self._dns_policy_name,
+                    namespace=self.namespace,
+                )
+            except ApiException as error:
+                if error.status != 404:
+                    raise
         print(f"Service: {self.faulty_service} | Layer: {self.dns_failure_layer} | Namespace: {self.namespace}\n")

@@ -5,6 +5,7 @@ from kubernetes import client
 from sregym.conductor.problems.edge_request_filter_cpu_saturation import (
     EdgeRequestFilterCPUSaturation,
 )
+from sregym.conductor.problems.lifecycle import run_recovery
 
 
 def _template(command, *, annotations=None):
@@ -143,3 +144,12 @@ def test_restore_requires_a_captured_baseline():
         assert "captured baseline" in str(exc)
     else:
         raise AssertionError("Expected recovery without a baseline to fail")
+
+
+def test_recovery_succeeds_twice_after_responder_restored_template():
+    baseline = _template(None)
+    problem = _problem(_KubeCtl(_deployment(baseline)))
+    problem._baseline_template = baseline
+
+    assert run_recovery(problem.recover_fault, 2)[0] == "recovered"
+    assert run_recovery(problem.recover_fault, 2)[0] == "recovered"

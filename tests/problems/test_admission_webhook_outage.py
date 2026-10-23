@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.problems.admission_webhook_outage import AdmissionWebhookOutage
+from sregym.conductor.problems.lifecycle import run_recovery
 
 
 class _AdmissionApi:
@@ -168,3 +169,15 @@ def test_recovery_wait_is_best_effort_once_the_webhook_is_restored(tmp_path):
     assert admission_api.deleted == [AdmissionWebhookOutage.WEBHOOK_NAME]
     assert not path.exists()
     assert problem.fault_injected is False
+
+
+def test_recovery_succeeds_twice_after_responder_deleted_webhook(tmp_path):
+    class AlreadyRemoved(_AdmissionApi):
+        def delete_validating_webhook_configuration(self, name):
+            raise ApiException(status=404)
+
+    problem = _problem(tmp_path, AlreadyRemoved())
+    problem._webhook_state_path().write_text(json.dumps({"existed": False}))
+
+    assert run_recovery(problem.recover_fault, 2)[0] == "recovered"
+    assert run_recovery(problem.recover_fault, 2)[0] == "recovered"
