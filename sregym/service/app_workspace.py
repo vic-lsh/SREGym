@@ -147,7 +147,7 @@ def resolve_workspace_path(relative_path: str | Path) -> Path:
     rel_path = Path(relative_path)
     # Astronomy's chart and application source are independently pinned. Its
     # upstream source checkout has no Helm chart; always use the harness chart.
-    if rel_path.parts and rel_path.parts[0] == "astronomy-shop":
+    if rel_path.parts[:3] == ("astronomy-shop", "charts", "opentelemetry-demo"):
         return _target_microservices_root() / rel_path
     if workspace_dir is not None:
         source_roots = set(APP_SOURCE_SUBDIRS.values())
