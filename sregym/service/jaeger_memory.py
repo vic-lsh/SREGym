@@ -33,8 +33,9 @@ def bound_document(document: dict[str, Any] | None) -> None:
         spec = spec.get("jobTemplate", {}).get("spec", {})
     pod = spec if document.get("kind") == "Pod" else spec.get("template", {}).get("spec", {})
     for container in pod.get("containers", []) + pod.get("initContainers", []):
-        image = container.get("image", "").split("@", 1)[0].split(":", 1)[0]
-        if image.rsplit("/", 1)[-1] != "all-in-one" or "jaegertracing/" not in image:
+        image = container.get("image", "").split("@", 1)[0]
+        repository, _, basename = image.rpartition("/")
+        if basename.split(":", 1)[0] != "all-in-one" or repository.rsplit("/", 1)[-1] != "jaegertracing":
             continue
         environment = {row["name"]: row.get("value") for row in container.get("env", [])}
         if environment.get("SPAN_STORAGE_TYPE", "memory") != "memory":
