@@ -117,7 +117,13 @@ class FakeAPI:
             if self.token.metadata.deletion_timestamp and not self.token.metadata.finalizers:
                 self.token = None
         else:
-            self.deployment.metadata.annotations = body["metadata"]["annotations"]
+            annotations = self.deployment.metadata.annotations or {}
+            for key, value in body["metadata"]["annotations"].items():
+                if value is None:
+                    annotations.pop(key, None)
+                else:
+                    annotations[key] = value
+            self.deployment.metadata.annotations = annotations
         return {}
 
 
@@ -214,3 +220,16 @@ def test_new_named_slot_is_explicit_and_preserves_the_other_draws(monkeypatch):
     )
     assert "composite_slot11_preinstalled_hotel_reservation" in registered
     assert "finalizer_deadlock_controller_hotel_reservation" in registered
+
+
+def test_repeated_fault_cannot_reuse_previous_controller_completion(problem):
+    p, api = problem
+    p.inject_fault()
+    api.patch_cluster_role(p.clusterrole_name, {"rules": api.source["ClusterRole"]["rules"]})
+    api.tick()
+    assert p.mitigation_oracle.evaluate()["success"]
+    p.inject_fault()
+    assert not p.mitigation_oracle.evaluate()["success"]
+    api.patch_cluster_role(p.clusterrole_name, {"rules": api.source["ClusterRole"]["rules"]})
+    api.token = None
+    assert not p.mitigation_oracle.evaluate()["success"]
