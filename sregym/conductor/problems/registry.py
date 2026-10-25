@@ -33,6 +33,7 @@ from sregym.conductor.problems.failed_readiness_probe import FailedReadinessProb
 from sregym.conductor.problems.faulty_image_correlated import FaultyImageCorrelated
 from sregym.conductor.problems.file_descriptor_exhaustion import FileDescriptorExhaustion
 from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDeadlockController
+from sregym.conductor.problems.finalizer_deadlock_controller_preinstalled import FinalizerDeadlockControllerPreinstalled, preinstalled_slot11
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
 from sregym.conductor.problems.hpa_missing_effective_cpu_request import HPAMissingEffectiveCPURequest
 from sregym.conductor.problems.image_slow_load import ImageSlowLoad
@@ -160,6 +161,8 @@ class ProblemRegistry:
             "auth_miss_mongodb": MongoDBAuthMissing,
             "configmap_drift_hotel_reservation": lambda: ConfigMapDrift(faulty_service="geo"),
             "finalizer_deadlock_controller_hotel_reservation": FinalizerDeadlockController,
+            "finalizer_deadlock_controller_preinstalled_hotel_reservation": FinalizerDeadlockControllerPreinstalled,
+            "composite_slot11_preinstalled_hotel_reservation": preinstalled_slot11,
             "duplicate_pvc_mounts_astronomy_shop": lambda: DuplicatePVCMounts(app_name="astronomy_shop", faulty_service="frontend"),
             "duplicate_pvc_mounts_hotel_reservation": lambda: DuplicatePVCMounts(app_name="hotel_reservation", faulty_service="frontend"),
             "duplicate_pvc_mounts_social_network": lambda: DuplicatePVCMounts(app_name="social_network", faulty_service="jaeger"),
