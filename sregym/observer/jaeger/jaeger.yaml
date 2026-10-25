@@ -73,6 +73,12 @@ spec:
         image: jaegertracing/all-in-one:1.57
         args:
         - "--collector.otlp.enabled=true"
+        - "--memory.max-traces=10000"
+        resources:
+          requests:
+            memory: "256Mi"
+          limits:
+            memory: "2Gi"
         ports:
         - containerPort: 5775
           protocol: UDP

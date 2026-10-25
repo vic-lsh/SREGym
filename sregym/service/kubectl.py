@@ -581,8 +581,11 @@ class KubeCtl:
 
     def apply_configs(self, namespace: str, config_path: str):
         """Apply Kubernetes configurations from a specified path to a namespace."""
-        command = f"kubectl apply -Rf {config_path} -n {namespace}"
-        self.exec_command(command)
+        from sregym.service.jaeger_memory import bounded_manifests
+
+        with bounded_manifests(config_path) as bounded:
+            command = f"kubectl apply -Rf {bounded} -n {namespace}"
+            self.exec_command(command)
 
     def delete_configs(self, namespace: str, config_path: str):
         """Delete Kubernetes configurations from a specified path in a namespace."""

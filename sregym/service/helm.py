@@ -1,9 +1,11 @@
 """Interface for helm operations"""
 
 import logging
+import shlex
 import subprocess
 import time
 
+from sregym.service.jaeger_memory import post_renderer_args
 from sregym.service.kubectl import KubeCtl
 
 logger = logging.getLogger("all.infra.helm")
@@ -53,6 +55,7 @@ class Helm:
         if extra_args:
             command += " " + " ".join(extra_args)
 
+        command += " " + shlex.join(post_renderer_args())
         process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         output, error = process.communicate()
 
@@ -181,6 +184,8 @@ class Helm:
             "--server-side=true",
             "--force-conflicts",
         ]
+
+        command.extend(post_renderer_args())
 
         # Add --set options if provided
         for key, value in set_values.items():

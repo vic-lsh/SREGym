@@ -120,6 +120,9 @@ class _HotelReservationAdapter(_BaseAdapter):
             base_dir = temp_dir / "base"
             overlay_dir = temp_dir / "overlay"
             shutil.copytree(source_dir / "kubernetes", base_dir)
+            from sregym.service.jaeger_memory import bound_directory
+
+            bound_directory(base_dir)
             _write_kustomization_for_directory(base_dir)
             overlay_dir.mkdir(parents=True, exist_ok=True)
             kustomization = {
