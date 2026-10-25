@@ -11,6 +11,7 @@ import copy
 import shutil
 import sys
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,8 @@ def bound_document(document: dict[str, Any] | None) -> None:
         if basename.split(":", 1)[0] != "all-in-one" or repository.rsplit("/", 1)[-1] != "jaegertracing":
             continue
         environment = {row["name"]: row.get("value") for row in container.get("env", [])}
+        if "SPAN_STORAGE_TYPE" in environment and environment["SPAN_STORAGE_TYPE"] is None:
+            raise ValueError("Jaeger requires literal SPAN_STORAGE_TYPE to bound memory without resolving credentials")
         if environment.get("SPAN_STORAGE_TYPE", "memory") != "memory":
             continue
         args = iter(container.get("args", []))
@@ -75,7 +78,7 @@ def bound_directory(directory: Path) -> None:
 
 
 @contextlib.contextmanager
-def bounded_manifests(source: str | Path):
+def bounded_manifests(source: str | Path) -> Iterator[Path]:
     """Render a private copy; never rewrite the pinned or accepted source tree."""
     with tempfile.TemporaryDirectory(prefix="sregym-jaeger-") as temporary:
         target = Path(temporary) / "manifests"

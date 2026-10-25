@@ -127,3 +127,26 @@ def test_astronomy_v2_memory_is_already_bounded():
         int(next(row["value"] for row in jaeger["jaeger"]["extraEnv"] if row["name"] == "MEMORY_MAX_TRACES")) == 25000
     )
     assert jaeger["jaeger"]["resources"]["limits"]["memory"] == "600Mi"
+
+
+def test_unknown_storage_backend_fails_rendering_without_reading_credentials():
+    from sregym.service.jaeger_memory import bound_document
+
+    doc = {
+        "kind": "Pod",
+        "spec": {
+            "containers": [
+                {
+                    "image": "jaegertracing/all-in-one:1.57",
+                    "env": [
+                        {
+                            "name": "SPAN_STORAGE_TYPE",
+                            "valueFrom": {"configMapKeyRef": {"name": "backend", "key": "type"}},
+                        }
+                    ],
+                }
+            ]
+        },
+    }
+    with pytest.raises(ValueError, match="literal.*SPAN_STORAGE_TYPE"):
+        bound_document(doc)
