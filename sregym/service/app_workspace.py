@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import runpy
 import shutil
 import subprocess
 from pathlib import Path
@@ -50,6 +51,11 @@ def prepare_astronomy_source(source_dir: Path) -> None:
             "  </PropertyGroup>\n"
         )
         props.write_text(content.replace("</Project>", policy + "</Project>"), encoding="utf-8")
+
+
+def hotel_cleanup_controller_enabled() -> bool:
+    """Opt-in before the initial source snapshot; never mutate seeded workspaces."""
+    return os.getenv("SREGYM_HOTEL_CLEANUP_CONTROLLER", "").lower() in {"1", "true", "yes", "on"}
 
 
 def application_workspace_dir(experiment_dir: str | Path) -> Path:
@@ -125,6 +131,9 @@ def prepare_application_workspace(
     )
     if subdir == "astronomy-shop":
         prepare_astronomy_source(workspace_dir)
+    if subdir == "hotelReservation" and hotel_cleanup_controller_enabled():
+        component = workspace_dir / "optional/cleanup-controller/enable.py"
+        runpy.run_path(str(component))["enable"](workspace_dir)
     _initialize_git_repository(workspace_dir)
     return workspace_dir
 

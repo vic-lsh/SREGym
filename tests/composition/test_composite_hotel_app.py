@@ -104,3 +104,19 @@ def test_single_hotel_problems_keep_their_own_failure_script_setting():
     absent = _deploy(HotelReservation(FailureScripts.ABSENT))
     assert "failure-admin-geo" not in absent.configmaps
     assert not [c for c in absent.commands if "kubectl patch deployment" in c]
+
+
+def test_preinstalled_slot11_uses_the_original_colocated_lifecycle():
+    from sregym.conductor.problems.colocated_composite import ColocatedComposite
+    from sregym.conductor.problems.finalizer_deadlock_controller_preinstalled import (
+        FinalizerDeadlockControllerPreinstalled,
+        preinstalled_slot11,
+    )
+
+    composite = preinstalled_slot11()
+    assert isinstance(composite, ColocatedComposite)
+    assert isinstance(composite.problems[0], FinalizerDeadlockControllerPreinstalled)
+    assert all(problem.app is composite.app for problem in composite.problems)
+    assert composite.app.failure_scripts is FailureScripts.UNMOUNTED
+    assert composite.problems[1].faulty_service == "profile"
+    assert composite.problems[2].faulty_service == "mongodb-geo"
