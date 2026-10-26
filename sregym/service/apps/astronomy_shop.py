@@ -43,6 +43,8 @@ class AstronomyShop(Application):
         self.helm_configs["extra_args"] = [
             "--values",
             str(TARGET_MICROSERVICES / "astronomy-shop-overrides.yaml"),
+            "--values",
+            str(ASTRONOMY_SHOP_METADATA.with_name("astronomy-shop-resources.yaml")),
             # Disable bundled Prometheus to avoid ClusterRole conflict with central
             # Prometheus in the observe namespace (ClusterRoles are cluster-wide)
             "--set",

@@ -1,0 +1,8 @@
+# Match the upstream OpenTelemetry demo Helm frontend-proxy default:
+# https://github.com/open-telemetry/opentelemetry-helm-charts/blob/main/charts/opentelemetry-demo/values.yaml
+# The pinned chart's older 65Mi limit OOMs during no-fault benchmark traffic.
+components:
+  frontend-proxy:
+    resources:
+      limits:
+        memory: 90Mi
