@@ -84,12 +84,13 @@ class Wrk2:
         except client.exceptions.ApiException as e:
             logger.error(f"Error creating ConfigMap '{name}': {e}")
 
-    def create_wrk_job(self, job_name, namespace, payload_script):
+    def create_wrk_job(self, job_name, namespace, payload_script, *, suspended=False):
         wrk_job_yaml = BASE_DIR / "generators" / "workload" / "wrk-job-template.yaml"
         with open(wrk_job_yaml) as f:
             job_template = yaml.safe_load(f)
 
         job_template["metadata"]["name"] = job_name
+        job_template["spec"]["suspend"] = suspended
         container = job_template["spec"]["template"]["spec"]["containers"][0]
         container["args"] = ["/bin/bash", "/scripts/wrk2-workload.sh"]
 
@@ -202,7 +203,7 @@ class Wrk2WorkloadManager(StreamWorkloadManager):
         # different from self.last_log_time, which is the timestamp of the whole entry
         self.last_log_line_time = None
 
-    def create_task(self):
+    def create_task(self, *, suspended=False):
         configmap_name = "wrk2-payload-script"
 
         self.wrk.create_configmap(
@@ -216,6 +217,7 @@ class Wrk2WorkloadManager(StreamWorkloadManager):
             job_name=self.job_name,
             namespace=self.namespace,
             payload_script=self.payload_script.name,
+            suspended=suspended,
         )
 
     def _parse_log(self, logs: list[tuple[str, str]]) -> WorkloadEntry:
@@ -317,9 +319,9 @@ class Wrk2WorkloadManager(StreamWorkloadManager):
 
         return grouped_logs
 
-    def start(self):
+    def start(self, *, suspended=False):
         logger.info("Start Workload with Wrk2")
-        self.create_task()
+        self.create_task(suspended=suspended)
 
     def stop(self):
         logger.info("Stop Workload of Wrk2")
