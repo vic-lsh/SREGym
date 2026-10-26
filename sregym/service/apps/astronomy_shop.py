@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from sregym.generators.workload.locust import LocustWorkloadManager
-from sregym.paths import ASTRONOMY_SHOP_METADATA
+from sregym.paths import ASTRONOMY_SHOP_METADATA, TARGET_MICROSERVICES
 from sregym.service.apps.base import Application
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
@@ -41,6 +41,8 @@ class AstronomyShop(Application):
         self.kubectl.create_namespace_if_not_exist(self.namespace)
 
         self.helm_configs["extra_args"] = [
+            "--values",
+            str(TARGET_MICROSERVICES / "astronomy-shop-overrides.yaml"),
             # Disable bundled Prometheus to avoid ClusterRole conflict with central
             # Prometheus in the observe namespace (ClusterRoles are cluster-wide)
             "--set",
