@@ -7,8 +7,8 @@ from pathlib import Path
 
 import yaml
 from kubernetes import client, config, stream
+from urllib3.exceptions import TimeoutError as HTTPTimeoutError
 
-from logger import console
 from sregym.generators.workload.base import WorkloadEntry
 from sregym.generators.workload.stream import STREAM_WORKLOAD_EPS, StreamWorkloadManager
 from sregym.paths import BASE_DIR
@@ -115,25 +115,41 @@ class Wrk2:
 
         api_instance = client.BatchV1Api()
         try:
-            existing_job = api_instance.read_namespaced_job(name=job_name, namespace=self.namespace)
-            if existing_job:
-                logger.info(f"Job '{job_name}' already exists. Deleting it...")
+            existing_job = api_instance.read_namespaced_job(
+                name=job_name, namespace=namespace, _request_timeout=(5, 10)
+            )
+        except client.exceptions.ApiException as error:
+            if error.status != 404:
+                raise
+            existing_job = None
+
+        if existing_job:
+            job_uid = existing_job.metadata.uid
+            if not job_uid:
+                raise RuntimeError(f"Job '{namespace}/{job_name}' has no UID; refusing replacement")
+            logger.info(f"Job '{job_name}' already exists. Retiring UID {job_uid}...")
+            try:
                 api_instance.delete_namespaced_job(
                     name=job_name,
-                    namespace=self.namespace,
-                    body=client.V1DeleteOptions(propagation_policy="Foreground"),
+                    namespace=namespace,
+                    body=client.V1DeleteOptions(
+                        propagation_policy="Background",
+                        grace_period_seconds=1,
+                        preconditions=client.V1Preconditions(uid=job_uid),
+                    ),
+                    _request_timeout=(5, 10),
                 )
-                self.wait_for_job_deletion(job_name, self.namespace)
-        except client.exceptions.ApiException as e:
-            if e.status != 404:
-                logger.error(f"Error checking for existing job: {e}")
-                return
+            except client.exceptions.ApiException as error:
+                if error.status != 404:
+                    raise
+            except (TimeoutError, HTTPTimeoutError):
+                # A timed-out DELETE may already have been accepted. Reconcile
+                # the old incarnation instead of failing an otherwise safe row.
+                logger.warning(f"Delete request timed out for Job '{job_name}'; checking retirement.")
+            self.wait_for_job_deletion(job_name, namespace, job_uid=job_uid)
 
-        try:
-            response = api_instance.create_namespaced_job(namespace=self.namespace, body=job_template)
-            logger.info(f"Job created: {response.metadata.name}")
-        except client.exceptions.ApiException as e:
-            logger.error(f"Error creating job: {e}")
+        response = api_instance.create_namespaced_job(namespace=namespace, body=job_template, _request_timeout=(5, 10))
+        logger.info(f"Job created: {response.metadata.name}")
 
     def start_workload(self, payload_script, url):
         configmap_name = "wrk2-payload-script"
@@ -160,25 +176,46 @@ class Wrk2:
                 logger.error(f"Error checking for existing job: {e}")
                 return
 
-    def wait_for_job_deletion(self, job_name, namespace, sleep=2, max_wait=60):
-        """Wait for a Kubernetes Job to be deleted before proceeding."""
-        api_instance = client.BatchV1Api()
-        waited = 0
+    def wait_for_job_deletion(self, job_name, namespace, sleep=2, max_wait=60, *, job_uid):
+        """Bound retirement of one Job incarnation without waiting on Pod GC forever."""
+        batch_api = client.BatchV1Api()
+        core_api = client.CoreV1Api()
+        deadline = time.monotonic() + max_wait
 
-        while waited < max_wait:
+        while True:
+            job_gone = False
             try:
-                api_instance.read_namespaced_job(name=job_name, namespace=self.namespace)
-                time.sleep(sleep)
-                waited += sleep
-            except client.exceptions.ApiException as e:
-                if e.status == 404:
-                    console.log(f"[bold green]Job '{job_name}' successfully deleted.")
-                    return
-                else:
-                    console.log(f"[red]Error checking job deletion: {e}")
+                job = batch_api.read_namespaced_job(name=job_name, namespace=namespace, _request_timeout=(5, 10))
+            except client.exceptions.ApiException as error:
+                if error.status != 404:
                     raise
+                job_gone = True
+            else:
+                if job.metadata.uid != job_uid:
+                    raise RuntimeError(f"Job '{job_name}' changed UID during workload retirement")
 
-        raise TimeoutError(f"[red]Timed out waiting for job '{job_name}' to be deleted.")
+            pods = core_api.list_namespaced_pod(
+                namespace=namespace,
+                label_selector=f"batch.kubernetes.io/controller-uid={job_uid}",
+                _request_timeout=(5, 10),
+            ).items
+            if job_gone and not pods:
+                logger.info(f"Job '{job_name}' and its old Pods successfully deleted.")
+                return
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                if job_gone and all(
+                    pod.metadata.deletion_timestamp is not None or pod.status.phase in {"Succeeded", "Failed"}
+                    for pod in pods
+                ):
+                    logger.warning(f"Job '{job_name}' deleted; old Pods are terminating or terminal. Continuing.")
+                    return
+                raise TimeoutError(
+                    f"Timed out retiring job '{namespace}/{job_name}' UID {job_uid}: "
+                    f"job_gone={job_gone}, old_pods={len(pods)}"
+                )
+            time.sleep(min(sleep, remaining))
 
 
 class Wrk2WorkloadManager(StreamWorkloadManager):
