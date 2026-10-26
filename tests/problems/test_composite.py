@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,6 +22,8 @@ from sregym.conductor.problems.composite import (
     load_composite_specs,
 )
 from sregym.utils.decorators import mark_fault_injected
+
+EMPTY_INVENTORY = SimpleNamespace(list_objects=frozenset, delete=lambda obj: None)
 
 
 class _App:
@@ -448,6 +451,7 @@ def test_full_worker_recovery_reports_fault_and_decoy_failures_and_retries():
         deployer=lambda *args: None,
         health_probe=lambda _: {},
         cluster_factory=lambda *args: ("fake", "fake"),
+        cluster_inventory=EMPTY_INVENTORY,
     )
     injected = worker.handle({"op": "inject", "problem_id": spec.problem_id})
     assert injected["faults"] == [0, 1]
@@ -507,6 +511,7 @@ def test_partial_catalog_injection_is_invalid_and_restores_the_failed_component(
         deployer=lambda *args: None,
         health_probe=lambda _: {},
         cluster_factory=lambda *args: ("fake", "fake"),
+        cluster_inventory=EMPTY_INVENTORY,
     )
     result = worker.handle({"op": "inject", "problem_id": problem.problem_id})
     assert not result["injection"]["valid"]

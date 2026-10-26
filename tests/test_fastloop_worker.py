@@ -3,10 +3,13 @@
 import io
 import json
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 import pytest
 
 from sregym.fastloop.worker import FastloopWorker, serve
+
+EMPTY_INVENTORY = SimpleNamespace(list_objects=frozenset, delete=lambda obj: None)
 
 
 @dataclass
@@ -100,6 +103,7 @@ def _worker(
         deployer=fakes.deploy,
         health_probe=fakes.health,
         cluster_factory=fakes.cluster,
+        cluster_inventory=EMPTY_INVENTORY,
         proxy_factory=proxy_factory,
         prompt_builder=lambda app_info, api_base: f"{app_info['app_name']} in {app_info['namespace']} via {api_base}",
         kubeconfig_verifier=lambda path, port: checks.append((path, port)),
@@ -249,6 +253,7 @@ def test_a_crossed_agent_kubeconfig_fails_the_proxy_request_and_is_not_handed_ou
         deployer=Fakes().deploy,
         health_probe=Fakes().health,
         cluster_factory=Fakes().cluster,
+        cluster_inventory=EMPTY_INVENTORY,
         proxy_factory=lambda hidden, port: FakeProxy(hidden_namespaces=hidden, listen_port=port),
         kubeconfig_verifier=crossed,
     )

@@ -9,7 +9,9 @@ A driver outside SREGym runs many incidents against one warm deployment:
     oracle   -> that problem's mitigation oracle (deterministic), or a health check if it has none;
                 a composition passes only when every fault's oracle passes (``fault`` grades one)
     recover  -> that problem recovers its fault; a composition recovers every fault, the last
-                injected first, or only the one ``fault`` names
+                injected first, or only the one ``fault`` names. Once an injection's faults are
+                all recovered, the cluster-scoped objects it created (``created_objects.py``) are
+                deleted, and recovery fails until they are gone
 
 A registry composite (``composite_*``, ``CompositeFaultProblem``) is one problem whose fault
 components are the addressable faults: ``fault`` indexes them for ``oracle`` and ``recover``.
@@ -41,6 +43,13 @@ from sregym.conductor.problems.lifecycle import (
     RecoveryFailure,
     RecoveryResult,
     run_recovery,
+)
+from sregym.fastloop.created_objects import (
+    ClusterInventory,
+    ClusterObject,
+    KubeClusterInventory,
+    created_between,
+    remove_created,
 )
 
 logger = logging.getLogger("all.sregym.fastloop")
@@ -89,6 +98,7 @@ class FastloopWorker:
         deployer: Deployer,
         health_probe: HealthProbe,
         cluster_factory: ClusterFactory,
+        cluster_inventory: ClusterInventory,
         proxy_factory: ProxyFactory | None = None,
         prompt_builder: PromptBuilder | None = None,
         kubeconfig_verifier: KubeconfigVerifier | None = None,
@@ -98,6 +108,7 @@ class FastloopWorker:
         self._deployer = deployer
         self._health_probe = health_probe
         self._cluster_factory = cluster_factory
+        self._inventory = cluster_inventory
         self._proxy_factory = proxy_factory
         self._prompt_builder = prompt_builder
         self._kubeconfig_verifier = kubeconfig_verifier
@@ -117,6 +128,12 @@ class FastloopWorker:
         self._recovery_timeouts: dict[int, str] = {}
         self._refresh_timeouts: dict[int, str] = {}
         self._injection_span = 0
+        #: Cluster-scoped objects each incident's injection created; None when unknown.
+        self._created: dict[int, frozenset[ClusterObject] | None] = {}
+
+    #: Bound on waiting for created objects (a namespace's contents) to be deleted.
+    created_objects_timeout_s = 180.0
+    created_objects_poll_s = 2.0
 
     def handle(self, request: dict[str, Any]) -> dict[str, Any]:
         op = request.get("op")
@@ -200,14 +217,23 @@ class FastloopWorker:
             raise RuntimeError("recovery failed; clean up successfully before another injection")
         if self._invalid:
             raise RuntimeError("invalid injection must be recovered before another injection")
+        if not request.get("compose") and any(created != frozenset() for created in self._created.values()):
+            raise RuntimeError("objects created by an earlier injection remain; recover before another injection")
         # A fresh instance per incident, as SREGym constructs one per problem run; its oracle
         # snapshots the healthy deployment before the fault.
         problem = self._problem_factory(str(request["problem_id"]))
         if self._proxy is not None:
             # As the conductor does right before ``inject_fault``.
             self._verify_agent_kubeconfig(self._proxy)
+        try:
+            before = self._inventory.list_objects()
+        except Exception as error:
+            raise RuntimeError(
+                f"cluster-scoped inventory unavailable before injection: {type(error).__name__}: {error}"
+            ) from error
         if not request.get("compose"):
             self._incidents, self._faults, self._recovered = [], [], set()
+            self._created = {}
             self._components = []
             self._recovery_timeouts = {}
             self._refresh_timeouts = {}
@@ -224,6 +250,15 @@ class FastloopWorker:
             failure = check()
         except Exception as error:
             failure = {"error": f"{type(error).__name__}: {error}"}
+        try:
+            self._created[incident] = created_between(before, self._inventory.list_objects())
+        except Exception as error:
+            self._created[incident] = None
+            failure = {
+                **(failure or {}),
+                "created_objects_error": f"cluster-scoped inventory unavailable after injection: "
+                f"{type(error).__name__}: {error}",
+            }
         injection = InjectionResult.from_failure(failure)
         if not injection.valid:
             self._invalid.add(incident)
@@ -331,7 +366,7 @@ class FastloopWorker:
             else [
                 incident
                 for incident in reversed(range(len(self._incidents)))
-                if self._pending(incident) or incident in self._invalid
+                if self._pending(incident) or incident in self._invalid or self._created.get(incident) != frozenset()
             ]
         )
         result = RecoveryResult()
@@ -349,7 +384,10 @@ class FastloopWorker:
             requested.extend(faults)
             component = self._faults[index][1] if index is not None else None
             recover = getattr(problem, "recovery_result", None)
-            if recover is not None:
+            if not faults and incident not in self._invalid:
+                # Only created objects remain from an earlier attempt; the fault is already reverted.
+                restored, errors = [], []
+            elif recover is not None:
                 cleanup = recover(component)
                 recovered_components = set(cleanup["recovered"])
                 restored = [f for f in faults if self._faults[f][1] in recovered_components]
@@ -375,8 +413,10 @@ class FastloopWorker:
                 previous_errors = [e for e in previous_errors if e["component_index"] != component]
             else:
                 previous_errors = []
-            self._cleanup_errors[incident] = previous_errors + errors
             self._recovered.update(restored)
+            if not errors and not self._pending(incident):
+                errors = self._remove_created(incident)
+            self._cleanup_errors[incident] = previous_errors + errors
             result.recovered.extend(restored)
             result.errors.extend({"incident": incident, **error} for error in errors)
             if not self._pending(incident):
@@ -393,6 +433,22 @@ class FastloopWorker:
             "recovery_contract": SEED_RECOVERY_CONTRACT,
             "components": [self._components[f] for f in requested],
         }
+
+    def _remove_created(self, incident: int) -> list[dict[str, Any]]:
+        """Delete what this incident's injection created; an error while any of it remains."""
+        created = self._created.get(incident, frozenset())
+        if created is None:
+            error = "objects created by the injection are unknown: inventory was unavailable after injection"
+            return [RecoveryFailure(None, "error", error).to_dict()]
+        remaining, error = remove_created(
+            self._inventory, created, timeout_s=self.created_objects_timeout_s, poll_s=self.created_objects_poll_s
+        )
+        self._created[incident] = remaining
+        if not remaining:
+            return []
+        names = ", ".join(str(obj) for obj in sorted(remaining))
+        detail = f"created by injection and still present: {names}" + (f" ({error})" if error else "")
+        return [RecoveryFailure(None, "error", detail).to_dict()]
 
     def _refresh(self, request: dict[str, Any]) -> dict[str, Any]:
         """Refresh runtime clients after full recovery and the caller's seed-manifest restore."""
@@ -523,6 +579,7 @@ def production_worker() -> FastloopWorker:
         deployer=_deploy,
         health_probe=_health_probe,
         cluster_factory=cluster_factory,
+        cluster_inventory=KubeClusterInventory(),
         proxy_factory=proxy_factory,
         prompt_builder=_codex_prompt,
         kubeconfig_verifier=kubeconfig_verifier,

@@ -13,6 +13,8 @@ from sregym.conductor.problems.composition.spec import FaultDraw, Footprint, Tie
 from sregym.fastloop.worker import FastloopWorker, serve
 from sregym.utils.decorators import mark_fault_injected
 
+EMPTY_INVENTORY = SimpleNamespace(list_objects=frozenset, delete=lambda obj: None)
+
 
 class Fault(Problem):
     def __init__(self, name, events, *, invalid=False):
@@ -65,6 +67,7 @@ def worker(factory):
         deployer=lambda *args: None,
         health_probe=lambda ns: {},
         cluster_factory=lambda *args: ("fake", "fake"),
+        cluster_inventory=EMPTY_INVENTORY,
     )
 
 

@@ -6,6 +6,8 @@ import pytest
 
 from sregym.fastloop.worker import FastloopWorker
 
+EMPTY_INVENTORY = SimpleNamespace(list_objects=frozenset, delete=lambda obj: None)
+
 
 class CredentialProblem:
     namespace = "toy"
@@ -36,6 +38,7 @@ def worker(problem):
         deployer=lambda *_: None,
         health_probe=lambda _: {"healthy": True},
         cluster_factory=lambda *_: ("toy", "/unused"),
+        cluster_inventory=EMPTY_INVENTORY,
     )
 
 

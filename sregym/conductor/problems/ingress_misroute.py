@@ -29,13 +29,19 @@ class IngressMisroute(Problem):
             ),
         )
         self.networking_v1 = client.NetworkingV1Api()
+        self.core_v1 = client.CoreV1Api()
+        # The controller's namespace and cluster-scoped objects are removed by the warm-lane
+        # worker's created-object cleanup (``sregym/fastloop/created_objects.py``).
+        self.ingress_controller = IngressNginx()
+        # App-namespace objects this injection created; recovery deletes exactly these.
+        self._created_services: list[str] = []
+        self._created_ingress = False
         self.faulty_service = [correct_service, wrong_service]
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = IngressMisrouteMitigationOracle(problem=self)
 
     def _ensure_proxy_services(self):
         """Create proxy services that map the ingress backend names to the real app services."""
-        v1 = client.CoreV1Api()
         service_map = {
             self.correct_service: ("frontend", 5000),
             self.wrong_service: ("recommendation", 8085),
@@ -49,15 +55,17 @@ class IngressMisroute(Problem):
                 ),
             )
             try:
-                v1.create_namespaced_service(namespace=self.namespace, body=body)
+                self.core_v1.create_namespaced_service(namespace=self.namespace, body=body)
             except client.exceptions.ApiException as e:
                 if e.status != 409:  # already exists
                     raise
+            else:
+                self._created_services.append(svc_name)
 
     @mark_fault_injected
     def inject_fault(self):
         """Misroute /api to wrong backend"""
-        IngressNginx().deploy()
+        self.ingress_controller.deploy()
         self._ensure_proxy_services()
 
         try:
@@ -94,6 +102,7 @@ class IngressMisroute(Problem):
                     },
                 }
                 self.networking_v1.create_namespaced_ingress(namespace=self.namespace, body=ingress_manifest)
+                self._created_ingress = True
                 ingress = self.networking_v1.read_namespaced_ingress(name=self.ingress_name, namespace=self.namespace)
             else:
                 raise
@@ -107,10 +116,26 @@ class IngressMisroute(Problem):
 
     @mark_fault_injected
     def recover_fault(self):
-        """Revert misroute to correct backend"""
-        ingress = self.networking_v1.read_namespaced_ingress(name=self.ingress_name, namespace=self.namespace)
-        for rule in ingress.spec.rules:
-            for path in rule.http.paths:
-                if path.path.startswith(self.path):
-                    path.backend.service.name = self.correct_service
-        self.networking_v1.replace_namespaced_ingress(name=self.ingress_name, namespace=self.namespace, body=ingress)
+        """Revert misroute to correct backend, then delete the objects the injection created."""
+        if self._created_ingress:
+            self._delete_if_present(self.networking_v1.delete_namespaced_ingress, self.ingress_name)
+            self._created_ingress = False
+        else:
+            ingress = self.networking_v1.read_namespaced_ingress(name=self.ingress_name, namespace=self.namespace)
+            for rule in ingress.spec.rules:
+                for path in rule.http.paths:
+                    if path.path.startswith(self.path):
+                        path.backend.service.name = self.correct_service
+            self.networking_v1.replace_namespaced_ingress(
+                name=self.ingress_name, namespace=self.namespace, body=ingress
+            )
+        while self._created_services:
+            self._delete_if_present(self.core_v1.delete_namespaced_service, self._created_services[-1])
+            self._created_services.pop()
+
+    def _delete_if_present(self, delete, name: str) -> None:
+        try:
+            delete(name=name, namespace=self.namespace)
+        except client.exceptions.ApiException as e:
+            if e.status != 404:  # the responder may already have removed it
+                raise
