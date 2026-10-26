@@ -6,9 +6,11 @@ HPA the baseline lacked). Its own ``recover_fault`` usually reverts only the fau
 lane has no namespace teardown or cluster reconcile after it, so those objects would survive
 into the next row. The worker lists the inventory (cluster-scoped kinds plus the app namespace's
 stable kinds) right before and right after ``inject_fault``; the difference is what the injection
-created. After full recovery it deletes exactly that difference and waits until it is gone.
-Objects that existed before the injection are never touched, and no name is guessed. Only kinds
-and names are recorded, never values.
+created. After full recovery it deletes exactly that difference and waits until it is gone; an
+injection-created object that cannot be removed fails recovery. Objects that existed before the
+injection are never touched, and no name is guessed. Any other difference from the pre-injection
+inventory (a responder's repair, say) is an ``InventoryDrift`` eval note, never a deletion or a
+block. Only kinds and names are recorded, never values.
 """
 
 from __future__ import annotations
@@ -101,15 +103,45 @@ def in_namespaces(objects: Iterable[ClusterObject], namespaces: frozenset[str]) 
     return frozenset(obj for obj in objects if obj.namespace in namespaces)
 
 
+@dataclass(frozen=True)
+class InventoryDrift:
+    """How the app namespaces differ from their pre-injection baseline, by kind and name only.
+
+    An eval note, not a failure: objects other than the injection's own may be a responder's
+    legitimate repair, so the worker labels the run and the next row instead of deleting them.
+    """
+
+    extra: tuple[ClusterObject, ...] = ()
+    missing: tuple[ClusterObject, ...] = ()
+
+    @classmethod
+    def between(cls, baseline: Iterable[ClusterObject], current: Iterable[ClusterObject]) -> InventoryDrift:
+        baseline, current = frozenset(baseline), frozenset(current)
+        return cls(tuple(sorted(current - baseline)), tuple(sorted(baseline - current)))
+
+    def __bool__(self) -> bool:
+        return bool(self.extra or self.missing)
+
+    def __str__(self) -> str:
+        parts = []
+        if self.extra:
+            parts.append("not in the pre-injection baseline: " + ", ".join(map(str, self.extra)))
+        if self.missing:
+            parts.append("missing from the pre-injection baseline: " + ", ".join(map(str, self.missing)))
+        return "; ".join(parts)
+
+    def to_note(self) -> dict[str, Any]:
+        return {
+            "label": "eval",
+            "kind": "app_namespace_inventory_drift",
+            "not_in_baseline": [str(obj) for obj in self.extra],
+            "missing_from_baseline": [str(obj) for obj in self.missing],
+        }
+
+
 def inventory_drift(baseline: Iterable[ClusterObject], current: Iterable[ClusterObject]) -> str:
     """Values-free description of how ``current`` differs from ``baseline``; empty when equal."""
-    baseline, current = frozenset(baseline), frozenset(current)
-    parts = []
-    if extra := sorted(current - baseline):
-        parts.append("not in the pre-injection baseline: " + ", ".join(map(str, extra)))
-    if missing := sorted(baseline - current):
-        parts.append("missing from the pre-injection baseline: " + ", ".join(map(str, missing)))
-    return "; ".join(parts)
+    return str(InventoryDrift.between(baseline, current))
 
 
 def _deletion_order(obj: ClusterObject) -> tuple[int, str, str]:

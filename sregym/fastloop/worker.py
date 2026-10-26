@@ -11,7 +11,9 @@ A driver outside SREGym runs many incidents against one warm deployment:
     recover  -> that problem recovers its fault; a composition recovers every fault, the last
                 injected first, or only the one ``fault`` names. Once an injection's faults are
                 all recovered, the cluster-scoped objects it created (``created_objects.py``) are
-                deleted, and recovery fails until they are gone
+                deleted, and recovery fails until they are gone. Any other difference of the app
+                namespace from its pre-injection inventory is an ``eval_notes`` label on the reply
+                and a ``confounds`` label on the next plain ``inject``; it never blocks
 
 A registry composite (``composite_*``, ``CompositeFaultProblem``) is one problem whose fault
 components are the addressable faults: ``fault`` indexes them for ``oracle`` and ``recover``.
@@ -47,10 +49,10 @@ from sregym.conductor.problems.lifecycle import (
 from sregym.fastloop.created_objects import (
     ClusterInventory,
     ClusterObject,
+    InventoryDrift,
     KubeClusterInventory,
     created_between,
     in_namespaces,
-    inventory_drift,
     remove_created,
 )
 
@@ -135,8 +137,9 @@ class FastloopWorker:
         #: The composition's app namespaces and their inventory right before its first injection.
         self._namespaces: frozenset[str] = frozenset()
         self._baseline: frozenset[ClusterObject] = frozenset()
-        #: How the app namespaces differ from that baseline after full recovery; empty when equal.
-        self._drift = ""
+        #: Eval notes on how the app namespaces differ from that baseline after full recovery;
+        #: reported on that recover and carried to the next plain inject as its confounds.
+        self._drift_notes: list[dict[str, Any]] = []
 
     #: Bound on waiting for created objects (a namespace's contents) to be deleted.
     created_objects_timeout_s = 180.0
@@ -243,8 +246,10 @@ class FastloopWorker:
             raise RuntimeError(
                 f"cluster-scoped inventory unavailable before injection: {type(error).__name__}: {error}"
             ) from error
+        confounds: list[dict[str, Any]] = []
         if not request.get("compose"):
-            self._namespaces, self._baseline, self._drift = frozenset(), frozenset(), ""
+            confounds, self._drift_notes = self._drift_notes, []
+            self._namespaces, self._baseline = frozenset(), frozenset()
         if not namespace <= self._namespaces:
             self._baseline |= in_namespaces(before, namespace - self._namespaces)
             self._namespaces |= namespace
@@ -308,6 +313,7 @@ class FastloopWorker:
             "fault": first,
             "faults": faults,
             "components": self._components[first:],
+            "confounds": confounds,
         }
 
     @property
@@ -440,20 +446,8 @@ class FastloopWorker:
                 self._invalid.discard(incident)
         result.pending = [fault for fault in range(len(self._faults)) if fault not in self._recovered]
         if not result.pending and not any(self._cleanup_errors.values()):
-            self._drift = self._inventory_drift()
-        if self._drift:
-            result.errors.append(
-                {
-                    "incident": None,
-                    **RecoveryFailure(
-                        None,
-                        "error",
-                        "eval: app namespace inventory after full recovery differs from its pre-injection "
-                        f"baseline, so the next row would start from a changed app ({self._drift})",
-                    ).to_dict(),
-                }
-            )
-        self._recovery_failed = any(self._cleanup_errors.values()) or bool(self._drift)
+            self._drift_notes = self._inventory_drift()
+        self._recovery_failed = any(self._cleanup_errors.values())
         # Other live faults are expected after a single-component cleanup.
         reply = result.to_dict()
         return {
@@ -463,6 +457,7 @@ class FastloopWorker:
             "mode": "full",
             "recovery_contract": SEED_RECOVERY_CONTRACT,
             "components": [self._components[f] for f in requested],
+            "eval_notes": self._drift_notes,
         }
 
     def _remove_created(self, incident: int) -> list[dict[str, Any]]:
@@ -481,18 +476,19 @@ class FastloopWorker:
         detail = f"created by injection and still present: {names}" + (f" ({error})" if error else "")
         return [RecoveryFailure(None, "error", detail).to_dict()]
 
-    def _inventory_drift(self) -> str:
-        """Kinds and names in the app namespaces that differ from the pre-injection baseline."""
+    def _inventory_drift(self) -> list[dict[str, Any]]:
+        """Eval notes for kinds and names in the app namespaces that differ from the baseline."""
         deadline = time.monotonic() + self.inventory_settle_timeout_s
         while True:
             try:
-                drift = inventory_drift(
+                drift = InventoryDrift.between(
                     self._baseline, in_namespaces(self._inventory.list_objects(self._namespaces), self._namespaces)
                 )
             except Exception as error:
-                drift = f"app namespace inventory unavailable: {type(error).__name__}: {str(error)[:200]}"
+                note = {"label": "eval", "kind": "app_namespace_inventory_unavailable", "error": type(error).__name__}
+                return [note]
             if not drift or time.monotonic() >= deadline:
-                return drift
+                return [drift.to_note()] if drift else []
             time.sleep(self.created_objects_poll_s)
 
     def _refresh(self, request: dict[str, Any]) -> dict[str, Any]:

@@ -176,7 +176,40 @@ class DriftingProblem:
             self.ns.objects.add(self.leave)
 
 
-def test_an_object_added_after_injection_fails_recovery_loudly_and_blocks_the_next_row():
+def drift_note(extra=(), missing=()):
+    return {
+        "label": "eval",
+        "kind": "app_namespace_inventory_drift",
+        "not_in_baseline": [str(obj) for obj in extra],
+        "missing_from_baseline": [str(obj) for obj in missing],
+    }
+
+
+def test_a_responder_created_network_policy_is_labelled_and_does_not_block_the_next_row():
+    ns = Namespace()
+    policy = ClusterObject("NetworkPolicy", "deny-all", NS)
+    w = worker(ns, lambda _: hpa_problem(ns))
+    w.handle({"op": "inject", "problem_id": "hpa_missing_effective_cpu_request"})
+    ns.objects.add(policy)  # the responder's own repair, after the injection window closed
+
+    result = w.handle({"op": "recover", "mode": "full"})
+
+    assert result["success"] is True, result
+    assert result["errors"] == []
+    assert result["eval_notes"] == [drift_note(extra=[policy])]
+    # The injection's HPA is removed; the responder's object is not the harness's to delete.
+    assert ns.hpas() == set()
+    assert policy in ns.objects
+    # The next row starts, labelled with the confound it inherits.
+    nxt = w.handle({"op": "inject", "problem_id": "hpa_missing_effective_cpu_request"})
+    assert nxt["confounds"] == [drift_note(extra=[policy])]
+    # That row's baseline already holds the policy, so it is neither re-labelled nor deleted.
+    assert w.handle({"op": "recover", "mode": "full"})["eval_notes"] == []
+    assert policy in ns.objects
+    assert w.handle({"op": "inject", "problem_id": "hpa_missing_effective_cpu_request"})["confounds"] == []
+
+
+def test_a_recover_that_adds_an_object_is_labelled_not_deleted():
     ns = Namespace()
     leftover = ClusterObject("NetworkPolicy", "deny-all", NS)
     w = worker(ns, lambda _: DriftingProblem(ns, leave=leftover))
@@ -184,19 +217,12 @@ def test_an_object_added_after_injection_fails_recovery_loudly_and_blocks_the_ne
 
     result = w.handle({"op": "recover", "mode": "full"})
 
-    assert result["success"] is False
-    error = result["errors"][-1]["error"]
-    assert error.startswith("eval: app namespace inventory")
-    assert "not in the pre-injection baseline: NetworkPolicy/hotel-reservation/deny-all" in error
-    with pytest.raises(RuntimeError, match="recovery failed"):
-        w.handle({"op": "inject", "problem_id": "drift"})
-    # Once the namespace matches again, a retry clears the failure without re-running recover_fault.
-    ns.objects.discard(leftover)
-    assert w.handle({"op": "recover", "mode": "full"})["success"] is True
-    w.handle({"op": "inject", "problem_id": "drift"})
+    assert result["success"] is True
+    assert result["eval_notes"] == [drift_note(extra=[leftover])]
+    assert ns.deleted == []
 
 
-def test_a_baseline_object_left_deleted_fails_recovery_loudly():
+def test_a_baseline_object_left_deleted_is_labelled():
     ns = Namespace()
     service = ClusterObject("Service", "frontend", NS)
     w = worker(ns, lambda _: DriftingProblem(ns, remove=service))
@@ -204,10 +230,32 @@ def test_a_baseline_object_left_deleted_fails_recovery_loudly():
 
     result = w.handle({"op": "recover", "mode": "full"})
 
+    assert result["success"] is True
+    assert result["eval_notes"] == [drift_note(missing=[service])]
+
+
+@dataclass
+class Undeletable(Namespace):
+    """A namespace whose API server accepts deletes but never removes anything."""
+
+    def delete(self, obj):
+        self.deleted.append(obj)
+
+
+def test_an_injection_created_object_recovery_cannot_remove_fails_loudly_and_blocks():
+    ns = Undeletable()
+    w = worker(ns, lambda _: hpa_problem(ns))
+    w.handle({"op": "inject", "problem_id": "hpa_missing_effective_cpu_request"})
+
+    result = w.handle({"op": "recover", "mode": "full"})
+
     assert result["success"] is False
     assert (
-        "missing from the pre-injection baseline: Service/hotel-reservation/frontend" in result["errors"][-1]["error"]
+        "created by injection and still present: HorizontalPodAutoscaler/hotel-reservation/frontend-capacity"
+        in result["errors"][-1]["error"]
     )
+    with pytest.raises(RuntimeError, match="recovery failed"):
+        w.handle({"op": "inject", "problem_id": "hpa_missing_effective_cpu_request"})
 
 
 def test_other_namespaces_and_churning_kinds_are_not_inventoried():
