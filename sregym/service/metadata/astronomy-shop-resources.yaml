@@ -1,6 +1,7 @@
 # Proven LH resource envelope plus shared-host OpenSearch disk headroom.
 # See OpenSearch cluster-settings docs: byte-valued watermarks measure free space.
-# Keep all three absolute; flood100gb matches the benchmark host floor.
+# Keep all three absolute and far below the benchmark host floor (100 GiB):
+# a busy shared host must not make OpenSearch indices read-only.
 # Grafana shares one sidecar knob, so it uses the maximum LH sidecar limit.
 components:
   accounting:
@@ -213,16 +214,16 @@ opensearch:
       cpu: '1'
       memory: 100Mi
   config:
-    opensearch.yml: '# Shared benchmark filesystem uses an absolute100GiB host floor.
+    opensearch.yml: '# Absolute watermarks sit far below the 100GiB shared-host admission floor.
 
       cluster.name: demo-cluster
 
       network.host: 0.0.0.0
 
-      cluster.routing.allocation.disk.watermark.low: 130gb
+      cluster.routing.allocation.disk.watermark.low: 40gb
 
-      cluster.routing.allocation.disk.watermark.high: 115gb
+      cluster.routing.allocation.disk.watermark.high: 30gb
 
-      cluster.routing.allocation.disk.watermark.flood_stage: 100gb
+      cluster.routing.allocation.disk.watermark.flood_stage: 20gb
 
       '
