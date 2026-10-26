@@ -13,7 +13,7 @@ from sregym.conductor.problems.composition.spec import FaultDraw, Footprint, Tie
 from sregym.fastloop.worker import FastloopWorker, serve
 from sregym.utils.decorators import mark_fault_injected
 
-EMPTY_INVENTORY = SimpleNamespace(list_objects=frozenset, delete=lambda obj: None)
+EMPTY_INVENTORY = SimpleNamespace(list_objects=lambda namespaces: frozenset(), delete=lambda obj: None)
 
 
 class Fault(Problem):

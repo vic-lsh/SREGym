@@ -9,7 +9,7 @@ import pytest
 
 from sregym.fastloop.worker import FastloopWorker, serve
 
-EMPTY_INVENTORY = SimpleNamespace(list_objects=frozenset, delete=lambda obj: None)
+EMPTY_INVENTORY = SimpleNamespace(list_objects=lambda namespaces: frozenset(), delete=lambda obj: None)
 
 
 @dataclass

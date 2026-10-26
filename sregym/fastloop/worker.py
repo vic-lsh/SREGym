@@ -49,6 +49,8 @@ from sregym.fastloop.created_objects import (
     ClusterObject,
     KubeClusterInventory,
     created_between,
+    in_namespaces,
+    inventory_drift,
     remove_created,
 )
 
@@ -130,10 +132,17 @@ class FastloopWorker:
         self._injection_span = 0
         #: Cluster-scoped objects each incident's injection created; None when unknown.
         self._created: dict[int, frozenset[ClusterObject] | None] = {}
+        #: The composition's app namespaces and their inventory right before its first injection.
+        self._namespaces: frozenset[str] = frozenset()
+        self._baseline: frozenset[ClusterObject] = frozenset()
+        #: How the app namespaces differ from that baseline after full recovery; empty when equal.
+        self._drift = ""
 
     #: Bound on waiting for created objects (a namespace's contents) to be deleted.
     created_objects_timeout_s = 180.0
     created_objects_poll_s = 2.0
+    #: Bound on waiting for the app namespaces to match their baseline after full recovery.
+    inventory_settle_timeout_s = 30.0
 
     def handle(self, request: dict[str, Any]) -> dict[str, Any]:
         op = request.get("op")
@@ -225,12 +234,20 @@ class FastloopWorker:
         if self._proxy is not None:
             # As the conductor does right before ``inject_fault``.
             self._verify_agent_kubeconfig(self._proxy)
+        namespace = frozenset({_app_namespace(problem)})
         try:
-            before = self._inventory.list_objects()
+            before = self._inventory.list_objects(
+                (self._namespaces if request.get("compose") else frozenset()) | namespace
+            )
         except Exception as error:
             raise RuntimeError(
                 f"cluster-scoped inventory unavailable before injection: {type(error).__name__}: {error}"
             ) from error
+        if not request.get("compose"):
+            self._namespaces, self._baseline, self._drift = frozenset(), frozenset(), ""
+        if not namespace <= self._namespaces:
+            self._baseline |= in_namespaces(before, namespace - self._namespaces)
+            self._namespaces |= namespace
         if not request.get("compose"):
             self._incidents, self._faults, self._recovered = [], [], set()
             self._created = {}
@@ -251,7 +268,7 @@ class FastloopWorker:
         except Exception as error:
             failure = {"error": f"{type(error).__name__}: {error}"}
         try:
-            self._created[incident] = created_between(before, self._inventory.list_objects())
+            self._created[incident] = created_between(before, self._inventory.list_objects(self._namespaces))
         except Exception as error:
             self._created[incident] = None
             failure = {
@@ -422,7 +439,21 @@ class FastloopWorker:
             if not self._pending(incident):
                 self._invalid.discard(incident)
         result.pending = [fault for fault in range(len(self._faults)) if fault not in self._recovered]
-        self._recovery_failed = any(self._cleanup_errors.values())
+        if not result.pending and not any(self._cleanup_errors.values()):
+            self._drift = self._inventory_drift()
+        if self._drift:
+            result.errors.append(
+                {
+                    "incident": None,
+                    **RecoveryFailure(
+                        None,
+                        "error",
+                        "eval: app namespace inventory after full recovery differs from its pre-injection "
+                        f"baseline, so the next row would start from a changed app ({self._drift})",
+                    ).to_dict(),
+                }
+            )
+        self._recovery_failed = any(self._cleanup_errors.values()) or bool(self._drift)
         # Other live faults are expected after a single-component cleanup.
         reply = result.to_dict()
         return {
@@ -449,6 +480,20 @@ class FastloopWorker:
         names = ", ".join(str(obj) for obj in sorted(remaining))
         detail = f"created by injection and still present: {names}" + (f" ({error})" if error else "")
         return [RecoveryFailure(None, "error", detail).to_dict()]
+
+    def _inventory_drift(self) -> str:
+        """Kinds and names in the app namespaces that differ from the pre-injection baseline."""
+        deadline = time.monotonic() + self.inventory_settle_timeout_s
+        while True:
+            try:
+                drift = inventory_drift(
+                    self._baseline, in_namespaces(self._inventory.list_objects(self._namespaces), self._namespaces)
+                )
+            except Exception as error:
+                drift = f"app namespace inventory unavailable: {type(error).__name__}: {str(error)[:200]}"
+            if not drift or time.monotonic() >= deadline:
+                return drift
+            time.sleep(self.created_objects_poll_s)
 
     def _refresh(self, request: dict[str, Any]) -> dict[str, Any]:
         """Refresh runtime clients after full recovery and the caller's seed-manifest restore."""
@@ -477,6 +522,14 @@ class FastloopWorker:
         if hasattr(problem, "pending_components"):
             return bool(problem.pending_components)
         return any(fault not in self._recovered for fault, (owner, _) in enumerate(self._faults) if owner == incident)
+
+
+def _app_namespace(problem: _Problem) -> str:
+    app = getattr(problem, "app", None)
+    namespace = getattr(app, "namespace", None) or getattr(problem, "namespace", None)
+    if not isinstance(namespace, str) or not namespace:
+        raise ValueError(f"{type(problem).__name__} has no app namespace to inventory")
+    return namespace
 
 
 def _fault_components(problem: _Problem) -> list[int | None]:

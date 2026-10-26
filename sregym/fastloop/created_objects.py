@@ -1,12 +1,14 @@
-"""Cluster-scoped objects an injection created, so a warm lane's recovery removes exactly those.
+"""Objects an injection created, so a warm lane's recovery removes exactly those.
 
 A fault may install infrastructure outside the app namespace (a Helm release in its own
-namespace, its ClusterRoles, IngressClass and admission webhooks). Its own ``recover_fault``
-usually reverts only the fault, and a warm lane has no namespace teardown or cluster reconcile
-after it, so those objects would survive into the next row. The worker lists the cluster-scoped
-inventory right before and right after ``inject_fault``; the difference is what the injection
+namespace, its ClusterRoles, IngressClass and admission webhooks) or add objects inside it (an
+HPA the baseline lacked). Its own ``recover_fault`` usually reverts only the fault, and a warm
+lane has no namespace teardown or cluster reconcile after it, so those objects would survive
+into the next row. The worker lists the inventory (cluster-scoped kinds plus the app namespace's
+stable kinds) right before and right after ``inject_fault``; the difference is what the injection
 created. After full recovery it deletes exactly that difference and waits until it is gone.
-Objects that existed before the injection are never touched, and no name is guessed.
+Objects that existed before the injection are never touched, and no name is guessed. Only kinds
+and names are recorded, never values.
 """
 
 from __future__ import annotations
@@ -31,26 +33,59 @@ CLUSTER_KINDS: tuple[str, ...] = (
     "StorageClass",
     "Namespace",
 )
+# App-namespace kinds whose names are stable across rollouts (no Pods, ReplicaSets, Endpoints,
+# Events or Leases, which churn by design). Secrets are left out so the harness never reads one.
+NAMESPACED_KINDS: tuple[str, ...] = (
+    "HorizontalPodAutoscaler",
+    "PodDisruptionBudget",
+    "CronJob",
+    "Ingress",
+    "NetworkPolicy",
+    "Deployment",
+    "StatefulSet",
+    "DaemonSet",
+    "Service",
+    "ConfigMap",
+    "PersistentVolumeClaim",
+    "RoleBinding",
+    "Role",
+    "ServiceAccount",
+    "ResourceQuota",
+    "LimitRange",
+)
+# Webhooks and API registrations go before anything they could intercept; app-namespace objects
+# go before the cluster RBAC and namespaces they may depend on.
+DELETION_ORDER: tuple[str, ...] = CLUSTER_KINDS[:3] + NAMESPACED_KINDS + CLUSTER_KINDS[3:]
 
 
 @dataclass(frozen=True, order=True)
 class ClusterObject:
+    """One object by kind and name; ``namespace`` is empty exactly for cluster-scoped kinds."""
+
     kind: str
     name: str
+    namespace: str = ""
 
     def __post_init__(self) -> None:
-        if self.kind not in CLUSTER_KINDS:
-            raise ValueError(f"unsupported cluster-scoped kind {self.kind!r}")
+        if self.kind in CLUSTER_KINDS:
+            if self.namespace:
+                raise ValueError(f"{self.kind} is cluster-scoped; got namespace {self.namespace!r}")
+        elif self.kind in NAMESPACED_KINDS:
+            if not isinstance(self.namespace, str) or not self.namespace:
+                raise ValueError(f"{self.kind} is namespaced; namespace must be a nonempty string")
+        else:
+            raise ValueError(f"unsupported kind {self.kind!r}")
         if not isinstance(self.name, str) or not self.name:
             raise ValueError(f"{self.kind} name must be a nonempty string")
 
     def __str__(self) -> str:
-        return f"{self.kind}/{self.name}"
+        return f"{self.kind}/{self.namespace}/{self.name}" if self.namespace else f"{self.kind}/{self.name}"
 
 
 class ClusterInventory(Protocol):
-    def list_objects(self) -> frozenset[ClusterObject]:
-        """Every object of ``CLUSTER_KINDS``; raises when any kind cannot be listed."""
+    def list_objects(self, namespaces: frozenset[str]) -> frozenset[ClusterObject]:
+        """Every object of ``CLUSTER_KINDS``, plus every object of ``NAMESPACED_KINDS`` in
+        ``namespaces``; raises when any kind cannot be listed."""
         ...
 
     def delete(self, obj: ClusterObject) -> None:
@@ -62,8 +97,23 @@ def created_between(before: Iterable[ClusterObject], after: Iterable[ClusterObje
     return frozenset(after) - frozenset(before)
 
 
-def _deletion_order(obj: ClusterObject) -> tuple[int, str]:
-    return CLUSTER_KINDS.index(obj.kind), obj.name
+def in_namespaces(objects: Iterable[ClusterObject], namespaces: frozenset[str]) -> frozenset[ClusterObject]:
+    return frozenset(obj for obj in objects if obj.namespace in namespaces)
+
+
+def inventory_drift(baseline: Iterable[ClusterObject], current: Iterable[ClusterObject]) -> str:
+    """Values-free description of how ``current`` differs from ``baseline``; empty when equal."""
+    baseline, current = frozenset(baseline), frozenset(current)
+    parts = []
+    if extra := sorted(current - baseline):
+        parts.append("not in the pre-injection baseline: " + ", ".join(map(str, extra)))
+    if missing := sorted(baseline - current):
+        parts.append("missing from the pre-injection baseline: " + ", ".join(map(str, missing)))
+    return "; ".join(parts)
+
+
+def _deletion_order(obj: ClusterObject) -> tuple[int, str, str]:
+    return DELETION_ORDER.index(obj.kind), obj.namespace, obj.name
 
 
 def remove_created(
@@ -94,7 +144,9 @@ def remove_created(
                     error = f"delete {obj}: {type(exc).__name__}: {str(exc)[:200]}"
             requested = not error
         try:
-            remaining = remaining & inventory.list_objects()
+            remaining = remaining & inventory.list_objects(
+                frozenset(obj.namespace for obj in remaining if obj.namespace)
+            )
         except Exception as exc:
             error = f"list cluster objects: {type(exc).__name__}: {str(exc)[:200]}"
         if not remaining or clock() >= deadline:
@@ -124,6 +176,10 @@ class KubeClusterInventory:
                 "networking": client.NetworkingV1Api(),
                 "scheduling": client.SchedulingV1Api(),
                 "storage": client.StorageV1Api(),
+                "apps": client.AppsV1Api(),
+                "autoscaling": client.AutoscalingV2Api(),
+                "batch": client.BatchV1Api(),
+                "policy": client.PolicyV1Api(),
             }
         return self._given[name]
 
@@ -152,20 +208,48 @@ class KubeClusterInventory:
         "StorageClass": ("storage", "list_storage_class", "delete_storage_class"),
         "Namespace": ("core", "list_namespace", "delete_namespace"),
     }
+    # kind -> (API, resource suffix of list_namespaced_* and delete_namespaced_*)
+    _NAMESPACED = {
+        "HorizontalPodAutoscaler": ("autoscaling", "horizontal_pod_autoscaler"),
+        "PodDisruptionBudget": ("policy", "pod_disruption_budget"),
+        "CronJob": ("batch", "cron_job"),
+        "Ingress": ("networking", "ingress"),
+        "NetworkPolicy": ("networking", "network_policy"),
+        "Deployment": ("apps", "deployment"),
+        "StatefulSet": ("apps", "stateful_set"),
+        "DaemonSet": ("apps", "daemon_set"),
+        "Service": ("core", "service"),
+        "ConfigMap": ("core", "config_map"),
+        "PersistentVolumeClaim": ("core", "persistent_volume_claim"),
+        "RoleBinding": ("rbac", "role_binding"),
+        "Role": ("rbac", "role"),
+        "ServiceAccount": ("core", "service_account"),
+        "ResourceQuota": ("core", "resource_quota"),
+        "LimitRange": ("core", "limit_range"),
+    }
 
-    def list_objects(self) -> frozenset[ClusterObject]:
+    def list_objects(self, namespaces: frozenset[str]) -> frozenset[ClusterObject]:
         objects = set()
         for kind in CLUSTER_KINDS:
             api, method, _ = self._METHODS[kind]
             for item in getattr(self._api(api), method)().items:
                 objects.add(ClusterObject(kind, item.metadata.name))
+        for namespace in sorted(namespaces):
+            for kind in NAMESPACED_KINDS:
+                api, resource = self._NAMESPACED[kind]
+                for item in getattr(self._api(api), f"list_namespaced_{resource}")(namespace).items:
+                    objects.add(ClusterObject(kind, item.metadata.name, namespace))
         return frozenset(objects)
 
     def delete(self, obj: ClusterObject) -> None:
         from kubernetes.client.rest import ApiException
 
-        api, _, method = self._METHODS[obj.kind]
         try:
+            if obj.namespace:
+                api, resource = self._NAMESPACED[obj.kind]
+                getattr(self._api(api), f"delete_namespaced_{resource}")(name=obj.name, namespace=obj.namespace)
+                return
+            api, _, method = self._METHODS[obj.kind]
             getattr(self._api(api), method)(name=obj.name)
         except ApiException as exc:
             if exc.status != 404:

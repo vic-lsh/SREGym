@@ -23,7 +23,7 @@ from sregym.conductor.problems.composite import (
 )
 from sregym.utils.decorators import mark_fault_injected
 
-EMPTY_INVENTORY = SimpleNamespace(list_objects=frozenset, delete=lambda obj: None)
+EMPTY_INVENTORY = SimpleNamespace(list_objects=lambda namespaces: frozenset(), delete=lambda obj: None)
 
 
 class _App:

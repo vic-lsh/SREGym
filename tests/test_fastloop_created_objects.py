@@ -35,7 +35,7 @@ class FakeInventory:
     unlistable: bool = False
     _terminating: dict[ClusterObject, int] = field(default_factory=dict)
 
-    def list_objects(self):
+    def list_objects(self, namespaces=frozenset()):
         if self.unlistable:
             raise RuntimeError("synthetic list failure")
         for obj in list(self._terminating):
@@ -43,7 +43,7 @@ class FakeInventory:
             if self._terminating[obj] < 0:
                 del self._terminating[obj]
                 self.objects.discard(obj)
-        return frozenset(self.objects)
+        return frozenset(obj for obj in self.objects if not obj.namespace or obj.namespace in namespaces)
 
     def delete(self, obj):
         self.deleted.append(obj)
