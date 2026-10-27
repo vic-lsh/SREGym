@@ -1,6 +1,5 @@
 """Secret rotation stale environment credential problem for Astronomy Shop."""
 
-import base64
 import json
 import logging
 import shlex
@@ -21,6 +20,7 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
     """Rotate product-catalog database credentials without refreshing the running pod environment."""
 
     SOURCE_POD_UID_ANNOTATION = "credential-source-pod-uid"
+    SECRET_STATE_ANNOTATION = "credential-secret-state"
     _POSTGRES_ROTATION_ATTEMPTS = 3
     _POSTGRES_PASSWORD_CHECK_ATTEMPTS = 3
     _POSTGRES_PASSWORD_CHECK_INTERVAL_SECONDS = 3
@@ -91,6 +91,20 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
         )
 
         self._run("kubectl apply -f -", input_data=manifest)
+        self._mark_secret_state({self.old_conn: "old", self.new_conn: "new"}[conn_string])
+
+    def _mark_secret_state(self, state: str | None) -> None:
+        """Record which of the two known values the Secret holds, on the Deployment, so it is never read back."""
+        self.kubectl.apps_v1_api.patch_namespaced_deployment(
+            name=self.faulty_service,
+            namespace=self.namespace,
+            body={"metadata": {"annotations": {self.SECRET_STATE_ANNOTATION: state}}},
+        )
+
+    def _forget_secret(self) -> None:
+        """Delete the Secret and its state marker."""
+        self._run(f"kubectl delete secret {self.secret_name} -n {self.namespace} --ignore-not-found")
+        self._mark_secret_state(None)
 
     def _set_product_catalog_secret_env(self) -> None:
         """Make product-catalog read DB_CONNECTION_STRING from the Secret."""
@@ -305,15 +319,14 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
         return found
 
     def _get_secret_conn_string(self) -> str | None:
-        """Decode DB_CONNECTION_STRING from the Kubernetes Secret."""
-        output = self._run(f"kubectl get secret {self.secret_name} -n {self.namespace} -o json")
-        if "not found" in output.lower() or "error from server" in output.lower():
-            return None
-        secret = json.loads(output)
-        encoded = secret.get("data", {}).get(self.secret_key)
-        if not encoded:
-            return None
-        return base64.b64decode(encoded).decode("utf-8").strip()
+        """The connection string this problem last wrote to the Secret.
+
+        Only ``_apply_secret`` writes the Secret, always one of two known values, and it records which
+        on the Deployment. Credentials are never read back from the cluster, so the lane's metadata-only
+        Secret fence stays in force for the injector and the oracle.
+        """
+        annotations = self.kubectl.get_deployment(self.faulty_service, self.namespace).metadata.annotations or {}
+        return {"old": self.old_conn, "new": self.new_conn}.get(annotations.get(self.SECRET_STATE_ANNOTATION))
 
     def _recover_to_baseline(self) -> None:
         """Restore old DB credentials and restart product-catalog from a clean baseline."""
@@ -329,7 +342,7 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
         self._patch_postgresql_init_password(self.old_password)
         self._set_literal_db_clients_password(self.old_password)
         self._set_product_catalog_literal_env(self.old_conn)
-        self._run(f"kubectl delete secret {self.secret_name} -n {self.namespace} --ignore-not-found")
+        self._forget_secret()
         self._rollout_restart(self.faulty_service)
         self._clear_stale_product_catalog_pod_uid()
 

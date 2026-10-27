@@ -137,6 +137,7 @@ def test_real_credential_reset_is_idempotent_and_restores_seed_before_clients():
     problem._set_literal_db_clients_password = clients
     problem._set_product_catalog_literal_env = lambda _: events.append("restore-catalog")
     problem._run = lambda _: events.append("remove-secret")
+    problem._mark_secret_state = lambda state: events.append(f"secret-state-{state}")
     problem._rollout_restart = lambda _: events.append("rollout")
     problem._clear_stale_product_catalog_pod_uid = lambda: events.append("clear-marker")
     problem.recover_to_baseline()
@@ -144,7 +145,16 @@ def test_real_credential_reset_is_idempotent_and_restores_seed_before_clients():
     assert (
         events
         == ["reset-backend"]
-        + ["restore-init", "restore-clients", "restore-catalog", "remove-secret", "rollout", "clear-marker"] * 2
+        + [
+            "restore-init",
+            "restore-clients",
+            "restore-catalog",
+            "remove-secret",
+            "secret-state-None",
+            "rollout",
+            "clear-marker",
+        ]
+        * 2
     )
 
 

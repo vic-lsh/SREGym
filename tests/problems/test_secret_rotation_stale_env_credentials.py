@@ -126,3 +126,38 @@ def test_ambiguous_rotation_response_is_accepted_after_password_verification():
     problem._rotate_postgres_password("old-password", "new-password")
 
     assert len(calls) == 1
+
+
+def _never_reads_secret(problem, commands):
+    def run(command, input_data=None):
+        assert " get secret" not in command, command
+        commands.append(command)
+        return "secret/product-catalog-db-conn configured"
+
+    problem._run = run
+
+
+def test_secret_value_is_known_from_a_deployment_marker_not_read_back():
+    kubectl = _KubeCtl()
+    problem = _problem(kubectl)
+    commands = []
+    _never_reads_secret(problem, commands)
+
+    assert problem._get_secret_conn_string() is None
+    problem._apply_secret(problem.old_conn)
+    assert problem._get_secret_conn_string() == problem.old_conn
+    problem._apply_secret(problem.new_conn)
+    # A fresh instance (another worker request) sees the same value from the cluster marker.
+    assert _problem(kubectl)._get_secret_conn_string() == problem.new_conn
+    assert not any(" get secret" in command for command in commands)
+
+
+def test_deleting_the_secret_clears_the_marker():
+    kubectl = _KubeCtl()
+    problem = _problem(kubectl)
+    _never_reads_secret(problem, [])
+    problem._apply_secret(problem.new_conn)
+
+    problem._forget_secret()
+
+    assert problem._get_secret_conn_string() is None
