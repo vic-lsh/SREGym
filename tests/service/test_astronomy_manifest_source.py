@@ -29,7 +29,46 @@ def test_astronomy_deploy_consumes_accepted_manifest_plan(monkeypatch, tmp_path)
     app.deploy()
     import shlex
 
-    argv = shlex.split(app.kubectl.exec_command.call_args.args[0])
+    argv = shlex.split(app.kubectl.exec_command_checked.call_args.args[0])
     assert argv == ["kubectl", "apply", "-f", str(manifest), "-n", app.namespace]
     assert manifest.read_text().endswith("relay: accepted bytes\n")
     install.assert_not_called()
+
+
+def test_astronomy_manifest_apply_failure_stops_before_readiness(monkeypatch, tmp_path):
+    """A healthy old namespace cannot mask rejected or partially applied source."""
+    import importlib
+    import subprocess
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    import pytest
+
+    astronomy = importlib.import_module("sregym.service.apps.astronomy_shop")
+    kubectl = importlib.import_module("sregym.service.kubectl")
+    manifest = tmp_path / "accepted source.yaml"
+    manifest.write_text("synthetic manifest")
+    monkeypatch.setattr(astronomy, "source_deploy_enabled", lambda: True)
+    monkeypatch.setattr(
+        astronomy, "plan_for_app", lambda *a, **kw: nullcontext(SimpleNamespace(manifest_path=manifest))
+    )
+    readiness = Mock()
+    monkeypatch.setattr(astronomy.Helm, "assert_if_deployed", readiness)
+    app = astronomy.AstronomyShop.__new__(astronomy.AstronomyShop)
+    app.namespace = "astronomy-shop"
+    app.helm_configs = {"namespace": app.namespace}
+    app.kubectl = kubectl.KubeCtl.__new__(kubectl.KubeCtl)
+    monkeypatch.setattr(app.kubectl, "create_namespace_if_not_exist", Mock())
+    monkeypatch.setattr(app.kubectl, "get_node_architectures", lambda: {"amd64"})
+
+    def reject(command, **kwargs):
+        raise subprocess.CalledProcessError(
+            1, command, output=b"configmap/first configured", stderr=b'Deployment "synthetic-api": field is immutable'
+        )
+
+    monkeypatch.setattr(kubectl.subprocess, "run", reject)
+    with pytest.raises(RuntimeError, match='Deployment "synthetic-api": field is immutable') as error:
+        app.deploy()
+    assert str(manifest) in str(error.value)
+    readiness.assert_not_called()

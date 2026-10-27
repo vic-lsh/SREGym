@@ -59,7 +59,7 @@ class AstronomyShop(Application):
         if source_deploy_enabled():
             with plan_for_app(self, node_architectures=self.kubectl.get_node_architectures()) as plan:
                 if plan.manifest_path is not None:
-                    self.kubectl.exec_command(
+                    self.kubectl.exec_command_checked(
                         f"kubectl apply -f {shlex.quote(str(plan.manifest_path))} -n {shlex.quote(self.namespace)}"
                     )
                 else:
