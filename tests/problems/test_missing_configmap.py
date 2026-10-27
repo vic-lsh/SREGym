@@ -131,23 +131,13 @@ def test_each_hotel_variant_targets_a_configmap_its_source_manifest_mounts(servi
         assert injector.required_configmap(service) in _mounted_configmaps(manifest)
 
 
-def test_hotel_reservation_creates_every_required_configmap():
-    from sregym.service.apps.hotel_reservation import HotelReservation
+def test_hotel_source_declares_every_required_configmap():
+    import subprocess
 
-    created = []
-
-    class _KubeCtlRecorder:
-        def create_or_update_configmap(self, name, namespace, data):
-            created.append(name)
-
-    app = HotelReservation.__new__(HotelReservation)
-    app.kubectl = _KubeCtlRecorder()
-    app.namespace = "hotel-reservation"
-    app._prepare_configmap_data = lambda files: {name: "" for name in files}
-
-    app.create_configmaps()
-
-    assert set(VirtualizationFaultInjector.REQUIRED_CONFIGMAPS["hotel-reservation"].values()) <= set(created)
+    source = TARGET_MICROSERVICES / "hotelReservation/kubernetes"
+    rendered = subprocess.run(["kubectl", "kustomize", str(source)], check=True, capture_output=True, text=True).stdout
+    declared = {obj["metadata"]["name"] for obj in yaml.safe_load_all(rendered) if obj["kind"] == "ConfigMap"}
+    assert set(VirtualizationFaultInjector.REQUIRED_CONFIGMAPS["hotel-reservation"].values()) <= declared
 
 
 def test_original_problem_keeps_its_ground_truth(offline_problem):
