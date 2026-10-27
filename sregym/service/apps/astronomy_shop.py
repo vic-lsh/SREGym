@@ -1,6 +1,7 @@
 """Interface to the OpenTelemetry Astronomy Shop application"""
 
 import json
+import shlex
 from typing import Any
 
 from sregym.generators.workload.locust import LocustWorkloadManager
@@ -57,9 +58,14 @@ class AstronomyShop(Application):
 
         if source_deploy_enabled():
             with plan_for_app(self, node_architectures=self.kubectl.get_node_architectures()) as plan:
-                helm_configs = dict(self.helm_configs)
-                helm_configs["extra_args"] = [*self.helm_configs["extra_args"], *plan.helm_extra_args]
-                Helm.install(**helm_configs)
+                if plan.manifest_path is not None:
+                    self.kubectl.exec_command(
+                        f"kubectl apply -f {shlex.quote(str(plan.manifest_path))} -n {shlex.quote(self.namespace)}"
+                    )
+                else:
+                    helm_configs = dict(self.helm_configs)
+                    helm_configs["extra_args"] = [*self.helm_configs["extra_args"], *plan.helm_extra_args]
+                    Helm.install(**helm_configs)
         else:
             Helm.install(**self.helm_configs)
         Helm.assert_if_deployed(self.helm_configs["namespace"])

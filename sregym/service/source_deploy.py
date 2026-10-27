@@ -261,8 +261,11 @@ class _AstronomyShopAdapter(_BaseAdapter):
     @contextlib.contextmanager
     def plan(self, *, cluster_name: str, node_architectures: set[str]):
         self.ensure_images_loaded(cluster_name=cluster_name, node_architectures=node_architectures)
-        # No image override: the chart renders its appVersion tag plus the component name, as the source declares.
-        yield SourceDeploymentPlan()
+        # Accepted seeds carry the exact rendered deployment SDO compares.
+        # Re-rendering the independently pinned harness chart drops source-owned
+        # policy (init resources, config bytes, checksums and service metadata).
+        manifest = self._source_dir() / "kubernetes" / "astronomy-shop.yaml"
+        yield SourceDeploymentPlan(manifest_path=manifest if manifest.is_file() else None)
 
 
 _SUPPORTED_ADAPTERS: dict[str, _BaseAdapter] = {

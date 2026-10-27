@@ -14,8 +14,11 @@ git -C SREGym-applications submodule update --init astronomy-shop
 `astronomy_shop` is supported by the normal application-workspace API.
 Unseeded workspaces copy the pinned application source and start a fresh Git
 repository. Seeded workspaces retain their own accepted repository; source
-builds honor `SREGYM_APP_SOURCE_DIR`. Chart resolution continues to use the
-harness chart, since upstream application source does not contain that chart.
+builds honor `SREGYM_APP_SOURCE_DIR`. When the accepted source contains `kubernetes/astronomy-shop.yaml`, source deployment
+applies that exact file. It must not re-render the harness chart with different
+overlays: SDO compares the accepted manifest bytes, including resource policy and
+ConfigMap data. Unseeded upstream workspaces without that file retain the pinned
+harness chart path.
 
 Fresh evaluation workspaces add `NU1901`–`NU1904` to .NET's
 `WarningsNotAsErrors` for accounting and cart before the initial Git snapshot.
@@ -33,9 +36,8 @@ component Dockerfiles and pinned Java/C++ instrumentation build arguments.
 `SREGYM_DOCKER_BUILDER` selects an existing buildx builder; the existing opt-in
 `SREGYM_SOURCE_BUILD_CACHE` caches unchanged contexts.
 
-The chart's `default.image.tag` changes to the source-build tag. Its component
-suffix rule selects each locally built image without replacing chart lists or
-container configuration. Namespace, service names, feature flags, ports,
+The lane-private build tag is published on the nodes under the source-declared
+`2.2.0-<component>` tag. Deployment retains the source's image references. Namespace, service names, feature flags, ports,
 Kafka/Valkey/PostgreSQL, load generator, and observability topology are retained.
 The normal deploy settings still disable bundled Prometheus and browser traffic.
 Infrastructure and helper images retain their original chart pins.
