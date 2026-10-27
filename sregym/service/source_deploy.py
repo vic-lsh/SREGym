@@ -395,6 +395,10 @@ def _declare_image(*, cluster_name: str, built_ref: str, declared_tag: str) -> N
 
 
 def _write_kustomization_for_directory(base_dir: Path) -> None:
+    # Source declarations own resource selection and generator inputs. Only
+    # legacy sources without a declaration need a synthesized resource list.
+    if any((base_dir / name).is_file() for name in ("kustomization.yaml", "kustomization.yml", "Kustomization")):
+        return
     resources = sorted(
         str(path.relative_to(base_dir))
         for path in base_dir.rglob("*")

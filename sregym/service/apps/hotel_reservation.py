@@ -58,24 +58,6 @@ class HotelReservation(Application):
         "remove-mitigate-admin-geo-mongo.sh",
     ]
 
-    def create_configmaps(self):
-        """Create configmaps for the hotel reservation application.
-
-        The failure-admin-{geo,rate} ConfigMaps are made by ``populate_failure_configmaps``,
-        as ``failure_scripts`` says.
-        """
-        self.kubectl.create_or_update_configmap(
-            name="mongo-rate-script",
-            namespace=self.namespace,
-            data=self._prepare_configmap_data(["k8s-rate-mongo.sh"]),
-        )
-
-        self.kubectl.create_or_update_configmap(
-            name="mongo-geo-script",
-            namespace=self.namespace,
-            data=self._prepare_configmap_data(["k8s-geo-mongo.sh"]),
-        )
-
     def populate_failure_configmaps(self):
         """Create/fill failure-admin-{geo,rate} configmaps with fault scripts (noise)."""
         self.kubectl.create_or_update_configmap(
@@ -134,12 +116,11 @@ class HotelReservation(Application):
         """Deploy the Kubernetes configurations."""
         self.logger.info(f"Deploying Kubernetes configurations in namespace: {self.namespace}")
         self.create_namespace()
-        self.create_configmaps()
         if source_deploy_enabled():
             with plan_for_app(self) as plan:
                 self.kubectl.exec_command(f"kubectl apply -k {plan.manifest_path} -n {self.namespace}")
         else:
-            self.kubectl.apply_configs(self.namespace, self.k8s_deploy_path)
+            self.kubectl.exec_command(f"kubectl apply -k {self.k8s_deploy_path} -n {self.namespace}")
         if self.failure_scripts is not FailureScripts.ABSENT:
             self.populate_failure_configmaps()
         if self.failure_scripts is FailureScripts.MOUNTED:
@@ -148,7 +129,7 @@ class HotelReservation(Application):
 
     def delete(self):
         """Delete the configmap."""
-        self.kubectl.delete_configs(self.namespace, self.k8s_deploy_path)
+        self.kubectl.exec_command(f"kubectl delete -k {self.k8s_deploy_path} -n {self.namespace}")
 
     def cleanup(self):
         """Delete the entire namespace for the hotel reservation application."""
