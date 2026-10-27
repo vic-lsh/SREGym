@@ -3,25 +3,19 @@
 import contextlib
 import json
 import logging
+import os
 import subprocess
 import time
+
+from kubernetes import client, config, dynamic
+from kubernetes.client import api_client
+from kubernetes.client.rest import ApiException
+
+from logger import console
 
 logger = logging.getLogger("all.infra.kubectl")
 logger.propagate = True
 logger.setLevel(logging.DEBUG)
-
-try:
-    from kubernetes import client, config
-except ModuleNotFoundError:
-    logger.error("Your Kubeconfig is missing. Please set up a cluster.")
-    exit(1)
-import os  # noqa: E402
-
-from kubernetes import dynamic  # noqa: E402
-from kubernetes.client import api_client  # noqa: E402
-from kubernetes.client.rest import ApiException  # noqa: E402
-
-from logger import console  # noqa: E402
 
 WAIT_FOR_POD_READY_TIMEOUT = int(os.getenv("WAIT_FOR_POD_READY_TIMEOUT", "600"))
 # A pod that cannot pull its image for this long (e.g. registry rate limits, a
