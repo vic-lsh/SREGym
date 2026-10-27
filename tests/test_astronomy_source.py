@@ -38,6 +38,7 @@ def test_astronomy_plan_builds_every_demo_component_and_preserves_chart(tmp_path
         source_deploy, "_build_image", lambda ref, cmd, *, context_dir: builds.append((ref, cmd, context_dir))
     )
     monkeypatch.setattr(source_deploy, "_kind_load_image", lambda **kw: loads.append(kw))
+    monkeypatch.setattr(source_deploy, "tag_image_in_kind_nodes", lambda *args: None)
     with source_deploy.plan_for_app(SimpleNamespace(name=APP), node_architectures={"amd64"}) as plan:
         args = plan.helm_extra_args
         assert plan.manifest_path is None
@@ -47,10 +48,8 @@ def test_astronomy_plan_builds_every_demo_component_and_preserves_chart(tmp_path
             assert context == source
             assert str(source) == command[-1]
             assert "--build-arg" in command or ref.endswith(("-ad", "-currency", "-fraud-detection", "-kafka")) is False
-        rendered_values = dict(arg.split("=", 1) for arg in args if "=" in arg)
-        assert rendered_values["default.image.tag"].startswith("sregym-src-")
-        assert len(rendered_values) == 1
-        assert not any("enabled=" in arg or "envOverrides" in arg for arg in args)
+        # The chart renders the tag the source declares; nothing is overridden.
+        assert args == ()
         assert not any("valkey" in ref or "postgres" in ref or "grafana" in ref for ref, _, _ in builds)
     with source_deploy.plan_for_app(SimpleNamespace(name=APP), node_architectures={"amd64"}):
         assert len(builds) == 20
@@ -60,6 +59,7 @@ def test_astronomy_custom_cart_dockerfile_and_build_arguments(monkeypatch, tmp_p
     monkeypatch.setenv("SREGYM_APP_SOURCE_DIR", str(tmp_path))
     monkeypatch.setattr(source_deploy, "_BUILT_IMAGES", set())
     monkeypatch.setattr(source_deploy, "_kind_load_image", lambda **kw: None)
+    monkeypatch.setattr(source_deploy, "tag_image_in_kind_nodes", lambda *args: None)
     builds = []
     monkeypatch.setattr(source_deploy, "_build_image", lambda ref, cmd, **kw: builds.append((ref, cmd)))
     source_deploy._AstronomyShopAdapter().ensure_images_loaded(cluster_name="lane", node_architectures={"amd64"})
@@ -100,6 +100,7 @@ def test_astronomy_deploy_preserves_settings_with_source_images(tmp_path, monkey
     monkeypatch.setattr(source_deploy, "_BUILT_IMAGES", set())
     monkeypatch.setattr(source_deploy, "_build_image", lambda *args, **kwargs: None)
     monkeypatch.setattr(source_deploy, "_kind_load_image", lambda **kwargs: None)
+    monkeypatch.setattr(source_deploy, "tag_image_in_kind_nodes", lambda *args: None)
     installs = []
     monkeypatch.setattr(astronomy_shop.Helm, "install", lambda **kwargs: installs.append(kwargs))
     monkeypatch.setattr(astronomy_shop.Helm, "assert_if_deployed", lambda namespace: True)
@@ -114,6 +115,6 @@ def test_astronomy_deploy_preserves_settings_with_source_images(tmp_path, monkey
     args = installs[0]["extra_args"]
     assert "prometheus.enabled=false" in args
     assert "components.load-generator.envOverrides[0].value=false" in args
-    assert any(arg.startswith("default.image.tag=sregym-src-") for arg in args)
+    assert not any("image" in arg for arg in args)
     assert installs[0]["namespace"] == "astronomy-shop"
     assert not any(arg.startswith("default.image.tag=") for arg in app.helm_configs["extra_args"])

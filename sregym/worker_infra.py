@@ -150,6 +150,16 @@ def _containerd_image_name(image: str) -> str:
     return image
 
 
+def tag_image_in_kind_nodes(cluster_name: str, source_ref: str, target_ref: str) -> None:
+    """Make every node of the kind cluster resolve ``target_ref`` to its already loaded ``source_ref``.
+
+    The tag lives only in the cluster's own containerd store, so lanes sharing a Docker daemon never see it.
+    """
+    source, target = _containerd_image_name(source_ref), _containerd_image_name(target_ref)
+    for node in _kind_nodes(cluster_name):
+        _run(["docker", "exec", node, "ctr", "--namespace=k8s.io", "images", "tag", "--force", source, target])
+
+
 def _node_digests(node: str, image: str) -> set[str]:
     ref = _node_image_ref(image)
     result = _run(["docker", "exec", node, "crictl", "inspecti", ref])

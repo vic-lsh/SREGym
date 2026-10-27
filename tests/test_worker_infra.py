@@ -357,3 +357,32 @@ def test_new_worker_clusters_attach_to_the_registry_caches_only_when_they_run(mo
     worker_infra.attach_registry_caches("sregym-w0")
     assert calls[-1][0] == "bash" and calls[-1][-2:] == ["attach", "sregym-w0"]
     assert calls[-1][1].endswith("kind/regcache.sh")
+
+
+def test_tag_image_in_kind_nodes_tags_inside_every_node_only(monkeypatch):
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        stdout = "n-a\nn-b\n" if command[:3] == ["kind", "get", "nodes"] else ""
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(worker_infra.subprocess, "run", run)
+
+    worker_infra.tag_image_in_kind_nodes("lane", "org/app:sregym-src-lane", "org/app:latest")
+
+    assert commands[1:] == [
+        [
+            "docker",
+            "exec",
+            node,
+            "ctr",
+            "--namespace=k8s.io",
+            "images",
+            "tag",
+            "--force",
+            "docker.io/org/app:sregym-src-lane",
+            "docker.io/org/app:latest",
+        ]
+        for node in ("n-a", "n-b")
+    ]

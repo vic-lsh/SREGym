@@ -17,26 +17,21 @@ import yaml
 
 from sregym.paths import TARGET_MICROSERVICES
 from sregym.service.app_workspace import _astronomy_source_root, resolve_app_source_subdir
-from sregym.worker_infra import kind_nodes_hold_image
+from sregym.worker_infra import kind_nodes_hold_image, tag_image_in_kind_nodes
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _HOTEL_IMAGE_NAME = "yinfangchen/hotelreservation"
+# The tags the application source declares (hotel manifests, social chart values). A source build is built and
+# loaded under a lane-private tag, then published on the nodes under the declared ref, so the deployed Deployments
+# carry exactly what the source says and SDO's accepted source has nothing to explain at time zero.
+_HOTEL_DECLARED_TAG = "latest"
+_SOCIAL_APP_DECLARED_TAG = "latest"
+_SOCIAL_NGINX_DECLARED_TAG = "xenial"
+_SOCIAL_MEDIA_DECLARED_TAG = "xenial"
+_ASTRONOMY_DECLARED_TAG = "2.2.0"  # the chart appVersion; the chart appends the component name
 _SOCIAL_APP_IMAGE_NAME = "deathstarbench/social-network-microservices"
 _SOCIAL_NGINX_IMAGE_NAME = "yg397/openresty-thrift"
 _SOCIAL_MEDIA_IMAGE_NAME = "yg397/media-frontend"
-_SOCIAL_MICROSERVICE_CHARTS = (
-    "compose-post-service",
-    "home-timeline-service",
-    "media-service",
-    "post-storage-service",
-    "social-graph-service",
-    "text-service",
-    "unique-id-service",
-    "url-shorten-service",
-    "user-mention-service",
-    "user-service",
-    "user-timeline-service",
-)
 _BUILT_IMAGES: set[tuple[str, str]] = set()
 # Opt-in (SREGYM_SOURCE_BUILD_CACHE): images carry the digest of their build
 # context, and an unchanged context reuses the local image instead of rebuilding.
@@ -103,6 +98,7 @@ class _HotelReservationAdapter(_BaseAdapter):
             context_dir=source_dir,
         )
         _kind_load_image(cluster_name=cluster_name, image_ref=image_ref)
+        _declare_image(cluster_name=cluster_name, built_ref=image_ref, declared_tag=_HOTEL_DECLARED_TAG)
         _BUILT_IMAGES.add((cluster_name, image_ref))
 
     @contextlib.contextmanager
@@ -113,32 +109,13 @@ class _HotelReservationAdapter(_BaseAdapter):
         node_architectures: set[str],
     ):
         self.ensure_images_loaded(cluster_name=cluster_name, node_architectures=node_architectures)
-        tag = source_image_tag(self.app_name, cluster_name)
         temp_dir = Path(tempfile.mkdtemp(prefix="sregym-hotel-src-"))
         try:
-            source_dir = self._source_dir()
             base_dir = temp_dir / "base"
-            overlay_dir = temp_dir / "overlay"
-            shutil.copytree(source_dir / "kubernetes", base_dir)
+            shutil.copytree(self._source_dir() / "kubernetes", base_dir)
             _write_kustomization_for_directory(base_dir)
-            overlay_dir.mkdir(parents=True, exist_ok=True)
-            kustomization = {
-                "apiVersion": "kustomize.config.k8s.io/v1beta1",
-                "kind": "Kustomization",
-                "resources": ["../base"],
-                "images": [
-                    {
-                        "name": _HOTEL_IMAGE_NAME,
-                        "newName": _HOTEL_IMAGE_NAME,
-                        "newTag": tag,
-                    }
-                ],
-            }
-            (overlay_dir / "kustomization.yaml").write_text(
-                yaml.safe_dump(kustomization, sort_keys=False),
-                encoding="utf-8",
-            )
-            yield SourceDeploymentPlan(manifest_path=overlay_dir)
+            # No image override: the manifests are applied as the source declares them.
+            yield SourceDeploymentPlan(manifest_path=base_dir)
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -173,6 +150,7 @@ class _SocialNetworkAdapter(_BaseAdapter):
                     str(source_dir),
                 ],
                 source_dir,
+                _SOCIAL_APP_DECLARED_TAG,
             ),
             (
                 f"{_SOCIAL_NGINX_IMAGE_NAME}:{tag}",
@@ -186,6 +164,7 @@ class _SocialNetworkAdapter(_BaseAdapter):
                     str(nginx_dir),
                 ],
                 nginx_dir,
+                _SOCIAL_NGINX_DECLARED_TAG,
             ),
             (
                 f"{_SOCIAL_MEDIA_IMAGE_NAME}:{tag}",
@@ -199,13 +178,15 @@ class _SocialNetworkAdapter(_BaseAdapter):
                     str(media_dir),
                 ],
                 media_dir,
+                _SOCIAL_MEDIA_DECLARED_TAG,
             ),
         )
-        for image_ref, command, context_dir in build_steps:
+        for image_ref, command, context_dir, declared_tag in build_steps:
             if (cluster_name, image_ref) in _BUILT_IMAGES:
                 continue
             _build_image(image_ref, command, context_dir=context_dir)
             _kind_load_image(cluster_name=cluster_name, image_ref=image_ref)
+            _declare_image(cluster_name=cluster_name, built_ref=image_ref, declared_tag=declared_tag)
             _BUILT_IMAGES.add((cluster_name, image_ref))
 
     @contextlib.contextmanager
@@ -216,30 +197,8 @@ class _SocialNetworkAdapter(_BaseAdapter):
         node_architectures: set[str],
     ):
         self.ensure_images_loaded(cluster_name=cluster_name, node_architectures=node_architectures)
-        tag = source_image_tag(self.app_name, cluster_name)
-        helm_args = []
-        for chart in _SOCIAL_MICROSERVICE_CHARTS:
-            helm_args.extend(
-                [
-                    "--set-string",
-                    f"{chart}.container.image={_SOCIAL_APP_IMAGE_NAME}",
-                    "--set-string",
-                    f"{chart}.container.imageVersion={tag}",
-                ]
-            )
-        helm_args.extend(
-            [
-                "--set-string",
-                f"nginx-thrift.container.image={_SOCIAL_NGINX_IMAGE_NAME}",
-                "--set-string",
-                f"nginx-thrift.container.imageVersion={tag}",
-                "--set-string",
-                f"media-frontend.container.image={_SOCIAL_MEDIA_IMAGE_NAME}",
-                "--set-string",
-                f"media-frontend.container.imageVersion={tag}",
-            ]
-        )
-        yield SourceDeploymentPlan(helm_extra_args=tuple(helm_args))
+        # No image or tag override: the chart renders the refs the source declares.
+        yield SourceDeploymentPlan()
 
 
 class _AstronomyShopAdapter(_BaseAdapter):
@@ -292,19 +251,18 @@ class _AstronomyShopAdapter(_BaseAdapter):
             command.append(str(source_dir))
             _build_image(image, command, context_dir=source_dir)
             _kind_load_image(cluster_name=cluster_name, image_ref=image)
+            _declare_image(
+                cluster_name=cluster_name,
+                built_ref=image,
+                declared_tag=f"{_ASTRONOMY_DECLARED_TAG}-{component}",
+            )
             _BUILT_IMAGES.add((cluster_name, image))
 
     @contextlib.contextmanager
     def plan(self, *, cluster_name: str, node_architectures: set[str]):
         self.ensure_images_loaded(cluster_name=cluster_name, node_architectures=node_architectures)
-        # The chart appends the component name, including the flagd-ui sidecar.
-        # A single default override preserves every other value and list entry.
-        yield SourceDeploymentPlan(
-            helm_extra_args=(
-                "--set-string",
-                f"default.image.tag={source_image_tag(self.app_name, cluster_name)}",
-            )
-        )
+        # No image override: the chart renders its appVersion tag plus the component name, as the source declares.
+        yield SourceDeploymentPlan()
 
 
 _SUPPORTED_ADAPTERS: dict[str, _BaseAdapter] = {
@@ -425,6 +383,12 @@ def _kind_load_image(*, cluster_name: str, image_ref: str) -> None:
         print(f"Skipping kind load of {image_ref}: every node already holds it")
         return
     _run_command(["kind", "load", "docker-image", image_ref, "--name", cluster_name])
+
+
+def _declare_image(*, cluster_name: str, built_ref: str, declared_tag: str) -> None:
+    """Publish the lane-built image on the nodes under the tag the source declares (idempotent)."""
+    repository = built_ref.rpartition(":")[0]
+    tag_image_in_kind_nodes(cluster_name, built_ref, f"{repository}:{declared_tag}")
 
 
 def _write_kustomization_for_directory(base_dir: Path) -> None:

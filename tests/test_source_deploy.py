@@ -1,8 +1,11 @@
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+import yaml
 
+from sregym.paths import TARGET_MICROSERVICES
 from sregym.service import source_deploy
 
 
@@ -51,6 +54,8 @@ class FakeDocker:
             if ref not in self.labels:
                 return subprocess.CompletedProcess(command, 1, stdout="", stderr="No such image")
             return subprocess.CompletedProcess(command, 0, stdout=self.labels[ref] + "\n", stderr="")
+        if command[:3] == ["kind", "get", "nodes"]:
+            return subprocess.CompletedProcess(command, 0, stdout="fastloop-w0-control-plane\n", stderr="")
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     def kinds(self) -> list[str]:
@@ -81,7 +86,7 @@ def test_unchanged_build_context_skips_the_rebuild_but_still_loads_the_cluster(h
     adapter.ensure_images_loaded(cluster_name="fastloop-w0", node_architectures=set())
 
     assert docker.kinds()[0] == "docker image inspect"
-    assert docker.kinds()[-1] == "kind load docker-image"
+    assert "kind load docker-image" in docker.kinds()
 
 
 def test_unchanged_build_context_skips_the_kind_load_when_every_node_holds_the_image(hotel, monkeypatch) -> None:
@@ -92,7 +97,8 @@ def test_unchanged_build_context_skips_the_kind_load_when_every_node_holds_the_i
 
     adapter.ensure_images_loaded(cluster_name="fastloop-w0", node_architectures=set())
 
-    assert docker.kinds() == ["docker image inspect"]
+    assert "kind load docker-image" not in docker.kinds()
+    assert docker.kinds()[-1] == "docker exec fastloop-w0-control-plane"
 
 
 def test_changed_build_context_rebuilds_with_the_digest_label(hotel, monkeypatch) -> None:
@@ -105,7 +111,7 @@ def test_changed_build_context_rebuilds_with_the_digest_label(hotel, monkeypatch
     build = next(command for command in docker.commands if command[:2] == ["docker", "build"])
     assert f"sregym.source-digest={source_deploy.source_context_digest(source)}" in build
     assert build[build.index("--label") + 1].startswith("sregym.source-digest=")
-    assert docker.kinds()[-1] == "kind load docker-image"
+    assert "kind load docker-image" in docker.kinds()
 
 
 def test_build_cache_is_opt_in(hotel, monkeypatch) -> None:
@@ -114,7 +120,7 @@ def test_build_cache_is_opt_in(hotel, monkeypatch) -> None:
 
     adapter.ensure_images_loaded(cluster_name="fastloop-w0", node_architectures=set())
 
-    assert docker.kinds() == ["docker build -t", "kind load docker-image"]
+    assert docker.kinds()[:2] == ["docker build -t", "kind load docker-image"]
     assert "--label" not in docker.commands[0]
 
 
@@ -125,4 +131,89 @@ def test_kind_load_is_unconditional_without_the_build_cache(hotel, monkeypatch) 
 
     adapter.ensure_images_loaded(cluster_name="fastloop-w0", node_architectures=set())
 
-    assert docker.kinds()[-1] == "kind load docker-image"
+    assert "kind load docker-image" in docker.kinds()
+
+
+def _exec_tags(docker: FakeDocker) -> list[tuple[str, str]]:
+    """(source, target) of every in-node `ctr images tag` the deploy ran."""
+    return [(command[-2], command[-1]) for command in docker.commands if command[-5:-2] == ["images", "tag", "--force"]]
+
+
+def test_hotel_source_build_is_published_under_the_declared_ref_and_deployed_unchanged(hotel) -> None:
+    source, docker, adapter = hotel
+    (source / "kubernetes").mkdir()
+    manifest = "image: yinfangchen/hotelreservation:latest\n"
+    (source / "kubernetes" / "frontend.yaml").write_text(manifest)
+
+    with adapter.plan(cluster_name="fastloop-w0", node_architectures=set()) as plan:
+        rendered = (plan.manifest_path / "frontend.yaml").read_text()
+        kustomization = yaml.safe_load((plan.manifest_path / "kustomization.yaml").read_text())
+
+    assert rendered == manifest
+    assert "images" not in kustomization
+    assert _exec_tags(docker) == [
+        (
+            "docker.io/" + _image_ref(),
+            "docker.io/yinfangchen/hotelreservation:latest",
+        )
+    ]
+    assert docker.commands[-1][:4] == ["docker", "exec", "fastloop-w0-control-plane", "ctr"]
+
+
+def test_every_source_adapter_deploys_what_the_source_declares(monkeypatch, tmp_path: Path) -> None:
+    """Class guard: a lane-private tag never reaches a deployed ref.
+
+    SDO accepts the app source as the desired state and reconciles toward it, so a deploy that substitutes any
+    image or tag is unexplained drift at time zero (and is reverted by the first reconcile).
+    """
+    monkeypatch.setenv("SREGYM_APP_SOURCE_DIR", str(tmp_path))
+    monkeypatch.setenv("SREGYM_KIND_CLUSTER_NAME", "fastloop-w0")
+    monkeypatch.setattr(source_deploy, "_BUILT_IMAGES", set())
+    monkeypatch.setattr(source_deploy, "_build_image", lambda *args, **kwargs: None)
+    monkeypatch.setattr(source_deploy, "_kind_load_image", lambda **kwargs: None)
+    (tmp_path / "kubernetes").mkdir()
+    tags: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        source_deploy, "tag_image_in_kind_nodes", lambda cluster, built, declared: tags.append((built, declared))
+    )
+
+    for app in source_deploy.all_declared_apps():
+        if not source_deploy.is_supported(app):
+            continue
+        tags.clear()
+        monkeypatch.setattr(source_deploy, "_BUILT_IMAGES", set())
+        with source_deploy.plan_for_app(SimpleNamespace(name=app), node_architectures={"amd64"}) as plan:
+            assert plan.helm_extra_args == (), app
+            if plan.manifest_path is not None:
+                kustomization = yaml.safe_load((plan.manifest_path / "kustomization.yaml").read_text())
+                assert "images" not in kustomization, app
+        assert tags, app
+        for built, declared in tags:
+            assert built.rpartition(":")[0] == declared.rpartition(":")[0], app
+            assert built.rpartition(":")[2].startswith("sregym-src-"), app
+            assert not declared.rpartition(":")[2].startswith("sregym-src-"), app
+
+
+@pytest.mark.skipif(
+    not (TARGET_MICROSERVICES / "socialNetwork" / "helm-chart").is_dir(), reason="SREGym-applications not checked out"
+)
+def test_declared_tags_match_the_application_sources() -> None:
+    social = TARGET_MICROSERVICES / "socialNetwork" / "helm-chart" / "socialnetwork"
+    values = yaml.safe_load((social / "values.yaml").read_text())
+    assert values["global"]["defaultImageVersion"] == source_deploy._SOCIAL_APP_DECLARED_TAG
+    for chart, expected in (
+        ("nginx-thrift", source_deploy._SOCIAL_NGINX_DECLARED_TAG),
+        ("media-frontend", source_deploy._SOCIAL_MEDIA_DECLARED_TAG),
+    ):
+        container = yaml.safe_load((social / "charts" / chart / "values.yaml").read_text())["container"]
+        assert container["imageVersion"] == expected, chart
+    hotel_images = {
+        line.split("image:", 1)[1].strip().lstrip("- ").strip()
+        for path in (TARGET_MICROSERVICES / "hotelReservation" / "kubernetes").rglob("*.yaml")
+        for line in path.read_text().splitlines()
+        if "image:" in line
+    }
+    assert f"{source_deploy._HOTEL_IMAGE_NAME}:{source_deploy._HOTEL_DECLARED_TAG}" in hotel_images
+    chart = TARGET_MICROSERVICES / "astronomy-shop" / "charts" / "opentelemetry-demo"
+    assert yaml.safe_load((chart / "Chart.yaml").read_text())["appVersion"] == source_deploy._ASTRONOMY_DECLARED_TAG
+    assert yaml.safe_load((chart / "values.yaml").read_text())["default"]["image"]["tag"] == ""
