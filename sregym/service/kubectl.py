@@ -107,18 +107,27 @@ def order_replicasets_current_first(replicasets: list, deployment_revision: int 
     return sorted(replicasets, key=key, reverse=True)
 
 
+class KubeConfigError(RuntimeError):
+    """The kubeconfig could not be loaded; the message names the file and the underlying error."""
+
+
 class KubeCtl:
     # Seam for tests: wait loops sleep through this, so a test can pass a fake clock.
     _sleep = staticmethod(time.sleep)
 
     def __init__(self):
         """Initialize the KubeCtl object and load the Kubernetes configuration."""
+        # KUBECONFIG as it is now: the kubernetes package's default froze it at import.
+        config_file = os.environ.get("KUBECONFIG") or "~/.kube/config"
         try:
-            # KUBECONFIG as it is now: the kubernetes package's default froze it at import.
-            config.load_kube_config(config_file=os.environ.get("KUBECONFIG") or "~/.kube/config")
-        except Exception:
-            logger.error("Missing kubeconfig. Please set up a cluster.")
-            exit(1)
+            config.load_kube_config(config_file=config_file)
+        except Exception as error:
+            # Any failure (unreadable file, no temp directory for certificate data, out of
+            # descriptors) lands here; the caller needs the real one, and an injection in
+            # progress must unwind through its cleanup instead of a process exit.
+            raise KubeConfigError(
+                f"could not load kubeconfig {config_file!r}: {type(error).__name__}: {error}"
+            ) from error
         self.core_v1_api = client.CoreV1Api()
         self.apps_v1_api = client.AppsV1Api()
 
