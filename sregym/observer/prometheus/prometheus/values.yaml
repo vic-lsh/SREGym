@@ -860,15 +860,15 @@ serverFiles:
 
             - alert: HighRequestErrorRate
               # Locust load generator error detection (train-ticket).
-              # Fires when any endpoint has failures and enough requests to be meaningful.
+              # Recent rates forget startup failures and earlier incidents; lifetime ratios never recover.
               expr: |
                 (
-                  locust_requests_num_failures{namespace="train-ticket", name!="Aggregated"}
+                  rate(locust_requests_num_failures{namespace="train-ticket", name!="Aggregated"}[2m])
                     /
-                  locust_requests_num_requests{namespace="train-ticket", name!="Aggregated"}
+                  rate(locust_requests_num_requests{namespace="train-ticket", name!="Aggregated"}[2m])
                 ) > 0.1
                   and
-                locust_requests_num_requests{namespace="train-ticket", name!="Aggregated"} > 0
+                rate(locust_requests_num_requests{namespace="train-ticket", name!="Aggregated"}[2m]) > 0
               for: 1m
               labels:
                 severity: critical
@@ -878,15 +878,15 @@ serverFiles:
 
             - alert: HighRequestErrorRate
               # Locust load generator error detection (astronomy-shop).
-              # Fires when any endpoint has failures and enough requests to be meaningful.
+              # Recent rates forget startup failures and earlier incidents; lifetime ratios never recover.
               expr: |
                 (
-                  locust_requests_num_failures{namespace="astronomy-shop", name!="Aggregated"}
+                  rate(locust_requests_num_failures{namespace="astronomy-shop", name!="Aggregated"}[2m])
                     /
-                  locust_requests_num_requests{namespace="astronomy-shop", name!="Aggregated"}
+                  rate(locust_requests_num_requests{namespace="astronomy-shop", name!="Aggregated"}[2m])
                 ) > 0.1
                   and
-                locust_requests_num_requests{namespace="astronomy-shop", name!="Aggregated"} > 0
+                rate(locust_requests_num_requests{namespace="astronomy-shop", name!="Aggregated"}[2m]) > 0
               for: 1m
               labels:
                 severity: critical
