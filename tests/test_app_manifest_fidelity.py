@@ -9,7 +9,8 @@ import yaml
 
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
-from sregym.service.source_deploy import _HotelReservationAdapter
+from sregym.service import source_deploy
+from types import SimpleNamespace
 
 
 @pytest.fixture
@@ -75,18 +76,15 @@ def test_source_deploy_preserves_app_documents_in_render_input(tmp_path, monkeyp
     manifests = source / "kubernetes"
     manifests.mkdir(parents=True)
     (manifests / "app.yaml").write_bytes(app_documents)
-    adapter = _HotelReservationAdapter()
-    monkeypatch.setattr(adapter, "_source_dir", lambda: source)
-    # Image builds are outside this rendering contract and must not run here.
-    monkeypatch.setattr(adapter, "ensure_images_loaded", lambda **kwargs: None)
-    with adapter.plan(cluster_name="fixture", node_architectures=set()) as plan:
-        assert (plan.manifest_path.parent / "base/app.yaml").read_bytes() == app_documents
-        rendered = subprocess.run(
-            ["kubectl", "kustomize", str(plan.manifest_path)], capture_output=True, check=True, text=True
-        ).stdout
-        actual = {doc["metadata"]["name"]: doc for doc in yaml.safe_load_all(rendered)}
-        expected = {doc["metadata"]["name"]: doc for doc in yaml.safe_load_all(app_documents)}
-        assert actual == expected
+    accepted = tmp_path / "accepted.yaml"
+    accepted.write_bytes(app_documents)
+    monkeypatch.setenv("SREGYM_ACCEPTED_RENDER", str(accepted))
+    monkeypatch.setenv("SREGYM_KIND_CLUSTER_NAME", "fixture")
+    monkeypatch.setattr(
+        source_deploy._SUPPORTED_ADAPTERS["Hotel Reservation"], "ensure_images_loaded", lambda **kw: None
+    )
+    with source_deploy.plan_for_app(SimpleNamespace(name="Hotel Reservation")) as plan:
+        assert plan.manifest_path.read_bytes() == app_documents
     assert (manifests / "app.yaml").read_bytes() == app_documents
 
 

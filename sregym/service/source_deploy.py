@@ -6,14 +6,11 @@ import contextlib
 import hashlib
 import os
 import re
-import shutil
 import subprocess
-import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
 
 from sregym.paths import TARGET_MICROSERVICES
 from sregym.service.app_workspace import _astronomy_source_root, resolve_app_source_subdir
@@ -57,16 +54,6 @@ class _BaseAdapter:
     def ensure_images_loaded(self, *, cluster_name: str, node_architectures: set[str]) -> None:
         raise NotImplementedError
 
-    @contextlib.contextmanager
-    def plan(
-        self,
-        *,
-        cluster_name: str,
-        node_architectures: set[str],
-    ):
-        self.ensure_images_loaded(cluster_name=cluster_name, node_architectures=node_architectures)
-        yield SourceDeploymentPlan()
-
 
 class _HotelReservationAdapter(_BaseAdapter):
     app_name = "Hotel Reservation"
@@ -100,24 +87,6 @@ class _HotelReservationAdapter(_BaseAdapter):
         _kind_load_image(cluster_name=cluster_name, image_ref=image_ref)
         _declare_image(cluster_name=cluster_name, built_ref=image_ref, declared_tag=_HOTEL_DECLARED_TAG)
         _BUILT_IMAGES.add((cluster_name, image_ref))
-
-    @contextlib.contextmanager
-    def plan(
-        self,
-        *,
-        cluster_name: str,
-        node_architectures: set[str],
-    ):
-        self.ensure_images_loaded(cluster_name=cluster_name, node_architectures=node_architectures)
-        temp_dir = Path(tempfile.mkdtemp(prefix="sregym-hotel-src-"))
-        try:
-            base_dir = temp_dir / "base"
-            shutil.copytree(self._source_dir() / "kubernetes", base_dir)
-            _write_kustomization_for_directory(base_dir)
-            # No image override: the manifests are applied as the source declares them.
-            yield SourceDeploymentPlan(manifest_path=base_dir)
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 class _SocialNetworkAdapter(_BaseAdapter):
@@ -189,17 +158,6 @@ class _SocialNetworkAdapter(_BaseAdapter):
             _declare_image(cluster_name=cluster_name, built_ref=image_ref, declared_tag=declared_tag)
             _BUILT_IMAGES.add((cluster_name, image_ref))
 
-    @contextlib.contextmanager
-    def plan(
-        self,
-        *,
-        cluster_name: str,
-        node_architectures: set[str],
-    ):
-        self.ensure_images_loaded(cluster_name=cluster_name, node_architectures=node_architectures)
-        # No image or tag override: the chart renders the refs the source declares.
-        yield SourceDeploymentPlan()
-
 
 class _AstronomyShopAdapter(_BaseAdapter):
     app_name = "OpenTelemetry Demo Astronomy Shop"
@@ -257,15 +215,6 @@ class _AstronomyShopAdapter(_BaseAdapter):
                 declared_tag=f"{_ASTRONOMY_DECLARED_TAG}-{component}",
             )
             _BUILT_IMAGES.add((cluster_name, image))
-
-    @contextlib.contextmanager
-    def plan(self, *, cluster_name: str, node_architectures: set[str]):
-        self.ensure_images_loaded(cluster_name=cluster_name, node_architectures=node_architectures)
-        # Accepted seeds carry the exact rendered deployment SDO compares.
-        # Re-rendering the independently pinned harness chart drops source-owned
-        # policy (init resources, config bytes, checksums and service metadata).
-        manifest = self._source_dir() / "kubernetes" / "astronomy-shop.yaml"
-        yield SourceDeploymentPlan(manifest_path=manifest if manifest.is_file() else None)
 
 
 _SUPPORTED_ADAPTERS: dict[str, _BaseAdapter] = {
@@ -372,8 +321,13 @@ def plan_for_app(app, *, node_architectures: set[str] | None = None):
     if not cluster_name:
         raise RuntimeError("Source deploy requires SREGYM_KIND_CLUSTER_NAME to be set")
     adapter = _SUPPORTED_ADAPTERS[app.name]
-    with adapter.plan(cluster_name=cluster_name, node_architectures=node_architectures or set()) as plan:
-        yield plan
+    rendered = os.getenv("SREGYM_ACCEPTED_RENDER", "")
+    if not rendered or not Path(rendered).is_file():
+        raise SourceDeployUnsupportedError(
+            "source deployment requires the accepted revision render (SREGYM_ACCEPTED_RENDER)"
+        )
+    adapter.ensure_images_loaded(cluster_name=cluster_name, node_architectures=node_architectures or set())
+    yield SourceDeploymentPlan(manifest_path=Path(rendered))
 
 
 def _is_arm(node_architectures: set[str]) -> bool:
@@ -392,29 +346,6 @@ def _declare_image(*, cluster_name: str, built_ref: str, declared_tag: str) -> N
     """Publish the lane-built image on the nodes under the tag the source declares (idempotent)."""
     repository = built_ref.rpartition(":")[0]
     tag_image_in_kind_nodes(cluster_name, built_ref, f"{repository}:{declared_tag}")
-
-
-def _write_kustomization_for_directory(base_dir: Path) -> None:
-    # Source declarations own resource selection and generator inputs. Only
-    # legacy sources without a declaration need a synthesized resource list.
-    if any((base_dir / name).is_file() for name in ("kustomization.yaml", "kustomization.yml", "Kustomization")):
-        return
-    resources = sorted(
-        str(path.relative_to(base_dir))
-        for path in base_dir.rglob("*")
-        if path.is_file()
-        and path.suffix in {".yaml", ".yml"}
-        and path.name.lower() not in {"kustomization.yaml", "kustomization.yml"}
-    )
-    kustomization = {
-        "apiVersion": "kustomize.config.k8s.io/v1beta1",
-        "kind": "Kustomization",
-        "resources": resources,
-    }
-    (base_dir / "kustomization.yaml").write_text(
-        yaml.safe_dump(kustomization, sort_keys=False),
-        encoding="utf-8",
-    )
 
 
 def _run_command(command: list[str]) -> None:

@@ -1,6 +1,7 @@
 """Interface to the social network application from DeathStarBench"""
 
 import logging
+import shlex
 
 from sregym.generators.workload.wrk2 import Wrk2, Wrk2WorkloadManager
 from sregym.paths import SOCIAL_NETWORK_METADATA, TARGET_MICROSERVICES
@@ -63,25 +64,14 @@ class SocialNetwork(Application):
     def deploy(self):
         """Deploy the Helm configurations with architecture-aware image selection."""
         self.create_namespace()
-        self.create_tls_secret()
-        node_architectures = self.kubectl.get_node_architectures()
-        is_arm = any(arch in ["arm64", "aarch64"] for arch in node_architectures)
-        helm_configs = dict(self.helm_configs)
-        extra_args = list(helm_configs.get("extra_args", []))
-
         if source_deploy_enabled():
-            with plan_for_app(self, node_architectures=node_architectures) as plan:
-                extra_args.extend(plan.helm_extra_args)
-                helm_configs["extra_args"] = extra_args
-                Helm.install(**helm_configs)
+            with plan_for_app(self, node_architectures=self.kubectl.get_node_architectures()) as plan:
+                self.kubectl.exec_command_checked(
+                    f"kubectl apply -f {shlex.quote(str(plan.manifest_path))} -n {shlex.quote(self.namespace)}"
+                )
         else:
-            if is_arm:
-                # Use the ARM-compatible image for media-frontend.
-                extra_args.append("--set media-frontend.container.image=jacksonarthurclark/media-frontend")
-                extra_args.append("--set media-frontend.container.imageVersion=latest")
-            if extra_args:
-                helm_configs["extra_args"] = extra_args
-            Helm.install(**helm_configs)
+            self.create_tls_secret()
+            Helm.install(**self.helm_configs)
         Helm.assert_if_deployed(self.helm_configs["namespace"])
 
     def delete(self):

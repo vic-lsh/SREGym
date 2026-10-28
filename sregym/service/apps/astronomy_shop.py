@@ -58,14 +58,9 @@ class AstronomyShop(Application):
 
         if source_deploy_enabled():
             with plan_for_app(self, node_architectures=self.kubectl.get_node_architectures()) as plan:
-                if plan.manifest_path is not None:
-                    self.kubectl.exec_command_checked(
-                        f"kubectl apply -f {shlex.quote(str(plan.manifest_path))} -n {shlex.quote(self.namespace)}"
-                    )
-                else:
-                    helm_configs = dict(self.helm_configs)
-                    helm_configs["extra_args"] = [*self.helm_configs["extra_args"], *plan.helm_extra_args]
-                    Helm.install(**helm_configs)
+                self.kubectl.exec_command_checked(
+                    f"kubectl apply -f {shlex.quote(str(plan.manifest_path))} -n {shlex.quote(self.namespace)}"
+                )
         else:
             Helm.install(**self.helm_configs)
         Helm.assert_if_deployed(self.helm_configs["namespace"])

@@ -1,4 +1,5 @@
 import logging
+import shlex
 from enum import StrEnum
 
 from sregym.generators.workload.wrk2 import Wrk2, Wrk2WorkloadManager
@@ -118,12 +119,14 @@ class HotelReservation(Application):
         self.create_namespace()
         if source_deploy_enabled():
             with plan_for_app(self) as plan:
-                self.kubectl.exec_command(f"kubectl apply -k {plan.manifest_path} -n {self.namespace}")
+                self.kubectl.exec_command(
+                    f"kubectl apply -f {shlex.quote(str(plan.manifest_path))} -n {shlex.quote(self.namespace)}"
+                )
         else:
             self.kubectl.exec_command(f"kubectl apply -k {self.k8s_deploy_path} -n {self.namespace}")
-        if self.failure_scripts is not FailureScripts.ABSENT:
+        if not source_deploy_enabled() and self.failure_scripts is not FailureScripts.ABSENT:
             self.populate_failure_configmaps()
-        if self.failure_scripts is FailureScripts.MOUNTED:
+        if not source_deploy_enabled() and self.failure_scripts is FailureScripts.MOUNTED:
             self._patch_mongo_failure_script_mounts()
         self.kubectl.wait_for_ready(self.namespace)
 

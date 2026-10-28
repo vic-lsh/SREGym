@@ -32,6 +32,9 @@ def test_astronomy_plan_builds_every_demo_component_and_preserves_chart(tmp_path
     source.mkdir()
     monkeypatch.setenv("SREGYM_APP_SOURCE_DIR", str(source))
     monkeypatch.setenv("SREGYM_KIND_CLUSTER_NAME", "luna-pilot-52")
+    accepted = tmp_path / "accepted.yaml"
+    accepted.write_text("synthetic render")
+    monkeypatch.setenv("SREGYM_ACCEPTED_RENDER", str(accepted))
     builds, loads = [], []
     monkeypatch.setattr(source_deploy, "_BUILT_IMAGES", set())
     monkeypatch.setattr(
@@ -41,7 +44,7 @@ def test_astronomy_plan_builds_every_demo_component_and_preserves_chart(tmp_path
     monkeypatch.setattr(source_deploy, "tag_image_in_kind_nodes", lambda *args: None)
     with source_deploy.plan_for_app(SimpleNamespace(name=APP), node_architectures={"amd64"}) as plan:
         args = plan.helm_extra_args
-        assert plan.manifest_path is None
+        assert plan.manifest_path == accepted
         assert len(builds) == len(loads) == 20
         assert len({ref for ref, _, _ in builds}) == 20
         for ref, command, context in builds:
@@ -101,7 +104,10 @@ def test_astronomy_deploy_preserves_settings_with_source_images(tmp_path, monkey
     monkeypatch.setattr(source_deploy, "_build_image", lambda *args, **kwargs: None)
     monkeypatch.setattr(source_deploy, "_kind_load_image", lambda **kwargs: None)
     monkeypatch.setattr(source_deploy, "tag_image_in_kind_nodes", lambda *args: None)
-    installs = []
+    accepted = tmp_path / "accepted.yaml"
+    accepted.write_text("synthetic accepted render")
+    monkeypatch.setenv("SREGYM_ACCEPTED_RENDER", str(accepted))
+    installs, applied = [], []
     monkeypatch.setattr(astronomy_shop.Helm, "install", lambda **kwargs: installs.append(kwargs))
     monkeypatch.setattr(astronomy_shop.Helm, "assert_if_deployed", lambda namespace: True)
     app = astronomy_shop.AstronomyShop.__new__(astronomy_shop.AstronomyShop)
@@ -109,12 +115,10 @@ def test_astronomy_deploy_preserves_settings_with_source_images(tmp_path, monkey
     app.namespace = "astronomy-shop"
     app.helm_configs = {"namespace": app.namespace, "release_name": app.namespace}
     app.kubectl = SimpleNamespace(
-        create_namespace_if_not_exist=lambda namespace: None, get_node_architectures=lambda: {"amd64"}
+        create_namespace_if_not_exist=lambda namespace: None,
+        get_node_architectures=lambda: {"amd64"},
+        exec_command_checked=applied.append,
     )
     app.deploy()
-    args = installs[0]["extra_args"]
-    assert "prometheus.enabled=false" in args
-    assert "components.load-generator.envOverrides[0].value=false" in args
-    assert not any("image" in arg for arg in args)
-    assert installs[0]["namespace"] == "astronomy-shop"
-    assert not any(arg.startswith("default.image.tag=") for arg in app.helm_configs["extra_args"])
+    assert installs == []
+    assert applied == [f"kubectl apply -f {accepted} -n astronomy-shop"]

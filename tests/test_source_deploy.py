@@ -139,18 +139,21 @@ def _exec_tags(docker: FakeDocker) -> list[tuple[str, str]]:
     return [(command[-2], command[-1]) for command in docker.commands if command[-5:-2] == ["images", "tag", "--force"]]
 
 
-def test_hotel_source_build_is_published_under_the_declared_ref_and_deployed_unchanged(hotel) -> None:
+def test_hotel_source_build_is_published_under_the_declared_ref_and_deployed_unchanged(hotel, monkeypatch) -> None:
     source, docker, adapter = hotel
     (source / "kubernetes").mkdir()
     manifest = "image: yinfangchen/hotelreservation:latest\n"
     (source / "kubernetes" / "frontend.yaml").write_text(manifest)
 
-    with adapter.plan(cluster_name="fastloop-w0", node_architectures=set()) as plan:
-        rendered = (plan.manifest_path / "frontend.yaml").read_text()
-        kustomization = yaml.safe_load((plan.manifest_path / "kustomization.yaml").read_text())
+    rendered_path = source / "accepted.yaml"
+    rendered_path.write_text(manifest)
+    monkeypatch.setenv("SREGYM_KIND_CLUSTER_NAME", "fastloop-w0")
+    monkeypatch.setenv("SREGYM_ACCEPTED_RENDER", str(rendered_path))
+    monkeypatch.setattr(source_deploy._SUPPORTED_ADAPTERS["Hotel Reservation"], "_source_dir", lambda: source)
+    with source_deploy.plan_for_app(SimpleNamespace(name="Hotel Reservation")) as plan:
+        assert plan.manifest_path.read_text() == manifest
+        assert plan.helm_extra_args == ()
 
-    assert rendered == manifest
-    assert "images" not in kustomization
     assert _exec_tags(docker) == [
         (
             "docker.io/" + _image_ref(),
@@ -172,6 +175,9 @@ def test_every_source_adapter_deploys_what_the_source_declares(monkeypatch, tmp_
     monkeypatch.setattr(source_deploy, "_build_image", lambda *args, **kwargs: None)
     monkeypatch.setattr(source_deploy, "_kind_load_image", lambda **kwargs: None)
     (tmp_path / "kubernetes").mkdir()
+    accepted = tmp_path / "accepted.yaml"
+    accepted.write_text("synthetic accepted render")
+    monkeypatch.setenv("SREGYM_ACCEPTED_RENDER", str(accepted))
     tags: list[tuple[str, str]] = []
     monkeypatch.setattr(
         source_deploy, "tag_image_in_kind_nodes", lambda cluster, built, declared: tags.append((built, declared))
@@ -184,9 +190,8 @@ def test_every_source_adapter_deploys_what_the_source_declares(monkeypatch, tmp_
         monkeypatch.setattr(source_deploy, "_BUILT_IMAGES", set())
         with source_deploy.plan_for_app(SimpleNamespace(name=app), node_architectures={"amd64"}) as plan:
             assert plan.helm_extra_args == (), app
-            if plan.manifest_path is not None:
-                kustomization = yaml.safe_load((plan.manifest_path / "kustomization.yaml").read_text())
-                assert "images" not in kustomization, app
+            assert plan.manifest_path == accepted, app
+            assert plan.manifest_path.read_text() == "synthetic accepted render"
         assert tags, app
         for built, declared in tags:
             assert built.rpartition(":")[0] == declared.rpartition(":")[0], app

@@ -10,26 +10,19 @@ from sregym.paths import TARGET_MICROSERVICES
 from sregym.service import source_deploy
 
 
-@pytest.mark.parametrize("filename", ["kustomization.yaml", "kustomization.yml", "Kustomization"])
-def test_staging_preserves_declared_kustomization_and_file_generators(tmp_path, monkeypatch, filename):
-    source = tmp_path / "hotel"
-    manifests = source / "kubernetes"
-    manifests.mkdir(parents=True)
-    declaration = (
-        "configMapGenerator:\n- name: startup\n  files: [init.sh]\ngeneratorOptions: {disableNameSuffixHash: true}\n"
-    )
-    (manifests / filename).write_text(declaration)
-    (manifests / "init.sh").write_text("echo source-owned\n")
-    # An unselected YAML file must not become a deployed resource by scanning.
-    (manifests / "unused.yaml").write_text("not a selected Kubernetes object\n")
-    adapter = source_deploy._HotelReservationAdapter()
-    monkeypatch.setattr(adapter, "_source_dir", lambda: source)
-    monkeypatch.setattr(adapter, "ensure_images_loaded", lambda **kwargs: None)
-    with adapter.plan(cluster_name="offline", node_architectures=set()) as plan:
-        assert (plan.manifest_path / filename).read_text() == declaration
-        assert (plan.manifest_path / "init.sh").read_text() == "echo source-owned\n"
-        assert len(list(plan.manifest_path.glob("*ustomization*"))) == 1
-    assert (manifests / filename).read_text() == declaration
+def test_source_plan_requires_accepted_render_before_any_build(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("SREGYM_KIND_CLUSTER_NAME", "offline")
+    monkeypatch.delenv("SREGYM_ACCEPTED_RENDER", raising=False)
+
+    def forbidden(**kwargs):
+        pytest.fail("build happened before accepted-render validation")
+
+    monkeypatch.setattr(source_deploy._SUPPORTED_ADAPTERS["Hotel Reservation"], "ensure_images_loaded", forbidden)
+    with pytest.raises(source_deploy.SourceDeployUnsupportedError, match="accepted revision render"):
+        with source_deploy.plan_for_app(SimpleNamespace(name="Hotel Reservation")):
+            pytest.fail("missing accepted render admitted")
 
 
 def test_pinned_hotel_source_renders_its_mounted_bootstrap_scripts(monkeypatch):
@@ -37,13 +30,9 @@ def test_pinned_hotel_source_renders_its_mounted_bootstrap_scripts(monkeypatch):
     source = TARGET_MICROSERVICES / "hotelReservation"
     assert source.is_dir(), "initialize the pinned SREGym-applications submodule"
     assert shutil.which("kubectl"), "kubectl is required to verify application source"
-    adapter = source_deploy._HotelReservationAdapter()
-    monkeypatch.setattr(adapter, "_source_dir", lambda: source)
-    monkeypatch.setattr(adapter, "ensure_images_loaded", lambda **kwargs: None)
-    with adapter.plan(cluster_name="offline", node_architectures=set()) as plan:
-        output = subprocess.run(
-            ["kubectl", "kustomize", str(plan.manifest_path)], check=True, capture_output=True, text=True
-        ).stdout
+    output = subprocess.run(
+        ["kubectl", "kustomize", str(source / "kubernetes")], check=True, capture_output=True, text=True
+    ).stdout
     objects = list(yaml.safe_load_all(output))
     configs = {obj["metadata"]["name"]: obj for obj in objects if obj["kind"] == "ConfigMap"}
     for component in ("geo", "rate"):
@@ -81,5 +70,7 @@ def test_hotel_deploy_uses_source_configmaps_without_out_of_band_creation(monkey
     )
     app.deploy()
     app.kubectl.create_or_update_configmap.assert_not_called()
-    app.kubectl.exec_command.assert_called_once_with(f"kubectl apply -k {app.k8s_deploy_path} -n hotel-reservation")
+    app.kubectl.exec_command.assert_called_once_with(
+        f"kubectl apply -{'f' if source_build else 'k'} {app.k8s_deploy_path} -n hotel-reservation"
+    )
     app.kubectl.wait_for_ready.assert_called_once_with("hotel-reservation")
