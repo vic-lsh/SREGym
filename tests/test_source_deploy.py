@@ -152,7 +152,7 @@ def test_hotel_source_build_is_published_under_the_declared_ref_and_deployed_unc
     monkeypatch.setattr(source_deploy._SUPPORTED_ADAPTERS["Hotel Reservation"], "_source_dir", lambda: source)
     with source_deploy.plan_for_app(SimpleNamespace(name="Hotel Reservation")) as plan:
         assert plan.manifest_path.read_text() == manifest
-        assert plan.helm_extra_args == ()
+        assert plan.manifest_path.is_file()
 
     assert _exec_tags(docker) == [
         (
@@ -189,7 +189,7 @@ def test_every_source_adapter_deploys_what_the_source_declares(monkeypatch, tmp_
         tags.clear()
         monkeypatch.setattr(source_deploy, "_BUILT_IMAGES", set())
         with source_deploy.plan_for_app(SimpleNamespace(name=app), node_architectures={"amd64"}) as plan:
-            assert plan.helm_extra_args == (), app
+            assert plan.manifest_path.is_file(), app
             assert plan.manifest_path == accepted, app
             assert plan.manifest_path.read_text() == "synthetic accepted render"
         assert tags, app

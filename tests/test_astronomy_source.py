@@ -43,7 +43,6 @@ def test_astronomy_plan_builds_every_demo_component_and_preserves_chart(tmp_path
     monkeypatch.setattr(source_deploy, "_kind_load_image", lambda **kw: loads.append(kw))
     monkeypatch.setattr(source_deploy, "tag_image_in_kind_nodes", lambda *args: None)
     with source_deploy.plan_for_app(SimpleNamespace(name=APP), node_architectures={"amd64"}) as plan:
-        args = plan.helm_extra_args
         assert plan.manifest_path == accepted
         assert len(builds) == len(loads) == 20
         assert len({ref for ref, _, _ in builds}) == 20
@@ -52,7 +51,6 @@ def test_astronomy_plan_builds_every_demo_component_and_preserves_chart(tmp_path
             assert str(source) == command[-1]
             assert "--build-arg" in command or ref.endswith(("-ad", "-currency", "-fraud-detection", "-kafka")) is False
         # The chart renders the tag the source declares; nothing is overridden.
-        assert args == ()
         assert not any("valkey" in ref or "postgres" in ref or "grafana" in ref for ref, _, _ in builds)
     with source_deploy.plan_for_app(SimpleNamespace(name=APP), node_architectures={"amd64"}):
         assert len(builds) == 20

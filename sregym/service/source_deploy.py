@@ -44,8 +44,7 @@ class SourceDeployUnsupportedError(RuntimeError):
 
 @dataclass(frozen=True)
 class SourceDeploymentPlan:
-    manifest_path: Path | None = None
-    helm_extra_args: tuple[str, ...] = ()
+    manifest_path: Path
 
 
 class _BaseAdapter:
