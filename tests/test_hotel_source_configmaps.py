@@ -62,7 +62,6 @@ def test_hotel_deploy_uses_source_configmaps_without_out_of_band_creation(monkey
     app.kubectl = Mock()
     app.create_namespace = Mock()
     app.failure_scripts = hotel_reservation.FailureScripts.ABSENT
-    monkeypatch.setattr(hotel_reservation, "source_deploy_enabled", lambda: source_build)
     monkeypatch.setattr(
         hotel_reservation,
         "plan_for_app",
@@ -70,8 +69,8 @@ def test_hotel_deploy_uses_source_configmaps_without_out_of_band_creation(monkey
     )
     app.deploy()
     app.kubectl.create_or_update_configmap.assert_not_called()
-    writer = app.kubectl.exec_command_checked if source_build else app.kubectl.exec_command
+    writer = app.kubectl.exec_command_checked
     writer.assert_called_once_with(
-        f"kubectl apply -{'f' if source_build else 'k'} {app.k8s_deploy_path} -n hotel-reservation"
+        f"kubectl apply -f {app.k8s_deploy_path} -n hotel-reservation"
     )
     app.kubectl.wait_for_ready.assert_called_once_with("hotel-reservation")

@@ -1,30 +1,23 @@
-"""The harness consumes app-owned collector CPU configuration."""
-
-from pathlib import Path
-from unittest.mock import Mock, patch
-
-import yaml
-
-from sregym.paths import TARGET_MICROSERVICES
-from sregym.service.apps.astronomy_shop import AstronomyShop
+"""Collector policy must be part of the accepted render, never a harness overlay."""
 
 
-def test_deploy_loads_app_owned_collector_policy():
-    app = object.__new__(AstronomyShop)
+def test_collector_policy_reaches_deploy_through_accepted_manifest(monkeypatch, tmp_path):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from sregym.service.apps import astronomy_shop
+
+    accepted = tmp_path / "accepted.yaml"
+    accepted.write_text("synthetic collector policy")
+    monkeypatch.setattr(
+        astronomy_shop, "plan_for_app", lambda *a, **kw: nullcontext(SimpleNamespace(manifest_path=accepted))
+    )
+    helm = SimpleNamespace(install=Mock(), assert_if_deployed=Mock())
+    monkeypatch.setattr(astronomy_shop, "Helm", helm)
+    app = object.__new__(astronomy_shop.AstronomyShop)
     app.namespace = "astronomy-shop"
-    app.helm_configs = {"namespace": "astronomy-shop"}
+    app.helm_configs = {"namespace": app.namespace}
     app.kubectl = Mock()
-    with (
-        patch("sregym.service.apps.astronomy_shop.source_deploy_enabled", return_value=False),
-        patch("sregym.service.apps.astronomy_shop.Helm", autospec=True) as helm,
-    ):
-        app.deploy()
-    args = helm.install.call_args.kwargs["extra_args"]
-    policy = Path(args[args.index("--values") + 1])
-    assert policy == TARGET_MICROSERVICES / "astronomy-shop-overrides.yaml"
-    collector = yaml.safe_load(policy.read_text())["opentelemetry-collector"]
-    assert collector["extraEnvs"] == [{"name": "GOMAXPROCS", "value": "2"}]
-    assert "resources" not in collector
-    assert collector["presets"]["hostMetrics"]["enabled"] is False
-    assert "prometheus.enabled=false" in args
-    assert "components.load-generator.envOverrides[0].value=false" in args
+    app.deploy()
+    app.kubectl.exec_command_checked.assert_called_once_with(f"kubectl apply -f {accepted} -n astronomy-shop")
+    helm.install.assert_not_called()

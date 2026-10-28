@@ -31,7 +31,7 @@ from sregym.service.k8s_proxy import KubernetesAPIProxy, agent_proxy_port, verif
 from sregym.service.khaos import KhaosController
 from sregym.service.kubectl import KubeCtl
 from sregym.service.mcp_server import MCPServer
-from sregym.service.source_deploy import source_deploy_enabled, unsupported_reason
+from sregym.service.source_deploy import is_supported, source_deploy_enabled, unsupported_reason
 from sregym.service.telemetry.loki import Loki
 from sregym.service.telemetry.prometheus import Prometheus
 from sregym.warm_infrastructure import marker_is_ready
@@ -1228,9 +1228,7 @@ class Conductor:
         problem.app.deploy()
         self.logger.info(f"[ENV] Deploy application: {problem.app.name}")
 
-        from sregym.service.source_deploy import source_deploy_enabled
-
-        if not is_train_ticket and not source_deploy_enabled():
+        if not is_train_ticket and not is_supported(problem.app.name):
             for ns in app_namespaces:
                 self.jaeger.create_external_name_service(ns)
 

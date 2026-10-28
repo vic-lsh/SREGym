@@ -5,11 +5,11 @@ import shlex
 from typing import Any
 
 from sregym.generators.workload.locust import LocustWorkloadManager
-from sregym.paths import ASTRONOMY_SHOP_METADATA, TARGET_MICROSERVICES
+from sregym.paths import ASTRONOMY_SHOP_METADATA
 from sregym.service.apps.base import Application
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
-from sregym.service.source_deploy import plan_for_app, source_deploy_enabled
+from sregym.service.source_deploy import plan_for_app
 
 
 class AstronomyShop(Application):
@@ -41,28 +41,10 @@ class AstronomyShop(Application):
         """Deploy the Helm configurations."""
         self.kubectl.create_namespace_if_not_exist(self.namespace)
 
-        self.helm_configs["extra_args"] = [
-            "--values",
-            str(TARGET_MICROSERVICES / "astronomy-shop-overrides.yaml"),
-            "--values",
-            str(ASTRONOMY_SHOP_METADATA.with_name("astronomy-shop-resources.yaml")),
-            # Disable bundled Prometheus to avoid ClusterRole conflict with central
-            # Prometheus in the observe namespace (ClusterRoles are cluster-wide)
-            "--set",
-            "prometheus.enabled=false",
-            "--set-string",
-            "components.load-generator.envOverrides[0].name=LOCUST_BROWSER_TRAFFIC_ENABLED",
-            "--set-string",
-            "components.load-generator.envOverrides[0].value=false",
-        ]
-
-        if source_deploy_enabled():
-            with plan_for_app(self, node_architectures=self.kubectl.get_node_architectures()) as plan:
-                self.kubectl.exec_command_checked(
-                    f"kubectl apply -f {shlex.quote(str(plan.manifest_path))} -n {shlex.quote(self.namespace)}"
-                )
-        else:
-            Helm.install(**self.helm_configs)
+        with plan_for_app(self, node_architectures=self.kubectl.get_node_architectures()) as plan:
+            self.kubectl.exec_command_checked(
+                f"kubectl apply -f {shlex.quote(str(plan.manifest_path))} -n {shlex.quote(self.namespace)}"
+            )
         Helm.assert_if_deployed(self.helm_configs["namespace"])
 
     def _read_flagd_config(self) -> dict[str, Any]:
@@ -117,12 +99,10 @@ class AstronomyShop(Application):
 
     def delete(self):
         """Delete the Helm configurations."""
-        Helm.uninstall(**self.helm_configs)
         self.kubectl.delete_namespace(self.helm_configs["namespace"])
         self.kubectl.wait_for_namespace_deletion(self.namespace)
 
     def cleanup(self):
-        Helm.uninstall(**self.helm_configs)
         self.kubectl.delete_namespace(self.helm_configs["namespace"])
 
         if hasattr(self, "wrk"):

@@ -3,12 +3,12 @@ import shlex
 from enum import StrEnum
 
 from sregym.generators.workload.wrk2 import Wrk2, Wrk2WorkloadManager
-from sregym.paths import FAULT_SCRIPTS, HOTEL_RES_METADATA
+from sregym.paths import HOTEL_RES_METADATA
 from sregym.service.app_workspace import resolve_workspace_path
 from sregym.service.apps.base import Application
 from sregym.service.apps.helpers import get_frontend_url
 from sregym.service.kubectl import KubeCtl
-from sregym.service.source_deploy import plan_for_app, source_deploy_enabled
+from sregym.service.source_deploy import plan_for_app
 
 logger = logging.getLogger("all.application")
 logger.propagate = True
@@ -16,7 +16,7 @@ logger.setLevel(logging.DEBUG)
 
 
 class FailureScripts(StrEnum):
-    """What ``deploy`` does with the failure-admin-{geo,rate} ConfigMaps (the mongo fault scripts)."""
+    """Historical fault-profile metadata; accepted source owns deployment bytes."""
 
     MOUNTED = "mounted"  # filled, and mounted at /scripts in mongodb-geo and mongodb-rate
     UNMOUNTED = "unmounted"  # filled but mounted nowhere, as robust-skills deploys every hotel app
@@ -27,7 +27,6 @@ class HotelReservation(Application):
     def __init__(self, failure_scripts: FailureScripts = FailureScripts.MOUNTED):
         super().__init__(HOTEL_RES_METADATA)
         self.kubectl = KubeCtl()
-        self.script_dir = FAULT_SCRIPTS
         self.helm_deploy = False
         self.failure_scripts = FailureScripts(failure_scripts)
 
@@ -45,89 +44,14 @@ class HotelReservation(Application):
         self.frontend_service = metadata.get("frontend_service", "frontend")
         self.frontend_port = metadata.get("frontend_port", 5000)
 
-    # Script file lists for failure configmaps (used by populate/clear lifecycle)
-    FAILURE_ADMIN_RATE_SCRIPTS = [
-        "revoke-admin-rate-mongo.sh",
-        "revoke-mitigate-admin-rate-mongo.sh",
-        "remove-admin-mongo.sh",
-        "remove-mitigate-admin-rate-mongo.sh",
-    ]
-    FAILURE_ADMIN_GEO_SCRIPTS = [
-        "revoke-admin-geo-mongo.sh",
-        "revoke-mitigate-admin-geo-mongo.sh",
-        "remove-admin-mongo.sh",
-        "remove-mitigate-admin-geo-mongo.sh",
-    ]
-
-    def populate_failure_configmaps(self):
-        """Create/fill failure-admin-{geo,rate} configmaps with fault scripts (noise)."""
-        self.kubectl.create_or_update_configmap(
-            name="failure-admin-rate",
-            namespace=self.namespace,
-            data=self._prepare_configmap_data(self.FAILURE_ADMIN_RATE_SCRIPTS),
-        )
-        self.kubectl.create_or_update_configmap(
-            name="failure-admin-geo",
-            namespace=self.namespace,
-            data=self._prepare_configmap_data(self.FAILURE_ADMIN_GEO_SCRIPTS),
-        )
-
-    def clear_failure_configmaps(self):
-        """Empty failure-admin-{geo,rate} configmaps (best-effort).
-
-        Removes all script data so agents cannot read fault details.
-        """
-        try:
-            self.kubectl.create_or_update_configmap(
-                name="failure-admin-rate",
-                namespace=self.namespace,
-                data={},
-            )
-            self.kubectl.create_or_update_configmap(
-                name="failure-admin-geo",
-                namespace=self.namespace,
-                data={},
-            )
-        except Exception as e:
-            logger.warning(f"Best-effort clearing of failure configmaps failed: {e}")
-
-    def _patch_mongo_failure_script_mounts(self):
-        """Patch mongodb-geo and mongodb-rate deployments to mount failure configmaps at /scripts.
-
-        Uses JSON patch (append-only) to add the volume and volumeMount without
-        needing to re-specify existing volumes — safer if the YAML changes.
-        """
-        patches = [
-            ("mongodb-geo", "failure-admin-geo"),
-            ("mongodb-rate", "failure-admin-rate"),
-        ]
-        for deployment_name, configmap_name in patches:
-            patch_cmd = (
-                f"kubectl patch deployment {deployment_name} -n {self.namespace} --type=json -p="
-                "'["
-                f'{{"op":"add","path":"/spec/template/spec/volumes/-",'
-                f'"value":{{"name":"failure-script","configMap":{{"name":"{configmap_name}"}}}}}}'
-                f',{{"op":"add","path":"/spec/template/spec/containers/0/volumeMounts/-",'
-                f'"value":{{"name":"failure-script","mountPath":"/scripts"}}}}'
-                "]'"
-            )
-            self.kubectl.exec_command(patch_cmd)
-
     def deploy(self):
         """Deploy the Kubernetes configurations."""
         self.logger.info(f"Deploying Kubernetes configurations in namespace: {self.namespace}")
         self.create_namespace()
-        if source_deploy_enabled():
-            with plan_for_app(self) as plan:
-                self.kubectl.exec_command_checked(
-                    f"kubectl apply -f {shlex.quote(str(plan.manifest_path))} -n {shlex.quote(self.namespace)}"
-                )
-        else:
-            self.kubectl.exec_command(f"kubectl apply -k {self.k8s_deploy_path} -n {self.namespace}")
-        if not source_deploy_enabled() and self.failure_scripts is not FailureScripts.ABSENT:
-            self.populate_failure_configmaps()
-        if not source_deploy_enabled() and self.failure_scripts is FailureScripts.MOUNTED:
-            self._patch_mongo_failure_script_mounts()
+        with plan_for_app(self) as plan:
+            self.kubectl.exec_command_checked(
+                f"kubectl apply -f {shlex.quote(str(plan.manifest_path))} -n {shlex.quote(self.namespace)}"
+            )
         self.kubectl.wait_for_ready(self.namespace)
 
     def delete(self):
@@ -165,17 +89,6 @@ class HotelReservation(Application):
         # Patch the PersistentVolume to remove finalizers if it is stuck
         patch_command = f'kubectl patch pv {pv_name} -p \'{{"metadata":{{"finalizers":null}}}}\''
         _ = self.kubectl.exec_command(patch_command)
-
-    # helper methods
-    def _prepare_configmap_data(self, script_files: list) -> dict:
-        data = {}
-        for file in script_files:
-            data[file] = self._read_script(f"{self.script_dir}/{file}")
-        return data
-
-    def _read_script(self, file_path: str) -> str:
-        with open(file_path) as file:
-            return file.read()
 
     def create_workload(
         self, rate: int = 100, dist: str = "exp", connections: int = 100, duration: int = 30, threads: int = 3

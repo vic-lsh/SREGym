@@ -4,13 +4,13 @@ import logging
 import shlex
 
 from sregym.generators.workload.wrk2 import Wrk2, Wrk2WorkloadManager
-from sregym.paths import SOCIAL_NETWORK_METADATA, TARGET_MICROSERVICES
+from sregym.paths import SOCIAL_NETWORK_METADATA
 from sregym.service.app_workspace import resolve_workspace_path
 from sregym.service.apps.base import Application
 from sregym.service.apps.helpers import get_frontend_url
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
-from sregym.service.source_deploy import plan_for_app, source_deploy_enabled
+from sregym.service.source_deploy import plan_for_app
 
 logger = logging.getLogger("all.sregym.social_network")
 logger.propagate = True
@@ -22,7 +22,6 @@ class SocialNetwork(Application):
         super().__init__(SOCIAL_NETWORK_METADATA)
         self.load_app_json()
         self.kubectl = KubeCtl()
-        self.local_tls_path = TARGET_MICROSERVICES / "socialNetwork/helm-chart/socialnetwork"
 
         self.payload_script = resolve_workspace_path("socialNetwork/wrk2/scripts/social-network/mixed-workload.lua")
 
@@ -34,53 +33,21 @@ class SocialNetwork(Application):
         self.frontend_service = metadata.get("frontend_service", "nginx-thrift")
         self.frontend_port = metadata.get("frontend_port", 8080)
 
-    def create_tls_secret(self):
-        """Create TLS secret for MongoDB if it doesn't exist."""
-        check_sec = f"kubectl get secret mongodb-tls -n {self.namespace}"
-        result = self.kubectl.exec_command(check_sec)
-        result_lower = result.lower()
-
-        # Secret exists if we got a successful response (contains secret name without error)
-        if "mongodb-tls" in result and "error" not in result_lower:
-            logger.debug("TLS secret already exists. Skipping creation.")
-            return
-
-        create_sec_command = (
-            f"kubectl create secret generic mongodb-tls "
-            f"--from-file=tls.pem={self.local_tls_path}/tls.pem "
-            f"--from-file=ca.crt={self.local_tls_path}/ca.crt "
-            f"-n {self.namespace}"
-        )
-        create_result = self.kubectl.exec_command(create_sec_command)
-        create_result_lower = create_result.lower()
-
-        if "created" in create_result_lower:
-            logger.debug(f"TLS secret created: {create_result.strip()}")
-        elif "already exists" in create_result_lower:
-            logger.debug("TLS secret already exists (confirmed during creation attempt).")
-        else:
-            logger.warning(f"TLS secret creation unexpected result: {create_result.strip()}")
-
     def deploy(self):
         """Deploy the Helm configurations with architecture-aware image selection."""
         self.create_namespace()
-        if source_deploy_enabled():
-            with plan_for_app(self, node_architectures=self.kubectl.get_node_architectures()) as plan:
-                self.kubectl.exec_command_checked(
-                    f"kubectl apply -f {shlex.quote(str(plan.manifest_path))} -n {shlex.quote(self.namespace)}"
-                )
-        else:
-            self.create_tls_secret()
-            Helm.install(**self.helm_configs)
+        with plan_for_app(self, node_architectures=self.kubectl.get_node_architectures()) as plan:
+            self.kubectl.exec_command_checked(
+                f"kubectl apply -f {shlex.quote(str(plan.manifest_path))} -n {shlex.quote(self.namespace)}"
+            )
         Helm.assert_if_deployed(self.helm_configs["namespace"])
 
     def delete(self):
-        """Delete the Helm configurations."""
-        Helm.uninstall(**self.helm_configs)
+        """Delete the source-deployed application namespace."""
+        self.kubectl.delete_namespace(self.namespace)
 
     def cleanup(self):
         """Delete the entire namespace for the social network application."""
-        Helm.uninstall(**self.helm_configs)
 
         if hasattr(self, "wrk"):
             # self.wrk.stop()

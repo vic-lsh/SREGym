@@ -14,9 +14,10 @@ def test_astronomy_deploy_consumes_accepted_manifest_plan(monkeypatch, tmp_path)
         "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: synthetic\ndata:\n  relay: accepted bytes\n"
     )
     monkeypatch.setenv("SREGYM_APP_SOURCE_DIR", str(manifest.parents[1]))
+    monkeypatch.setenv("SREGYM_ACCEPTED_RENDER", str(manifest))
     monkeypatch.setenv("SREGYM_DEPLOY_FROM_SOURCE", "1")
     monkeypatch.setenv("SREGYM_KIND_CLUSTER_NAME", "synthetic-lane")
-    monkeypatch.setattr(source._AstronomyShopAdapter, "ensure_images_loaded", lambda *a, **kw: None)
+    monkeypatch.setattr(source._SUPPORTED_ADAPTERS["OpenTelemetry Demo Astronomy Shop"], "ensure_images_loaded", lambda *a, **kw: None)
     install = Mock()
     monkeypatch.setattr(astronomy.Helm, "install", install)
     monkeypatch.setattr(astronomy.Helm, "assert_if_deployed", Mock())
@@ -49,7 +50,6 @@ def test_astronomy_manifest_apply_failure_stops_before_readiness(monkeypatch, tm
     kubectl = importlib.import_module("sregym.service.kubectl")
     manifest = tmp_path / "accepted source.yaml"
     manifest.write_text("synthetic manifest")
-    monkeypatch.setattr(astronomy, "source_deploy_enabled", lambda: True)
     monkeypatch.setattr(
         astronomy, "plan_for_app", lambda *a, **kw: nullcontext(SimpleNamespace(manifest_path=manifest))
     )
