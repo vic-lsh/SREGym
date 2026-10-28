@@ -119,7 +119,7 @@ class HotelReservation(Application):
         self.create_namespace()
         if source_deploy_enabled():
             with plan_for_app(self) as plan:
-                self.kubectl.exec_command(
+                self.kubectl.exec_command_checked(
                     f"kubectl apply -f {shlex.quote(str(plan.manifest_path))} -n {shlex.quote(self.namespace)}"
                 )
         else:

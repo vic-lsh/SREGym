@@ -222,3 +222,45 @@ def test_declared_tags_match_the_application_sources() -> None:
     chart = TARGET_MICROSERVICES / "astronomy-shop" / "charts" / "opentelemetry-demo"
     assert yaml.safe_load((chart / "Chart.yaml").read_text())["appVersion"] == source_deploy._ASTRONOMY_DECLARED_TAG
     assert yaml.safe_load((chart / "values.yaml").read_text())["default"]["image"]["tag"] == ""
+
+
+@pytest.mark.parametrize(
+    ("module", "class_name", "name", "namespace"),
+    [
+        ("hotel_reservation", "HotelReservation", "Hotel Reservation", "hotel-reservation"),
+        ("social_network", "SocialNetwork", "Social Network", "social-network"),
+        ("astronomy_shop", "AstronomyShop", "OpenTelemetry Demo Astronomy Shop", "astronomy-shop"),
+    ],
+)
+def test_source_app_has_one_checked_manifest_writer(tmp_path, monkeypatch, module, class_name, name, namespace):
+    import importlib
+    import logging
+    import shlex
+
+    native = importlib.import_module(f"sregym.service.apps.{module}")
+    accepted = tmp_path / "accepted render.yaml"
+    accepted.write_text("synthetic accepted render")
+    monkeypatch.setenv("SREGYM_ACCEPTED_RENDER", str(accepted))
+    monkeypatch.setenv("SREGYM_KIND_CLUSTER_NAME", "offline")
+    monkeypatch.setenv("SREGYM_DEPLOY_FROM_SOURCE", "1")
+    monkeypatch.setattr(source_deploy._SUPPORTED_ADAPTERS[name], "ensure_images_loaded", lambda **kw: None)
+    if hasattr(native, "Helm"):
+        monkeypatch.setattr(native.Helm, "assert_if_deployed", lambda ns: None)
+        monkeypatch.setattr(native.Helm, "install", lambda **kw: pytest.fail("alternate Helm writer"))
+    writes = []
+    app = SimpleNamespace(
+        name=name,
+        namespace=namespace,
+        logger=logging.getLogger("fixture"),
+        create_namespace=lambda: None,
+        helm_configs={"namespace": namespace},
+        kubectl=SimpleNamespace(
+            get_node_architectures=lambda: {"amd64"},
+            wait_for_ready=lambda ns: None,
+            create_namespace_if_not_exist=lambda ns: None,
+            exec_command=lambda command: pytest.fail("unchecked manifest writer"),
+            exec_command_checked=writes.append,
+        ),
+    )
+    getattr(native, class_name).deploy(app)
+    assert [shlex.split(command) for command in writes] == [["kubectl", "apply", "-f", str(accepted), "-n", namespace]]

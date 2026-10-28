@@ -70,7 +70,8 @@ def test_hotel_deploy_uses_source_configmaps_without_out_of_band_creation(monkey
     )
     app.deploy()
     app.kubectl.create_or_update_configmap.assert_not_called()
-    app.kubectl.exec_command.assert_called_once_with(
+    writer = app.kubectl.exec_command_checked if source_build else app.kubectl.exec_command
+    writer.assert_called_once_with(
         f"kubectl apply -{'f' if source_build else 'k'} {app.k8s_deploy_path} -n hotel-reservation"
     )
     app.kubectl.wait_for_ready.assert_called_once_with("hotel-reservation")
