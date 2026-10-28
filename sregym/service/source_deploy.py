@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 import os
+import platform
 import re
 import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-
 
 from sregym.paths import TARGET_MICROSERVICES
 from sregym.service.app_workspace import _astronomy_source_root, resolve_app_source_subdir
@@ -30,9 +31,10 @@ _SOCIAL_APP_IMAGE_NAME = "deathstarbench/social-network-microservices"
 _SOCIAL_NGINX_IMAGE_NAME = "yg397/openresty-thrift"
 _SOCIAL_MEDIA_IMAGE_NAME = "yg397/media-frontend"
 _BUILT_IMAGES: set[tuple[str, str]] = set()
-# Opt-in (SREGYM_SOURCE_BUILD_CACHE): images carry the digest of their build
-# context, and an unchanged context reuses the local image instead of rebuilding.
-_SOURCE_DIGEST_LABEL = "sregym.source-digest"
+# Source-built images are tagged and labelled with their content identity (build
+# context, Dockerfile, build arguments, platform). Opt-in (SREGYM_SOURCE_BUILD_CACHE):
+# a local image carrying the identity is reused instead of rebuilt.
+SOURCE_IDENTITY_LABEL = "sregym.source-identity"
 # Repository metadata that changes between runs without changing the app:
 # git history and SDO's operational memory.
 _DIGEST_EXCLUDED_TOP_LEVEL = frozenset({".git", ".sdo", ".sdo-runtime"})
@@ -45,6 +47,43 @@ class SourceDeployUnsupportedError(RuntimeError):
 @dataclass(frozen=True)
 class SourceDeploymentPlan:
     manifest_path: Path
+
+
+@dataclass(frozen=True)
+class _SourceImage:
+    """One image the app source builds, and the ref its manifests declare for it."""
+
+    repository: str
+    dockerfile: Path
+    context_dir: Path
+    declared_tag: str
+    build_args: tuple[str, ...] = ()
+    suffix: str = ""
+
+    def command(self, image_ref: str) -> list[str]:
+        command = ["docker", "build", "-t", image_ref, "-f", str(self.dockerfile)]
+        for argument in self.build_args:
+            command.extend(["--build-arg", argument])
+        return [*command, str(self.context_dir)]
+
+
+def _ensure_source_image(cluster_name: str, image: _SourceImage, digests: dict[Path, str] | None = None) -> None:
+    """Build (or reuse) the image by its content identity, then publish it on the lane under the declared ref.
+
+    The built ref carries no lane name: every lane, and every host sharing a registry, resolves the same
+    sources to the same ref, so a distinct image is built once.
+    """
+    digests = {} if digests is None else digests
+    if image.context_dir not in digests:
+        digests[image.context_dir] = source_context_digest(image.context_dir)
+    identity = source_build_identity(digests[image.context_dir], image.context_dir, image.dockerfile, image.build_args)
+    image_ref = f"{image.repository}:{source_image_tag(identity)}{image.suffix}"
+    if (cluster_name, image_ref) in _BUILT_IMAGES:
+        return
+    _build_image(image_ref, image.command(image_ref), identity=identity)
+    _kind_load_image(cluster_name=cluster_name, image_ref=image_ref)
+    _declare_image(cluster_name=cluster_name, built_ref=image_ref, declared_tag=image.declared_tag)
+    _BUILT_IMAGES.add((cluster_name, image_ref))
 
 
 class _BaseAdapter:
@@ -65,27 +104,11 @@ class _HotelReservationAdapter(_BaseAdapter):
 
     def ensure_images_loaded(self, *, cluster_name: str, node_architectures: set[str]) -> None:
         del node_architectures
-        tag = source_image_tag(self.app_name, cluster_name)
-        image_ref = f"{_HOTEL_IMAGE_NAME}:{tag}"
-        if (cluster_name, image_ref) in _BUILT_IMAGES:
-            return
         source_dir = self._source_dir()
-        _build_image(
-            image_ref,
-            [
-                "docker",
-                "build",
-                "-t",
-                image_ref,
-                "-f",
-                str(source_dir / "Dockerfile"),
-                str(source_dir),
-            ],
-            context_dir=source_dir,
+        _ensure_source_image(
+            cluster_name,
+            _SourceImage(_HOTEL_IMAGE_NAME, source_dir / "Dockerfile", source_dir, _HOTEL_DECLARED_TAG),
         )
-        _kind_load_image(cluster_name=cluster_name, image_ref=image_ref)
-        _declare_image(cluster_name=cluster_name, built_ref=image_ref, declared_tag=_HOTEL_DECLARED_TAG)
-        _BUILT_IMAGES.add((cluster_name, image_ref))
 
 
 class _SocialNetworkAdapter(_BaseAdapter):
@@ -98,7 +121,6 @@ class _SocialNetworkAdapter(_BaseAdapter):
         return _resolve_app_source_dir(self.app_name, self._default_source_dir)
 
     def ensure_images_loaded(self, *, cluster_name: str, node_architectures: set[str]) -> None:
-        tag = source_image_tag(self.app_name, cluster_name)
         source_dir = self._source_dir()
         nginx_dir = source_dir / "docker" / "openresty-thrift"
         media_dir = source_dir / "docker" / "media-frontend"
@@ -107,55 +129,15 @@ class _SocialNetworkAdapter(_BaseAdapter):
             if _is_arm(node_architectures)
             else media_dir / "xenial" / "Dockerfile"
         )
-        build_steps = (
-            (
-                f"{_SOCIAL_APP_IMAGE_NAME}:{tag}",
-                [
-                    "docker",
-                    "build",
-                    "-t",
-                    f"{_SOCIAL_APP_IMAGE_NAME}:{tag}",
-                    str(source_dir),
-                ],
-                source_dir,
-                _SOCIAL_APP_DECLARED_TAG,
+        digests: dict[Path, str] = {}
+        for image in (
+            _SourceImage(_SOCIAL_APP_IMAGE_NAME, source_dir / "Dockerfile", source_dir, _SOCIAL_APP_DECLARED_TAG),
+            _SourceImage(
+                _SOCIAL_NGINX_IMAGE_NAME, nginx_dir / "xenial" / "Dockerfile", nginx_dir, _SOCIAL_NGINX_DECLARED_TAG
             ),
-            (
-                f"{_SOCIAL_NGINX_IMAGE_NAME}:{tag}",
-                [
-                    "docker",
-                    "build",
-                    "-t",
-                    f"{_SOCIAL_NGINX_IMAGE_NAME}:{tag}",
-                    "-f",
-                    str(nginx_dir / "xenial" / "Dockerfile"),
-                    str(nginx_dir),
-                ],
-                nginx_dir,
-                _SOCIAL_NGINX_DECLARED_TAG,
-            ),
-            (
-                f"{_SOCIAL_MEDIA_IMAGE_NAME}:{tag}",
-                [
-                    "docker",
-                    "build",
-                    "-t",
-                    f"{_SOCIAL_MEDIA_IMAGE_NAME}:{tag}",
-                    "-f",
-                    str(media_dockerfile),
-                    str(media_dir),
-                ],
-                media_dir,
-                _SOCIAL_MEDIA_DECLARED_TAG,
-            ),
-        )
-        for image_ref, command, context_dir, declared_tag in build_steps:
-            if (cluster_name, image_ref) in _BUILT_IMAGES:
-                continue
-            _build_image(image_ref, command, context_dir=context_dir)
-            _kind_load_image(cluster_name=cluster_name, image_ref=image_ref)
-            _declare_image(cluster_name=cluster_name, built_ref=image_ref, declared_tag=declared_tag)
-            _BUILT_IMAGES.add((cluster_name, image_ref))
+            _SourceImage(_SOCIAL_MEDIA_IMAGE_NAME, media_dockerfile, media_dir, _SOCIAL_MEDIA_DECLARED_TAG),
+        ):
+            _ensure_source_image(cluster_name, image, digests)
 
 
 class _AstronomyShopAdapter(_BaseAdapter):
@@ -192,28 +174,28 @@ class _AstronomyShopAdapter(_BaseAdapter):
     def ensure_images_loaded(self, *, cluster_name: str, node_architectures: set[str]) -> None:
         del node_architectures  # Docker builds for the configured local builder.
         source_dir = self._source_dir()
-        tag = source_image_tag(self.app_name, cluster_name)
+        digests: dict[Path, str] = {}
         for component in self.components:
-            image = f"ghcr.io/open-telemetry/demo:{tag}-{component}"
-            if (cluster_name, image) in _BUILT_IMAGES:
-                continue
             dockerfile = source_dir / "src" / component / "Dockerfile"
             if component == "cart":
                 dockerfile = source_dir / "src/cart/src/Dockerfile"
-            command = ["docker", "build", "-t", image, "-f", str(dockerfile)]
+            build_args: tuple[str, ...] = ()
             if component in {"ad", "fraud-detection", "kafka"}:
-                command.extend(["--build-arg", "OTEL_JAVA_AGENT_VERSION=2.23.0"])
+                build_args = ("OTEL_JAVA_AGENT_VERSION=2.23.0",)
             elif component == "currency":
-                command.extend(["--build-arg", "OPENTELEMETRY_CPP_VERSION=1.24.0"])
-            command.append(str(source_dir))
-            _build_image(image, command, context_dir=source_dir)
-            _kind_load_image(cluster_name=cluster_name, image_ref=image)
-            _declare_image(
-                cluster_name=cluster_name,
-                built_ref=image,
-                declared_tag=f"{_ASTRONOMY_DECLARED_TAG}-{component}",
+                build_args = ("OPENTELEMETRY_CPP_VERSION=1.24.0",)
+            _ensure_source_image(
+                cluster_name,
+                _SourceImage(
+                    "ghcr.io/open-telemetry/demo",
+                    dockerfile,
+                    source_dir,
+                    f"{_ASTRONOMY_DECLARED_TAG}-{component}",
+                    build_args=build_args,
+                    suffix=f"-{component}",
+                ),
+                digests,
             )
-            _BUILT_IMAGES.add((cluster_name, image))
 
 
 _SUPPORTED_ADAPTERS: dict[str, _BaseAdapter] = {
@@ -262,8 +244,30 @@ def source_context_digest(context_dir: Path) -> str:
     return digest.hexdigest()
 
 
-def _local_image_digest_label(image_ref: str) -> str | None:
-    template = '{{ index .Config.Labels "' + _SOURCE_DIGEST_LABEL + '" }}'
+def source_build_identity(context_digest: str, context_dir: Path, dockerfile: Path, build_args: tuple[str, ...]) -> str:
+    """Content identity of one source build: everything that decides the image bytes, and no lane or path."""
+    try:
+        recipe = "context:" + Path(dockerfile).relative_to(context_dir).as_posix()
+    except ValueError:
+        recipe = "sha256:" + hashlib.sha256(Path(dockerfile).read_bytes()).hexdigest()
+    payload = {
+        "version": 1,
+        "context": context_digest,
+        "dockerfile": recipe,
+        "build_args": list(build_args),
+        "platform": _docker_platform(),
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def _docker_platform() -> str:
+    machine = platform.machine().lower()
+    return "linux/arm64" if machine in {"arm64", "aarch64"} else "linux/amd64"
+
+
+def local_image_identity(image_ref: str) -> str | None:
+    """The content identity a local image was built from, or None when absent or unlabelled."""
+    template = '{{ index .Config.Labels "' + SOURCE_IDENTITY_LABEL + '" }}'
     result = subprocess.run(
         ["docker", "image", "inspect", "--format", template, image_ref],
         check=False,
@@ -275,22 +279,18 @@ def _local_image_digest_label(image_ref: str) -> str | None:
     return result.stdout.strip() or None
 
 
-def _build_image(image_ref: str, command: list[str], *, context_dir: Path) -> None:
-    """Build ``image_ref``, or reuse the local image when its build context is unchanged."""
-    if not source_build_cache_enabled():
-        _run_command(command)
+def _build_image(image_ref: str, command: list[str], *, identity: str) -> None:
+    """Build ``image_ref`` labelled with its identity, or reuse the local image already built from it."""
+    if source_build_cache_enabled() and local_image_identity(image_ref) == identity:
+        print(f"Reusing {image_ref}: built from identity {identity[:12]}")
         return
-    context_digest = source_context_digest(context_dir)
-    if _local_image_digest_label(image_ref) == context_digest:
-        print(f"Reusing {image_ref}: build context {context_digest[:12]} is unchanged")
-        return
-    _run_command([*command[:2], "--label", f"{_SOURCE_DIGEST_LABEL}={context_digest}", *command[2:]])
+    _run_command([*command[:2], "--label", f"{SOURCE_IDENTITY_LABEL}={identity}", *command[2:]])
 
 
-def source_image_tag(app_name: str, cluster_name: str) -> str:
-    safe_app = _sanitize_identifier(app_name)
-    safe_cluster = _sanitize_identifier(cluster_name)
-    return f"sregym-src-{safe_app}-{safe_cluster}"
+def source_image_tag(identity: str) -> str:
+    if not re.fullmatch(r"[0-9a-f]{64}", identity):
+        raise ValueError(f"source image identity must be a sha256 hex digest: {identity!r}")
+    return f"sregym-src-{identity}"
 
 
 def unsupported_reason(app_name: str) -> str | None:

@@ -1,5 +1,6 @@
 """Astronomy source/workspace contracts without Docker or Kubernetes."""
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from sregym.service import app_workspace, source_deploy
@@ -38,7 +39,7 @@ def test_astronomy_plan_builds_every_demo_component_and_preserves_chart(tmp_path
     builds, loads = [], []
     monkeypatch.setattr(source_deploy, "_BUILT_IMAGES", set())
     monkeypatch.setattr(
-        source_deploy, "_build_image", lambda ref, cmd, *, context_dir: builds.append((ref, cmd, context_dir))
+        source_deploy, "_build_image", lambda ref, cmd, *, identity: builds.append((ref, cmd, Path(cmd[-1])))
     )
     monkeypatch.setattr(source_deploy, "_kind_load_image", lambda **kw: loads.append(kw))
     monkeypatch.setattr(source_deploy, "tag_image_in_kind_nodes", lambda *args: None)

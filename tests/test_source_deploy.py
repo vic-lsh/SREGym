@@ -43,6 +43,8 @@ def test_context_digest_ignores_repository_metadata_and_tracks_sources(tmp_path:
 
 
 class FakeDocker:
+    """The Docker CLI boundary: a build stores its labelled image under its tag."""
+
     def __init__(self, labels: dict[str, str]) -> None:
         self.labels = labels
         self.commands: list[list[str]] = []
@@ -54,12 +56,18 @@ class FakeDocker:
             if ref not in self.labels:
                 return subprocess.CompletedProcess(command, 1, stdout="", stderr="No such image")
             return subprocess.CompletedProcess(command, 0, stdout=self.labels[ref] + "\n", stderr="")
+        if command[:2] == ["docker", "build"]:
+            label = command[command.index("--label") + 1].split("=", 1)[1]
+            self.labels[command[command.index("-t") + 1]] = label
         if command[:3] == ["kind", "get", "nodes"]:
-            return subprocess.CompletedProcess(command, 0, stdout="fastloop-w0-control-plane\n", stderr="")
+            return subprocess.CompletedProcess(command, 0, stdout=command[-1] + "-control-plane\n", stderr="")
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     def kinds(self) -> list[str]:
         return [" ".join(command[:3]) for command in self.commands]
+
+    def builds(self) -> list[list[str]]:
+        return [command for command in self.commands if command[:2] == ["docker", "build"]]
 
 
 @pytest.fixture
@@ -74,25 +82,32 @@ def hotel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, FakeDo
     return source, docker, adapter
 
 
-def _image_ref() -> str:
-    return f"yinfangchen/hotelreservation:{source_deploy.source_image_tag('Hotel Reservation', 'fastloop-w0')}"
+def _identity(source: Path) -> str:
+    return source_deploy.source_build_identity(
+        source_deploy.source_context_digest(source), source, source / "Dockerfile", ()
+    )
+
+
+def _image_ref(source: Path) -> str:
+    return f"yinfangchen/hotelreservation:{source_deploy.source_image_tag(_identity(source))}"
 
 
 def test_unchanged_build_context_skips_the_rebuild_but_still_loads_the_cluster(hotel, monkeypatch) -> None:
     source, docker, adapter = hotel
     monkeypatch.setenv("SREGYM_SOURCE_BUILD_CACHE", "1")
-    docker.labels[_image_ref()] = source_deploy.source_context_digest(source)
+    docker.labels[_image_ref(source)] = _identity(source)
 
     adapter.ensure_images_loaded(cluster_name="fastloop-w0", node_architectures=set())
 
     assert docker.kinds()[0] == "docker image inspect"
+    assert not docker.builds()
     assert "kind load docker-image" in docker.kinds()
 
 
 def test_unchanged_build_context_skips_the_kind_load_when_every_node_holds_the_image(hotel, monkeypatch) -> None:
     source, docker, adapter = hotel
     monkeypatch.setenv("SREGYM_SOURCE_BUILD_CACHE", "1")
-    docker.labels[_image_ref()] = source_deploy.source_context_digest(source)
+    docker.labels[_image_ref(source)] = _identity(source)
     monkeypatch.setattr(source_deploy, "kind_nodes_hold_image", lambda cluster, image: True)
 
     adapter.ensure_images_loaded(cluster_name="fastloop-w0", node_architectures=set())
@@ -101,27 +116,65 @@ def test_unchanged_build_context_skips_the_kind_load_when_every_node_holds_the_i
     assert docker.kinds()[-1] == "docker exec fastloop-w0-control-plane"
 
 
-def test_changed_build_context_rebuilds_with_the_digest_label(hotel, monkeypatch) -> None:
+def test_changed_build_context_builds_a_new_identity_with_its_label(hotel, monkeypatch) -> None:
     source, docker, adapter = hotel
     monkeypatch.setenv("SREGYM_SOURCE_BUILD_CACHE", "1")
-    docker.labels[_image_ref()] = "stale-digest"
+    docker.labels[_image_ref(source)] = _identity(source)
+    (source / "cmd" / "main.go").write_text("package main // changed\n")
 
     adapter.ensure_images_loaded(cluster_name="fastloop-w0", node_architectures=set())
 
-    build = next(command for command in docker.commands if command[:2] == ["docker", "build"])
-    assert f"sregym.source-digest={source_deploy.source_context_digest(source)}" in build
-    assert build[build.index("--label") + 1].startswith("sregym.source-digest=")
+    [build] = docker.builds()
+    assert build[build.index("-t") + 1] == _image_ref(source)
+    assert f"{source_deploy.SOURCE_IDENTITY_LABEL}={_identity(source)}" in build
     assert "kind load docker-image" in docker.kinds()
 
 
+def test_two_lanes_deploying_the_same_source_build_it_once(hotel, monkeypatch) -> None:
+    """Class guard: the built ref is the content identity, never the lane, so a second lane reuses the first build."""
+    source, docker, adapter = hotel
+    monkeypatch.setenv("SREGYM_SOURCE_BUILD_CACHE", "1")
+    tags = []
+    monkeypatch.setattr(
+        source_deploy, "tag_image_in_kind_nodes", lambda cluster, built, declared: tags.append((cluster, built))
+    )
+
+    for lane in ("luna-pilot-60", "luna-pilot-61"):
+        adapter.ensure_images_loaded(cluster_name=lane, node_architectures=set())
+
+    assert len(docker.builds()) == 1
+    assert tags == [("luna-pilot-60", _image_ref(source)), ("luna-pilot-61", _image_ref(source))]
+    assert "luna-pilot" not in _image_ref(source)
+
+
+def test_build_identity_tracks_what_decides_the_image_bytes_and_ignores_the_checkout_path(tmp_path: Path) -> None:
+    first = _hotel_source(tmp_path / "first")
+    second = _hotel_source(tmp_path / "elsewhere" / "second")
+    assert _identity(first) == _identity(second)
+
+    digest = source_deploy.source_context_digest(first)
+    identity = _identity(first)
+    assert source_deploy.source_build_identity(digest, first, first / "Dockerfile", ("A=1",)) != identity
+    (first / "Dockerfile.alt").write_text("FROM golang\n")
+    alternate = source_deploy.source_context_digest(first)
+    assert source_deploy.source_build_identity(alternate, first, first / "Dockerfile.alt", ()) != (
+        source_deploy.source_build_identity(alternate, first, first / "Dockerfile", ())
+    )
+    outside = tmp_path / "outside.Dockerfile"
+    outside.write_text("FROM golang\n")
+    before = source_deploy.source_build_identity(digest, first, outside, ())
+    outside.write_text("FROM alpine\n")
+    assert source_deploy.source_build_identity(digest, first, outside, ()) != before
+
+
 def test_build_cache_is_opt_in(hotel, monkeypatch) -> None:
-    _source, docker, adapter = hotel
+    source, docker, adapter = hotel
     monkeypatch.delenv("SREGYM_SOURCE_BUILD_CACHE", raising=False)
+    docker.labels[_image_ref(source)] = _identity(source)
 
     adapter.ensure_images_loaded(cluster_name="fastloop-w0", node_architectures=set())
 
-    assert docker.kinds()[:2] == ["docker build -t", "kind load docker-image"]
-    assert "--label" not in docker.commands[0]
+    assert docker.kinds()[:2] == ["docker build --label", "kind load docker-image"]
 
 
 def test_kind_load_is_unconditional_without_the_build_cache(hotel, monkeypatch) -> None:
@@ -156,7 +209,7 @@ def test_hotel_source_build_is_published_under_the_declared_ref_and_deployed_unc
 
     assert _exec_tags(docker) == [
         (
-            "docker.io/" + _image_ref(),
+            "docker.io/" + _image_ref(source),
             "docker.io/yinfangchen/hotelreservation:latest",
         )
     ]
