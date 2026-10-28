@@ -1228,7 +1228,9 @@ class Conductor:
         problem.app.deploy()
         self.logger.info(f"[ENV] Deploy application: {problem.app.name}")
 
-        if not is_train_ticket:
+        from sregym.service.source_deploy import source_deploy_enabled
+
+        if not is_train_ticket and not source_deploy_enabled():
             for ns in app_namespaces:
                 self.jaeger.create_external_name_service(ns)
 
