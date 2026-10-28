@@ -58,6 +58,7 @@ from sregym.conductor.oracles.cumulative_admission_webhook_timeout_mitigation im
 )
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
+from sregym.conductor.problems.webhook_tls import WebhookTLS
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
@@ -540,12 +541,7 @@ srv.serve_forever()
         for backend_name in self.WEBHOOK_BACKEND_NAMES:
             self._ensure_backend_deployment(backend_name)
             self._ensure_backend_service(backend_name)
-        for backend_name in self.WEBHOOK_BACKEND_NAMES:
-            self._wait_for_deployment_ready(
-                name=backend_name,
-                namespace=self.POLICY_NAMESPACE,
-                timeout_s=self.BACKEND_ROLLOUT_TIMEOUT_S,
-            )
+        self._wait_for_backends_ready()
         logger.info(f"All {len(self.WEBHOOK_BACKEND_NAMES)} backend deployments ready in '{self.POLICY_NAMESPACE}'.")
 
         # Step 5: isolate the backends. The baseline default-deny plus
@@ -631,6 +627,7 @@ srv.serve_forever()
         # Step 2: add the missing apiserver ingress allow.
         self._ensure_apiserver_allow_network_policy()
 
+        self._wait_for_backends_ready()
         self._wait_for_recovery()
         logger.info(
             f"Recovery converged: '{self.TARGET_DEPLOYMENT}' deployment in "
@@ -718,6 +715,7 @@ srv.serve_forever()
         TLS cert and key. Every backend Deployment mounts this Secret
         at ``/tls``. The cert has SANs covering every backend Service's
         DNS name, so a single Secret serves all four backends."""
+        tls = WebhookTLS(server_cert_pem, port=self.WEBHOOK_BACKEND_PORT)
         body = client.V1Secret(
             metadata=client.V1ObjectMeta(name=self.TLS_SECRET_NAME, namespace=self.POLICY_NAMESPACE),
             type="kubernetes.io/tls",
@@ -738,6 +736,8 @@ srv.serve_forever()
                 logger.info(f"Replaced Secret '{self.TLS_SECRET_NAME}' in '{self.POLICY_NAMESPACE}'.")
             else:
                 raise
+
+        self._backend_tls = tls
 
     def _ensure_server_script_configmap(self) -> None:
         """Create or update the ConfigMap that holds the Python webhook
@@ -801,6 +801,7 @@ srv.serve_forever()
             name="app",
             image=self.WEBHOOK_BACKEND_IMAGE,
             command=["python", "/app/server.py"],
+            readiness_probe=self._backend_tls.readiness_probe,
             ports=[client.V1ContainerPort(container_port=self.WEBHOOK_BACKEND_PORT)],
             volume_mounts=[
                 client.V1VolumeMount(name="tls", mount_path="/tls", read_only=True),
@@ -840,7 +841,7 @@ srv.serve_forever()
                 replicas=1,
                 selector=client.V1LabelSelector(match_labels={"app": name}),
                 template=client.V1PodTemplateSpec(
-                    metadata=client.V1ObjectMeta(labels=pod_labels),
+                    metadata=client.V1ObjectMeta(labels=pod_labels, annotations=self._backend_tls.annotations),
                     spec=client.V1PodSpec(
                         containers=[container],
                         affinity=affinity,
@@ -884,14 +885,29 @@ srv.serve_forever()
             else:
                 raise
 
+    def _wait_for_backends_ready(self) -> None:
+        """Injection and recovery both require the intended serving certificate."""
+        for backend_name in self.WEBHOOK_BACKEND_NAMES:
+            self._wait_for_deployment_ready(
+                name=backend_name,
+                namespace=self.POLICY_NAMESPACE,
+                timeout_s=self.BACKEND_ROLLOUT_TIMEOUT_S,
+            )
+
     def _wait_for_deployment_ready(self, name: str, namespace: str, timeout_s: int) -> None:
-        """Block until the deployment reports ready_replicas == spec.replicas."""
+        """Wait for the current template's TLS-ready pods and retirement of old pods."""
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             d = self.apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
             desired = d.spec.replicas or 1
-            ready = d.status.ready_replicas or 0
-            if ready >= desired:
+            status = d.status
+            if (
+                (status.observed_generation or 0) >= d.metadata.generation
+                and (status.updated_replicas or 0) == desired
+                and (status.replicas or 0) == desired
+                and (status.ready_replicas or 0) == desired
+                and (status.available_replicas or 0) == desired
+            ):
                 return
             time.sleep(2)
         raise RuntimeError(f"deployment '{name}' in '{namespace}' did not become Available in {timeout_s}s")

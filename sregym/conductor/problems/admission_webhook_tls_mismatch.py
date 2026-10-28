@@ -19,6 +19,7 @@ restoring a valid ``caBundle``.
 """
 
 import base64
+import json
 import subprocess
 import tempfile
 import textwrap
@@ -31,6 +32,7 @@ from kubernetes.client.exceptions import ApiException
 from sregym.conductor.oracles.deployment_readiness import DeploymentReadinessOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
+from sregym.conductor.problems.webhook_tls import WebhookTLS
 from sregym.service.apps.astronomy_shop import AstronomyShop
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.apps.social_network import SocialNetwork
@@ -228,6 +230,7 @@ class AdmissionWebhookTLSMismatch(Problem):
     def _ensure_webhook_backend(self):
         print("[Backend] Creating reachable HTTPS webhook backend with intentionally mismatched CA trust")
         material = self._generate_tls_material()
+        tls = WebhookTLS(base64.b64decode(material["tls_crt_b64"]).decode(), port=8443)
         self.wrong_ca_bundle = material["wrong_ca_bundle"]
 
         server_code = r"""
@@ -304,6 +307,7 @@ spec:
       app: {self.BACKEND_DEPLOYMENT_NAME}
   template:
     metadata:
+      annotations: {json.dumps(tls.annotations)}
       labels:
         app: {self.BACKEND_DEPLOYMENT_NAME}
     spec:
@@ -312,6 +316,7 @@ spec:
         image: python:3.12-alpine
         imagePullPolicy: IfNotPresent
         command: ["python", "/app/server.py"]
+        readinessProbe: {json.dumps(client.ApiClient().sanitize_for_serialization(tls.readiness_probe))}
         ports:
         - containerPort: 8443
         volumeMounts:
@@ -471,9 +476,7 @@ spec:
         print("== Fault Recovery ==")
         self._delete_webhook()
 
-        subprocess.run(
-            ["kubectl", "delete", "namespace", self.BACKEND_SVC_NAMESPACE, "--ignore-not-found"],
-            check=False,
-            text=True,
+        self._run(
+            ["kubectl", "delete", "namespace", self.BACKEND_SVC_NAMESPACE, "--ignore-not-found", "--timeout=180s"]
         )
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
