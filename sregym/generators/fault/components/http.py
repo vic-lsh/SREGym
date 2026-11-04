@@ -20,6 +20,7 @@ from sregym.generators.fault.components.kube import ComponentError, Kube, run_cl
 
 _BEGIN, _END = "@@REQ", "@@END"
 SEED_ATTEMPTS = 3
+READ_RETRIES = 2
 
 
 @dataclass(frozen=True)
@@ -135,7 +136,15 @@ def compare(kube: Kube, binding: AppBinding, namespace: str, snapshot: Snapshot)
     """Do the snapshot's reads return the same data now? ``(ok, detail)``."""
     check = binding.integrity
     assert check is not None
-    responses = fetch(kube, binding, namespace, tuple(Request(p) for p in snapshot.reads))
+    reads = tuple(Request(p) for p in snapshot.reads)
+    responses = fetch(kube, binding, namespace, reads)
+    for _ in range(READ_RETRIES):
+        # The first request after a pod restart can fail once on a stale pooled connection; a
+        # failed read is retried, changed data never is.
+        if all(r.ok for r in responses):
+            break
+        time.sleep(3)
+        responses = fetch(kube, binding, namespace, reads)
     return diff(snapshot, responses, check.volatile_keys)
 
 

@@ -152,6 +152,7 @@ def offline(monkeypatch, tmp_path):
     monkeypatch.setattr(Application, "_validated_path", lambda self, path, label: Path(path).expanduser().resolve())
     monkeypatch.setattr(KubeCtl, "list_deployments", lambda self, namespace: SimpleNamespace(items=[]))
     monkeypatch.setattr(KubeCtl, "exec_command", lambda self, *args, **kwargs: "")
+    monkeypatch.setattr(http.time, "sleep", lambda s: None)
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError(f"spawned {a}")))
 
 

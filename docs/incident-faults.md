@@ -123,3 +123,18 @@ Per seed: a `baseline` health row, one `decoy:<name>` row per decoy (passes when
 FAILS), a `reference` row and one `acceptable:<name>` row per acceptable repair (pass when it PASSES), each on a fresh injection with the symptom
 checked before and after the persistence window, and a final `recovered` health row. Exit 0 only
 if every row passed.
+
+### Lane notes (read before validating)
+
+- nginx-thrift: the stock `worker_processes auto` forks one worker per host CPU (64 on a large
+  host) into a 128Mi limit; workers grow as they load the Lua thrift clients and the pod is
+  OOMKilled under light traffic (seen on the first probe of a fresh lane: 7/36 ok, exit 137).
+  Patch `worker_processes` to a small number (2 or 4) in the nginx-thrift ConfigMap of the
+  rendered manifest the lane deploys AND in the file `SREGYM_ACCEPTED_RENDER` points at, so the
+  `restore_source` decoy does not bring the crash back. The DeathStarBench source still says
+  `auto`.
+- The Conductor's continuous `wrk2-job` adds load (and nginx pressure); SDO's clean start deletes
+  it. Delete it for validation unless the fault needs background traffic.
+- The first request after a pod restart can fail once on a stale pooled connection. The traffic
+  probe tolerates it (90% threshold) and integrity reads retry a failed read (never changed data).
+- A fresh app fails its first requests while connection pools warm up; seeding retries.
