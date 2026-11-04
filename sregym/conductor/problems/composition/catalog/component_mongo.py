@@ -102,10 +102,20 @@ def _build_poison(app: str, params: dict[str, Any]):
 
 
 ENTRIES: tuple[CatalogEntry, ...] = (
-    entry("mongo_write_lock", ENABLED_APPS["mongo_write_lock"], _choose_write_lock, _build_write_lock),
+    entry("mongo_write_lock", ENABLED_APPS["mongo_write_lock"], _choose_write_lock, _build_write_lock, generation=2),
     entry(
-        "mongo_write_rejection", ENABLED_APPS["mongo_write_rejection"], _choose_write_rejection, _build_write_rejection
+        "mongo_write_rejection",
+        ENABLED_APPS["mongo_write_rejection"],
+        _choose_write_rejection,
+        _build_write_rejection,
+        generation=2,
     ),
-    entry("mongo_collection_renamed", ENABLED_APPS["mongo_collection_renamed"], _choose_renamed, _build_renamed),
-    entry("mongo_poison_document", ENABLED_APPS["mongo_poison_document"], _choose_poison, _build_poison),
+    entry(
+        "mongo_collection_renamed",
+        ENABLED_APPS["mongo_collection_renamed"],
+        _choose_renamed,
+        _build_renamed,
+        generation=2,
+    ),
+    entry("mongo_poison_document", ENABLED_APPS["mongo_poison_document"], _choose_poison, _build_poison, generation=2),
 )

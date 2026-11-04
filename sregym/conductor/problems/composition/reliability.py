@@ -52,16 +52,6 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
         "under load (enforcement and webhook registration lag); the three-trigger fix passed twice, but "
         "the diagnosis is not proven."
     ),
-    ("redis_replica_misconfig", "social_network"): (
-        "Held out, not unreliable: validated live 2026-11-04 (seeds 2, 5, 7: every redis target, every "
-        "trial passed), but adding it to __reliable plans changes the pinned vanilla_s42 plans "
-        "(tests/composition/fixtures); unflag when that fixture is regenerated."
-    ),
-    ("memcached_poisoned_entries", "social_network"): (
-        "Held out, not unreliable: validated live 2026-11-04 (seeds 1, 2, 5, 12: both targets, all "
-        "three corruption modes), but adding it to __reliable plans changes the pinned vanilla_s42 plans "
-        "(tests/composition/fixtures); unflag when that fixture is regenerated."
-    ),
     ("mongo_write_lock", "social_network"): (
         "Pending: new MongoDB component fault; kept out of __reliable plans until it validates live "
         "(tools/fault_validation/validate.py)."

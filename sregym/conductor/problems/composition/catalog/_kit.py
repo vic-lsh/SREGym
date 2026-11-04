@@ -120,8 +120,11 @@ Choose = Callable[[str, random.Random], Pick]
 Build = Callable[[str, dict[str, Any]], Any]
 
 
-def entry(key: str, apps: Iterable[str], choose: Choose, build: Build) -> CatalogEntry:
+def entry(key: str, apps: Iterable[str], choose: Choose, build: Build, generation: int = 1) -> CatalogEntry:
     """Wrap a pure `choose(app, rng)` and a lazy `build(app, params)` into a CatalogEntry.
+
+    `generation` is the catalog generation of every app in `apps` (spec.LATEST_GENERATION): new
+    families use the newest open generation so existing plan ids keep their draws.
 
     `sample` raises ValueError for an app outside `apps`, and for a pick without footprints.
     """
@@ -145,7 +148,13 @@ def entry(key: str, apps: Iterable[str], choose: Choose, build: Build) -> Catalo
             exclusive_tags=pick.tags,
         )
 
-    return CatalogEntry(key=key, apps=supported, sample=sample, build=lambda draw: build(draw.app, draw.param_dict()))
+    return CatalogEntry(
+        key=key,
+        apps=supported,
+        sample=sample,
+        build=lambda draw: build(draw.app, draw.param_dict()),
+        generations={app: generation for app in supported} if generation != 1 else {},
+    )
 
 
 def fixed(pick: Pick) -> Choose:
