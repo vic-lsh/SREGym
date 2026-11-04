@@ -60,7 +60,7 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
     ),
     **{
         (key, "social_network"): _PENDING
-        for key in ("mongo_write_lock", "mongo_write_rejection", "mongo_poison_document")
+        for key in ("mongo_write_lock", "mongo_poison_document")
     },
 }
 
