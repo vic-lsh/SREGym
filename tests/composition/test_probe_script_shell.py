@@ -69,6 +69,12 @@ def test_a_write_answered_200_but_dropped_fails_the_probe(tmp_path):
     assert "POST /wrk2-api/post/compose" in result.failed_paths
 
 
+def test_the_marker_survives_kubernetes_command_expansion():
+    """Kubernetes rewrites $(VAR) and $$ in a container command; the marker must use neither."""
+    script = grading.probe_script("social-network", grading.ENTRY_POINTS["Social Network"], rounds=1)
+    assert "$(" not in script.replace("$((i+1))", "") and "$$" not in script
+
+
 def test_marker_field_and_readback_go_together():
     with pytest.raises(ValueError):
         grading.Request("/w", (("text", "x"),), marker_field="text")

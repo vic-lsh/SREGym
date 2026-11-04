@@ -29,8 +29,11 @@ INCIDENT_KEYS = {
     "mongo_write_rejection",
     "mongo_collection_renamed",
     "mongo_poison_document",
+    "process_frozen",
+    "pod_network_impairment",
+    "connection_exhaustion",
+    "traffic_surge",
 }
-INFRASTRUCTURE_KEYS = {"process_frozen", "pod_network_impairment", "connection_exhaustion", "traffic_surge"}
 
 
 def _draws(pid: str) -> list[dict]:
@@ -61,19 +64,13 @@ def test_generation_one_key_sets_are_frozen():
 def test_incident_families_are_reachable_only_through_a_generation_segment():
     for entry in catalog.entries():
         for app in entry.apps:
-            want = 3 if entry.key in INFRASTRUCTURE_KEYS else 2 if entry.key in INCIDENT_KEYS else 1
-            assert entry.generation(app) == want, (entry.key, app)
-    entries = catalog.entries_for("social_network")
-
-    def keys(generation):
-        return {
-            d.key
-            for seed in range(60)
-            for d in plan_for(PlanRef("social_network", 3, seed, generation=generation), entries).draws
-        }
-
-    assert keys(2) & INCIDENT_KEYS and not keys(2) & INFRASTRUCTURE_KEYS
-    assert keys(3) & INFRASTRUCTURE_KEYS
+            assert (entry.generation(app) >= 2) == (entry.key in INCIDENT_KEYS), (entry.key, app)
+    keys = {
+        d.key
+        for seed in range(60)
+        for d in plan_for(PlanRef("social_network", 3, seed, generation=2), catalog.entries_for("social_network")).draws
+    }
+    assert keys & INCIDENT_KEYS
 
 
 @pytest.mark.parametrize("reliable", [False, True])

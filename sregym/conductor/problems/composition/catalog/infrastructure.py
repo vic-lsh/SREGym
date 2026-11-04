@@ -16,7 +16,7 @@
 Targets come from the app binding's workload rows (``workload_targets``): stateless services, caches
 and stores alike, each with its own restart expectation (``holds_primary_data``). Apps are opt-in per
 key. The state lives in the pod, so every draw declares the whole workload (field None). These keys are
-catalog generation 3 (tests/composition/test_plan_generations.py).
+catalog generation 2 (tests/composition/test_plan_generations.py).
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ SURGE_WORKERS = (100, 150)
 NETWORK_SEVERITIES: dict[str, tuple[int, ...]] = {"delay": (3000, 6000), "loss": (90, 95)}
 
 
-GENERATION = 3
+GENERATION = 2
 
 
 def _targets(binding: AppBinding, *, protocols: tuple[str, ...], proxy: bool | None = False):

@@ -34,7 +34,7 @@ from typing import Any
 # (FROZEN_GENERATION) and new entries go to the next one. tests/composition/test_plan_generations.py
 # pins the key set of every frozen generation, so a change that would re-draw a used id fails.
 FROZEN_GENERATION = 1
-LATEST_GENERATION = 3
+LATEST_GENERATION = 2
 
 
 def _is_dotted_prefix(prefix: str, path: str) -> bool:

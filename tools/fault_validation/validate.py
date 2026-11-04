@@ -19,7 +19,9 @@ Each trial row has ``status``:
            not run, injection or the repair raised (a declared no-op that rolled a workload).
 A decoy never counts as "correctly failing" unless its verdict reason matches. Repairs that
 destroy data run after the others; ``--reset-cmd`` runs after each of them (and the next trial
-waits for it). Injected state is persisted under ``--state-dir`` while a fault is live; a later run
+waits for it). ``--detach`` runs the same arguments in a new session (pid in <out>.pid, output in
+<out>.log) so a caller's timeout cannot kill it; ``--status <out>`` prints its rows and whether
+it is still running. Injected state is persisted under ``--state-dir`` while a fault is live; a later run
 recovers any leftover fault before its first trial. ``--lanes`` shards the seeds over several
 kubeconfigs (one subprocess per lane). Exit status 0 only if every row is VALID.
 """
@@ -122,7 +124,7 @@ class Harness:
             try:
                 problem = _build(doc["key"], doc["app"], doc["params"], doc["namespace"])
                 problem.load_injected_state(doc.get("state") or {})
-                problem.recover_fault()
+                _recover(problem)
                 path.unlink()
                 row["status"] = VALID
             except Exception as e:
@@ -153,7 +155,7 @@ class Harness:
             row.update(status=INVALID, why=f"{type(e).__name__}: {e}"[:800])
         finally:
             try:
-                problem.recover_fault()
+                _recover(problem)
                 self.clear_state(key, seed)
             except Exception as e:
                 row["recover_error"] = f"{type(e).__name__}: {e}"[:400]
@@ -254,6 +256,46 @@ def judge(row: dict[str, Any], expect: str) -> dict[str, Any]:
     return {"status": VALID, "observed": observed}
 
 
+def _recover(problem) -> None:
+    """``recover_fault`` with its errors raised (the decorator only logs them)."""
+    undecorated = getattr(type(problem).recover_fault, "__wrapped__", None)
+    (undecorated or type(problem).recover_fault)(problem)
+
+
+class LaneBusy(RuntimeError):
+    pass
+
+
+def lane_lock(state_dir: Path, kubeconfig: str, namespace: str):
+    """An exclusive, non-blocking flock per (kubeconfig, namespace): two harnesses on one lane
+    would inject into each other's trials. Returns the open file (keep it open); raises LaneBusy."""
+    import fcntl
+    import hashlib
+
+    state_dir.mkdir(parents=True, exist_ok=True)
+    real = os.path.realpath(kubeconfig) if kubeconfig else ""
+    digest = hashlib.sha256(f"{real}|{namespace}".encode()).hexdigest()[:16]
+    path = state_dir / f"lane-{digest}.lock"
+    f = open(path, "a+")  # noqa: SIM115 (held for the process lifetime)
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        f.seek(0)
+        holder = f.read().strip()
+        f.close()
+        raise LaneBusy(
+            f"another validate.py holds {path} ({holder}): kubeconfig={real} namespace={namespace}"
+        ) from None
+    f.seek(0)
+    f.truncate()
+    f.write(f"pid={os.getpid()} kubeconfig={real} namespace={namespace}\n")
+    f.flush()
+    return f
+
+
+LOCK_DIR = Path(os.path.expanduser("~/.cache/sregym/fault-validation-locks"))
+
+
 def _build(key: str, app: str, params: dict, namespace: str):
     entry = {e.key: e for e in catalog.entries_for(app)}[key]
     problem = entry.build(_Draw(app, params))
@@ -295,6 +337,49 @@ def _strip(argv: list[str], flags: tuple[str, ...]) -> list[str]:
     return out
 
 
+def detach(argv: list[str], out: str | None) -> int:
+    """Re-run these arguments without --detach in a new session; rows go to ``out``."""
+    if not out:
+        print("--detach needs --out", file=sys.stderr)
+        return 2
+    child = [a for a in argv if a != "--detach"]
+    with open(out + ".log", "ab") as log:
+        proc = subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), *child],
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    Path(out + ".pid").write_text(f"{proc.pid}\n")
+    print(json.dumps({"detached": proc.pid, "out": out, "log": out + ".log", "pid_file": out + ".pid"}))
+    return 0
+
+
+def status(out: str) -> int:
+    """One line per row of ``out`` plus whether the detached run is still alive. Exit 0 when it
+    finished and every row is VALID, 1 when a row is not, 3 while it is still running."""
+    alive = False
+    pid_file = Path(out + ".pid")
+    if pid_file.is_file():
+        try:
+            os.kill(int(pid_file.read_text().strip()), 0)
+            alive = True
+        except (OSError, ValueError):
+            alive = False
+    rows = (
+        [json.loads(line) for line in Path(out).read_text().splitlines() if line.strip()] if Path(out).is_file() else []
+    )
+    for r in rows:
+        why = (r.get("why") or "")[:160]
+        dur = r.get("duration_s", r.get("wall_s", ""))
+        print(f"s{r.get('seed', '-')} {r['trial']:<45} {r.get('status', '-'):<8} {r.get('observed') or ''} {dur} {why}")
+    print(f"running={alive} rows={len(rows)}")
+    if alive:
+        return 3
+    return 0 if rows and all(r.get("pass") for r in rows) else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -312,7 +397,18 @@ def main(argv: list[str] | None = None) -> int:
         "--set", nargs="*", default=[], metavar="K=JSON", help='pin draw parameters, e.g. target="user-service"'
     )
     ap.add_argument("--out", default=None, help="also append JSON lines here")
+    ap.add_argument(
+        "--detach",
+        action="store_true",
+        help="run in a new session (survives the caller being killed); needs --out; writes <out>.pid "
+        "and <out>.log, prints the pid and returns",
+    )
+    ap.add_argument("--status", metavar="OUT", default=None, help="summarize <OUT> rows and whether its run is alive")
+    if "--status" in argv:
+        return status(argv[argv.index("--status") + 1])
     args = ap.parse_args(argv)
+    if args.detach:
+        return detach(argv, args.out)
     if args.lanes:
         return _run_lanes(argv, args.lanes, args.seeds)
 
@@ -321,6 +417,11 @@ def main(argv: list[str] | None = None) -> int:
 
     namespace = args.namespace or BINDINGS[args.app].namespace
     overrides = {k: json.loads(v) for k, _, v in (kv.partition("=") for kv in args.set)}
+    try:  # one lock directory for every state dir: two runs differing only in --state-dir still collide
+        lock = lane_lock(LOCK_DIR, os.environ.get("KUBECONFIG", ""), namespace)  # noqa: F841 (held)
+    except LaneBusy as e:
+        print(json.dumps({"trial": "lane_busy", "status": INVALID, "pass": False, "why": str(e)}), flush=True)
+        return 4
     harness = Harness(
         KubeClusterIO(),
         persist_s=args.persist_s,
@@ -342,8 +443,9 @@ def main(argv: list[str] | None = None) -> int:
     for row in harness.recover_leftovers():
         emit(row)
     for seed in args.seeds:
-        only = set(args.only) if args.only else None
-        for row in harness.validate_seed(args.key, args.app, seed, namespace, only, overrides):
+        for row in harness.validate_seed(
+            args.key, args.app, seed, namespace, set(args.only) if args.only else None, overrides
+        ):
             emit(row)
     return 0 if all_ok else 1
 
