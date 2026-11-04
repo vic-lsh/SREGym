@@ -20,6 +20,7 @@ acceptable alternative repair for this target, pass when it PASSES. A final
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import random
 import secrets
@@ -89,9 +90,19 @@ def run_trial(problem, cluster, name: str, mitigation: Callable[[], None], expec
     return row
 
 
-def validate_seed(key: str, app: str, seed: int, namespace: str, persist_s: float, cluster) -> list[dict[str, Any]]:
+def validate_seed(
+    key: str,
+    app: str,
+    seed: int,
+    namespace: str,
+    persist_s: float,
+    cluster,
+    overrides: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     entry = {e.key: e for e in catalog.entries_for(app)}[key]
     draw = entry.sample(app, random.Random(seed))
+    if overrides:  # calibration: pin parameters (a target, a severity) instead of the seed's draw
+        draw = dataclasses.replace(draw, params=tuple(sorted({**draw.param_dict(), **overrides}.items())))
     problem = entry.build(draw)
     problem.namespace = namespace
     base = {"key": key, "app": app, "seed": seed, "params": draw.param_dict()}
@@ -118,17 +129,21 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3])
     ap.add_argument("--namespace", default=None, help="default: the app binding's namespace")
     ap.add_argument("--persist-s", type=float, default=60.0)
+    ap.add_argument(
+        "--set", nargs="*", default=[], metavar="K=JSON", help='pin draw parameters, e.g. target="user-service"'
+    )
     ap.add_argument("--out", default=None, help="also append JSON lines here")
     args = ap.parse_args(argv)
 
     from sregym.conductor.problems.colocated_composite import KubeClusterIO
     from sregym.conductor.problems.composition.app_bindings import BINDINGS
 
+    overrides = {k: json.loads(v) for k, _, v in (kv.partition("=") for kv in args.set)}
     namespace = args.namespace or BINDINGS[args.app].namespace
     cluster = KubeClusterIO()
     all_ok = True
     for seed in args.seeds:
-        for row in validate_seed(args.key, args.app, seed, namespace, args.persist_s, cluster):
+        for row in validate_seed(args.key, args.app, seed, namespace, args.persist_s, cluster, overrides):
             line = json.dumps(row, default=str)
             print(line, flush=True)
             if args.out:

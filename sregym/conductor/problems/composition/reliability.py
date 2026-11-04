@@ -60,6 +60,12 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
         "Pending: new component-state fault; kept out of __reliable plans until it validates live "
         "(tools/fault_validation/validate.py) and the pinned vanilla_s42 plans are regenerated."
     ),
+    ("process_frozen", "social_network"): (
+        "Pending: new pod-level fault (process driver); kept out of __reliable plans until it validates live."
+    ),
+    ("pod_network_impairment", "social_network"): (
+        "Pending: new pod-level fault (network driver); kept out of __reliable plans until it validates live."
+    ),
 }
 
 
