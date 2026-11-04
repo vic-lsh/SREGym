@@ -88,10 +88,6 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
     ("mongo_poison_document", "hotel_reservation"): (
         "Decoy trials FAIL on all 3 seeds: the poisoned documents leave no entry-point symptom (traffic 15/15)."
     ),
-    ("connection_exhaustion", "social_network"): (
-        "Intermittent symptom: seed 2 VALID, seed 1 had a trial where the symptom did not persist 15 s, seed 3 "
-        "baseline INVALID. 1 of 3 seeds."
-    ),
     ("traffic_surge", "social_network"): (
         "Reference does not reliably pass: stopping the client clears the cause, but the surge OOM-kills "
         "user-timeline-service (128Mi; its Mongo sits at its 100m CPU limit) and the pod can sit in "
