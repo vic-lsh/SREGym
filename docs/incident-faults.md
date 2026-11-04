@@ -123,3 +123,36 @@ Per seed: a `baseline` health row, one `decoy:<name>` row per decoy (passes when
 FAILS), a `reference` row and one `acceptable:<name>` row per acceptable repair (pass when it PASSES), each on a fresh injection with the symptom
 checked before and after the persistence window, and a final `recovered` health row. Exit 0 only
 if every row passed.
+
+## MongoDB faults
+
+Driver `components/mongo.py` runs the server's shell in its pod (`mongo --eval`, one JSON line
+back) and raises `ComponentError` with the namespace and workload. Primitives come as
+inject, repair and status:
+
+| Fault kind | Inject | Reference repair | Status read |
+| --- | --- | --- | --- |
+| `mongo_write_lock` (target) | `fsync_lock` | `fsync_unlock` (until count 0) | `lock_state` |
+| `mongo_write_rejection` (target, collection, mode) | `set_validator` (a `$jsonSchema` no document meets) or `add_blocking_unique_index` | `clear_validator` / `drop_blocking_unique_index` | `validator_state` / `blocking_index_state` |
+| `mongo_collection_renamed` (target, collection) | `rename_away` (to `<name>_old`), then flush the collection's cache | `merge_back`: copy newer documents into `_old`, rename over the name with `dropTarget` (a plain rename back fails once writers recreated the name) | `collection_state` |
+| `mongo_poison_document` (target, collection, shape, scope) | `poison_documents` (`wrong_type`: a string field becomes `{v: <original>}`; `field_renamed`: a required object field gets a `_legacy` suffix), then flush the cache | `unpoison_documents` (lossless: the original is in the document) | `poison_state` |
+
+The unique-index mode builds a partial unique index over documents newer than the collection's
+newest, plus a sentinel document in that range, so existing documents are unaffected and every new
+one collides. The mongod holds the only copy of its data and its pod has no volume: restarting it
+(rollout restart or deleting the pod) clears each fault by destroying the data. The per-fault
+verdict therefore also runs `data_intact`: `_id`s sampled from the target collection before the
+fault must still be present and the collection must not have shrunk (`MongoFaultProblem.verdict`).
+`inject` first checks the collection is non-empty (reseeding once, then retaking the integrity
+snapshot) so a data-destroying repair is always distinguishable. Decoys: `restore_source` (no
+object changed), `rollout_restart`, `restart_stateful_pod`, `rollout_restart:<consumer>`, and for
+poison `flush_cache`.
+
+Binding fields (`MongoInstance`, `MongoCollection` in `app_bindings.py`): per instance `database`,
+`collections`, `consumers`, `shell`, `container`; per collection `cache` (the memcached/Redis row
+that fronts it, flushed after faults a warm cache would hide), `key_field` (a document field that
+also appears in the integrity snapshot, used to pick documents the entry points read),
+`poison_fields` (string field, object field), `unique_key`/`stamp_field` (enable the unique-index
+mode) and `faults`, the Mongo fault kinds verified live on that collection; only those sample it
+(`mongo_targets`). Instances unreachable from any entry point (`media-mongodb`) or empty after the
+seed (`url-shorten-mongodb`) are `verified=False`.
