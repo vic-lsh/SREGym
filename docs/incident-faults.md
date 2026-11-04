@@ -183,6 +183,33 @@ repairs run last, each followed by `--reset-cmd`. Injected state is written to `
 while a fault is live and a later run recovers leftovers first. `--lanes` shards seeds over
 kubeconfigs in parallel. `--only` limits the repairs. Exit 0 only if every row is VALID.
 
+## Validate a composition live
+
+`tools/fault_validation/validate_composition.py` checks that the faults of one plan id inject
+together, grade correctly and each need their own repair (offline plan statistics:
+`tools/fault_validation/compose_stats.py`):
+
+```bash
+uv run python tools/fault_validation/validate_composition.py \
+    --plan-id mf__social_network__n2__s50__reliable__g2__v_ [--plan-id ...] \
+    [--repair-order declared|reverse] --reset-cmd '<lane>/reset.sh' --out rows.jsonl --detach
+```
+
+It resolves the composite exactly as an experiment does (every snapshot prepared before anything is
+injected), then rows: `baseline`, `inject` (composite_valid, every fault live), `all_broken` (the
+composite and every per-fault verdict fail, again after `--persist-s`), `repair:<i>:<kind>` (one
+reference repair at a time: the composite must still fail until the last, and no unrepaired fault's
+verdict may pass), `all_fixed` (composite, every verdict, collateral and traffic pass), `recovery`,
+`recovered`, `plan_summary`. Statuses are VALID/FAIL/INVALID as in the single-fault harness.
+Component faults repair through `reference_mitigation()` (their snapshot survives for the verdict),
+other faults through `recover_component`. Injected state of every fault is persisted per plan and a
+later run recovers leftovers first.
+
+Known coupling (warning `warn_repaired_verdict_fails`, not a failure): every component fault's
+`data` check re-reads the same entry-point reads, which traverse several stores. A repaired fault
+can therefore still report `data_lost` while another live fault breaks those reads; the composite is
+unaffected (it needs every fault fixed), only `faults_fixed` undercounts until the last repair.
+
 ## MongoDB faults
 
 Driver `components/mongo.py` runs the server's shell in its pod (`mongo --eval`, one JSON line
