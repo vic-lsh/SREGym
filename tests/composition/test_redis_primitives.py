@@ -141,11 +141,11 @@ def test_acl_rejects_unknown_mode():
 
 def test_maxmemory_trips_writes_and_zero_restores():
     k = FakeRedisKube()
-    limit = redis.memory_pressure_limit(redis.used_memory(k, "ns", INST), 0.0)
-    redis.set_maxmemory(k, "ns", INST, limit - 1)
+    limit = redis.oom_limit(redis.used_memory(k, "ns", INST), 0.5)
+    redis.set_maxmemory(k, "ns", INST, limit)
     with pytest.raises(ComponentError, match="OOM"):
         redis.zadd_member(k, "ns", INST, "1", "99", 5)
-    assert redis.get_maxmemory(k, "ns", INST) == limit - 1
+    assert redis.get_maxmemory(k, "ns", INST) == limit
     redis.set_maxmemory(k, "ns", INST, 0)
     redis.zadd_member(k, "ns", INST, "1", "99", 5)
 
@@ -214,3 +214,9 @@ def test_stale_followers_keep_key_non_empty_and_del_repairs():
     assert not redis.key_exists(k, "ns", INST, "9100:followers")
     with pytest.raises(ValueError):
         redis.make_stale(k, "ns", INST, "9100:followers", drop=())
+
+
+@pytest.mark.parametrize("fraction", [0, -1, 0.51, 1.0])
+def test_oom_limit_rejects_fractions_that_do_not_trip_deterministically(fraction):
+    with pytest.raises(ValueError):
+        redis.oom_limit(1000, fraction)

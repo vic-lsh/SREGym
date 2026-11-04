@@ -135,11 +135,12 @@ def set_maxmemory(kube: Kube, namespace: str, inst: RedisInstance, limit_bytes: 
     _exec(kube, namespace, inst, "CONFIG", "SET", "maxmemory", str(limit_bytes))
 
 
-def memory_pressure_limit(used_bytes: int, headroom: float) -> int:
-    """A maxmemory just ``headroom`` (a fraction, 0 = trips on the next write) above current use."""
-    if headroom < 0:
-        raise ValueError("headroom must be >= 0")
-    return max(1, int(used_bytes * (1 + headroom)))
+def oom_limit(used_bytes: int, fraction: float = 0.5) -> int:
+    """A maxmemory of ``fraction`` of current use. Live: every write fails deterministically at or below
+    50% of used memory; near or above 100% it flips between success and OOM as client buffers move."""
+    if not 0 < fraction <= 0.5:
+        raise ValueError("fraction must be in (0, 0.5]: higher limits do not trip writes deterministically")
+    return max(1, int(used_bytes * fraction))
 
 
 # --- client pause ------------------------------------------------------------------------------
