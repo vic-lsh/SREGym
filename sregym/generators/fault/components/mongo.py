@@ -239,11 +239,18 @@ LOSSY_MERGES = ("overwrite", "drop_target")  # wrong: lose writes made during th
 
 
 def merge_back(
-    kube: Kube, namespace: str, inst: MongoInstance, collection: str, strategy: str = "append_only"
+    kube: Kube,
+    namespace: str,
+    inst: MongoInstance,
+    collection: str,
+    strategy: str = "append_only",
+    key: str = "_id",
 ) -> dict[str, Any]:
     """Repair a rename: fold the documents written since into ``<collection>_old``, then rename it
     over ``<collection>`` with ``dropTarget`` (a plain rename back fails with ``target namespace
-    exists`` once writers recreated the name). No ``_old`` collection: no-op.
+    exists`` once writers recreated the name). No ``_old`` collection: no-op. Documents are matched
+    by ``key`` (the field services look documents up by, e.g. ``user_id``; ``_id`` is an ObjectId
+    generated per insert, so the recreated collection's documents never share it).
 
     ``append_only`` (one document per event, e.g. posts): insert the newer documents whose ``_id`` is
     absent from ``_old``. ``union_arrays`` (one aggregate document per key, e.g. a user's timeline):
@@ -265,9 +272,12 @@ def merge_back(
             "  if(Array.isArray(doc[f])){ add[f] = {$each: doc[f]}; } else { set[f] = doc[f]; } });"
             " var up = {}; if(Object.keys(add).length){ up.$addToSet = add; }"
             " if(Object.keys(set).length){ up.$set = set; }"
-            " if(Object.keys(up).length){ chk({ok: o.updateOne({_id: doc._id}, up).acknowledged ? 1 : 0}); } }"
+            " if(Object.keys(up).length){ chk({ok: o.updateOne({_id: e._id}, up).acknowledged ? 1 : 0}); } }"
         ),
-        "overwrite": "chk({ok: o.replaceOne({_id: doc._id}, doc, {upsert: true}).acknowledged ? 1 : 0});",
+        "overwrite": (
+            "var r = Object.assign({}, doc); delete r._id;"
+            " chk({ok: o.replaceOne({_id: e ? e._id : doc._id}, r, {upsert: true}).acknowledged ? 1 : 0});"
+        ),
         "drop_target": "",
     }[strategy]
     return run_js(
@@ -280,7 +290,7 @@ def merge_back(
         f"  var o = d.getCollection({_js(old)});"
         f"  if(names.indexOf({_js(collection)}) >= 0 && {_js(bool(fold))}){{"
         f"   d.getCollection({_js(collection)}).find().forEach(function(doc){{"
-        f"    var e = o.findOne({{_id: doc._id}}); {fold} merged++; }});"
+        f"    var q = {{}}; q[{_js(key)}] = doc[{_js(key)}]; var e = o.findOne(q); {fold} merged++; }});"
         f"  }}"
         f"  chk(o.renameCollection({_js(collection)}, true)); renamed = true; }}"
         f" out({{merged: merged, renamed: renamed}});",

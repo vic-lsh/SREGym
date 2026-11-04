@@ -223,7 +223,7 @@ class MongoCollectionRenamed(MongoFaultProblem):
         self.merge(self.coll.merge)
 
     def merge(self, strategy: str) -> None:
-        mongo.merge_back(*self._ns_args(), strategy)
+        mongo.merge_back(*self._ns_args(), strategy, self.coll.merge_key)
         self.flush_cache()  # readers may have cached the empty view
 
     def extra_repairs(self) -> dict[str, Repair]:

@@ -120,7 +120,9 @@ class MongoCollection:
     ``faults``: the Mongo fault kinds verified live on this collection (only those sample it).
     ``merge``: how the reference repair of a renamed collection folds the documents written during
     the fault into the old ones: ``append_only`` (one document per event: insert the new ids) or
-    ``union_arrays`` (one aggregate per key: also add the new array elements to the old document).
+    ``union_arrays`` (one aggregate per key: also add the new array elements to the old document);
+    ``merge_key`` is the field documents are matched by (the one services look them up by: ``_id`` is
+    an ObjectId generated on insert, so documents of a recreated collection never share it).
     """
 
     name: str
@@ -132,6 +134,7 @@ class MongoCollection:
     write_check: WriteCheck | None = None
     faults: tuple[str, ...] = ()
     merge: str = "append_only"
+    merge_key: str = "_id"
 
     def __post_init__(self) -> None:
         if self.merge not in ("append_only", "union_arrays"):
@@ -334,6 +337,7 @@ SOCIAL_NETWORK = AppBinding(
                     write_check=_SOCIAL_COMPOSE_CHECK,
                     faults=("mongo_write_lock", "mongo_write_rejection", "mongo_collection_renamed"),
                     merge="union_arrays",  # one document per user holding that user's posts
+                    merge_key="user_id",
                 ),
             ),
             consumers=("user-timeline-service",),
@@ -347,6 +351,7 @@ SOCIAL_NETWORK = AppBinding(
                     cache="post-storage-memcached",
                     key_field="post_id",
                     poison_fields=("text", "creator"),
+                    merge_key="post_id",
                     unique_key="post_type",
                     stamp_field="timestamp",
                     write_check=_SOCIAL_COMPOSE_CHECK,
