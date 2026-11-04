@@ -198,8 +198,9 @@ def test_foreign_pods_live_outside_the_app_namespace():
     assert m["spec"]["containers"][0]["command"][0] == "bash"
 
 
-def test_foreign_fault_clears_only_when_pod_is_gone(offline):  # noqa: F811
+def test_foreign_fault_clears_only_when_pod_is_gone(offline, monkeypatch):  # noqa: F811
     from sregym.conductor.problems.connection_exhaustion import ConnectionExhaustion
+    from sregym.conductor.problems.pod_fault import ForeignPodFault
 
     class K:
         present = True
@@ -215,12 +216,14 @@ def test_foreign_fault_clears_only_when_pod_is_gone(offline):  # noqa: F811
             raise AssertionError(argv)
 
     kube = K()
+    drained = []
+    monkeypatch.setattr(ForeignPodFault, "_wait_drained", lambda self: drained.append(True))
     p = ConnectionExhaustion("social_network", "unique-id-service", 6000, kube=kube)
     assert p.fault_cleared()[0] is False
     assert set(p.decoy_mitigations()) == {"restore_source", "rollout_restart"}
     p.decoy_mitigations()["rollout_restart"]()
     assert p.fault_cleared()[0] is False  # the hog outlives a restart of its victim
     p.reference_mitigation()
-    assert p.fault_cleared()[0] is True
+    assert p.fault_cleared()[0] is True and drained  # the reference waits for the entry point to drain
     with pytest.raises(ValueError):
         ConnectionExhaustion("social_network", "unique-id-service", 0, kube=kube)

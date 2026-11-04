@@ -35,7 +35,7 @@ ENABLED_APPS: dict[str, tuple[str, ...]] = {
 
 # Calibrated live on the 1-worker kind lane (docs/incident-faults.md): connections held by the hog, request
 # loops of the surge.
-HOG_CONNECTIONS = (6000, 8000)
+HOG_CONNECTIONS = (12000, 16000)
 SURGE_WORKERS = (100, 150)
 
 

@@ -9,9 +9,13 @@ lives in the process or the pod sandbox that a restart replaces.
 
 from __future__ import annotations
 
+import time
+
 from sregym.conductor.problems.component_fault import ComponentFaultProblem, Mitigation
 from sregym.conductor.problems.composition.app_bindings import BINDINGS, WorkloadTarget, workload_targets
-from sregym.generators.fault.components.kube import delete_pods, rollout_restart
+from sregym.conductor.problems.composition.grading import Request
+from sregym.generators.fault.components import http
+from sregym.generators.fault.components.kube import ComponentError, delete_pods, rollout_restart
 from sregym.generators.fault.components.node import Nodes
 
 
@@ -71,6 +75,23 @@ class ForeignPodFault(ComponentFaultProblem):
         from sregym.generators.fault.components import foreign
 
         foreign.stop(self.kube, self.FAULT_KIND, self.namespace, self.target.workload)
+        self._wait_drained()
+
+    def _wait_drained(self, timeout_s: float = 240.0) -> None:
+        """Stopping the cause is not the end of the repair: the queued requests and dropped connections it
+        left drain over a minute or two. Wait (bounded) until the entry point's reads succeed again."""
+        entry = self.binding.entry
+        reads = tuple(Request(p) for p in entry.paths) + tuple(
+            Request(p) for p in (self.binding.integrity.reads if self.binding.integrity else ())
+        )
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            try:
+                if all(r.ok for r in http.fetch(self.kube, self.binding, self.namespace, reads)):
+                    return
+            except ComponentError:
+                pass
+            time.sleep(5)
 
     def decoy_mitigations(self) -> dict[str, Mitigation]:
         decoys = super().decoy_mitigations()
