@@ -182,3 +182,53 @@ class _FakeEntry:
 )
 def test_lane_sharding_strips_the_parent_flags(argv, flags, want):
     assert validate._strip(argv, flags) == want
+
+
+def test_status_reports_rows_and_liveness(tmp_path, capsys):
+    out = tmp_path / "rows.jsonl"
+    out.write_text(json.dumps({"seed": 1, "trial": "reference", "status": "VALID", "pass": True}) + "\n")
+    (tmp_path / "rows.jsonl.pid").write_text("999999999\n")  # no such process
+    assert validate.status(str(out)) == 0
+    assert "running=False rows=1" in capsys.readouterr().out
+    import os
+
+    (tmp_path / "rows.jsonl.pid").write_text(f"{os.getpid()}\n")
+    assert validate.status(str(out)) == 3
+
+
+def test_detach_needs_an_out_file():
+    assert validate.detach(["--key", "k"], None) == 2
+
+
+def test_a_second_harness_on_the_same_lane_is_refused(tmp_path):
+    first = validate.lane_lock(tmp_path, "/kc/a", "social-network")
+    with pytest.raises(validate.LaneBusy, match="another validate.py"):
+        validate.lane_lock(tmp_path, "/kc/a", "social-network")
+    other = validate.lane_lock(tmp_path, "/kc/b", "social-network")  # another cluster is fine
+    first.close()
+    validate.lane_lock(tmp_path, "/kc/a", "social-network").close()  # released with its holder
+    other.close()
+
+
+def test_a_second_harness_process_is_refused(tmp_path, monkeypatch):
+    """The lock is per process: a child validate.py on the same lane exits 4 with a lane_busy row."""
+    import subprocess
+    import sys
+
+    monkeypatch.setattr(validate, "LOCK_DIR", tmp_path)
+    held = validate.lane_lock(tmp_path, "/kc/a", "social-network")
+    code = (
+        "import importlib.util,sys,pathlib;"
+        f"s=importlib.util.spec_from_file_location('v', {str(_PATH)!r});v=importlib.util.module_from_spec(s);"
+        "s.loader.exec_module(v);"
+        f"v.LOCK_DIR=pathlib.Path({str(tmp_path)!r});"
+        "sys.exit(v.main(['--key','k','--namespace','social-network']))"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env={**__import__("os").environ, "KUBECONFIG": "/kc/a"},
+    )
+    held.close()
+    assert out.returncode == 4 and "lane_busy" in out.stdout
