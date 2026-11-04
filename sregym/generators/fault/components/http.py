@@ -83,7 +83,7 @@ def normalize(body: str, volatile_keys: tuple[str, ...] = ()) -> Any:
 
 
 def _empty(v: Any) -> bool:
-    return v in ("", [], {})
+    return v is None or v in ("", [], {})
 
 
 @dataclass(frozen=True)
@@ -93,21 +93,25 @@ class Snapshot:
 
     def json_field_values(self, name: str) -> tuple[str, ...]:
         """Every value of JSON key ``name`` anywhere in the snapshot, as strings, first-seen order."""
-        found: list[str] = []
+        return json_field_values(self.values, name)
 
-        def walk(v: Any) -> None:
-            if isinstance(v, dict):
-                for k, x in v.items():
-                    if k == name and not isinstance(x, (dict, list)) and str(x) not in found:
-                        found.append(str(x))
-                    walk(x)
-            elif isinstance(v, list):
-                for x in v:
-                    walk(x)
 
-        for v in self.values:
-            walk(v)
-        return tuple(found)
+def json_field_values(values: Any, name: str) -> tuple[str, ...]:
+    """Every scalar value of JSON key ``name`` anywhere in ``values``, as strings, first-seen order."""
+    found: list[str] = []
+
+    def walk(v: Any) -> None:
+        if isinstance(v, dict):
+            for k, x in v.items():
+                if k == name and not isinstance(x, (dict, list)) and str(x) not in found:
+                    found.append(str(x))
+                walk(x)
+        elif isinstance(v, (list, tuple)):
+            for x in v:
+                walk(x)
+
+    walk(values)
+    return tuple(found)
 
 
 def capture(kube: Kube, binding: AppBinding, namespace: str) -> Snapshot:

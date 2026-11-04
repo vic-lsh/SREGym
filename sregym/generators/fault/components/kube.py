@@ -97,6 +97,13 @@ def delete_pods(kube: Kube, namespace: str, kind: str, name: str, timeout_s: int
     )
 
 
+def workload_generations(kube: Kube, namespace: str) -> dict[str, int]:
+    """``{"<kind>/<name>": metadata.generation}`` of every Deployment and StatefulSet: any change to
+    a pod template (a rollout restart, an applied diff) or to replicas bumps it."""
+    items = kube.json(["get", "deployments,statefulsets", "-n", namespace]).get("items") or []
+    return {f"{i['kind']}/{i['metadata']['name']}": int(i["metadata"].get("generation", 0)) for i in items}
+
+
 def restore_source(kube: Kube, namespace: str, render: Path | None) -> None:
     """Re-apply the accepted source render (``SREGYM_ACCEPTED_RENDER``) to the namespace: the generic
     "restore everything from source" repair. For a fault that changed no Kubernetes object it is a

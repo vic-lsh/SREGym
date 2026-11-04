@@ -1,30 +1,27 @@
 """A Redis-protocol server is turned into a read-only replica of a master that does not exist.
 
 Writes through it fail with READONLY while reads keep working, so the app's write paths break
-and nothing restarts. Reference: ``REPLICAOF NO ONE``. Decoys: restore from source (no object
-changed: no-op) and, when the server holds the only copy of its data, rollout-restarting it
-(clears the replica role but loses the data, which the seeded-data check sees).
+and nothing restarts. Reference: ``REPLICAOF NO ONE``. Other repairs are the standard ones from
+the target row: restarting it clears the role and is acceptable for a cache, but loses the data
+(DATA_LOST, seen by the store witness) when the server holds the only copy.
 """
 
 from __future__ import annotations
 
-from sregym.conductor.problems.component_fault import ComponentFaultProblem, Mitigation
-from sregym.conductor.problems.composition.app_bindings import BINDINGS
+from sregym.conductor.problems.component_fault import ComponentFaultProblem
+from sregym.conductor.problems.composition.app_bindings import RedisInstance
 from sregym.generators.fault.components import redis
-from sregym.generators.fault.components.kube import rollout_restart
 
 
 class RedisReplicaMisconfig(ComponentFaultProblem):
+    blocks_writes = True  # READONLY: the verdict also needs a write through it to land
+
     def __init__(self, app_name: str, target: str, master: str, namespace: str | None = None, kube=None):
-        matches = [r for r in BINDINGS[app_name].redis if r.workload == target]
-        if not matches:
-            raise ValueError(f"{app_name} binding has no redis instance {target!r}")
-        self.instance = matches[0]
         self.master_host, port = master.rsplit(":", 1)
         self.master_port = int(port)
         super().__init__(
             app_name=app_name,
-            component=f"deployment/{target}",
+            target=target,
             description=(
                 f"The Redis server {target} was reconfigured at runtime as a replica of {master}, "
                 "a master that does not exist, so it rejects every write with READONLY while still serving "
@@ -33,6 +30,9 @@ class RedisReplicaMisconfig(ComponentFaultProblem):
             namespace=namespace,
             kube=kube,
         )
+        if not isinstance(self.target, RedisInstance):
+            raise ValueError(f"{target} is not a redis row of the {app_name} binding")
+        self.instance: RedisInstance = self.target
 
     def inject(self) -> None:
         redis.make_replica_of(self.kube, self.namespace, self.instance, self.master_host, self.master_port)
@@ -44,16 +44,3 @@ class RedisReplicaMisconfig(ComponentFaultProblem):
 
     def reference_mitigation(self) -> None:
         redis.promote(self.kube, self.namespace, self.instance)
-
-    def _restart(self) -> None:
-        rollout_restart(self.kube, self.namespace, self.instance.kind, self.instance.workload)
-
-    def decoy_mitigations(self) -> dict[str, Mitigation]:
-        decoys = super().decoy_mitigations()
-        if self.instance.holds_primary_data:  # restart clears the role but loses the only copy
-            decoys["rollout_restart"] = self._restart
-        return decoys
-
-    def acceptable_mitigations(self) -> dict[str, Mitigation]:
-        # A cache over a database: a restart comes back as an empty master and refills.
-        return {} if self.instance.holds_primary_data else {"rollout_restart": self._restart}

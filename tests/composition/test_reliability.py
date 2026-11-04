@@ -63,8 +63,8 @@ def test_the_nested_experiment_base_plan_is_unchanged() -> None:
 
 
 @pytest.mark.parametrize("app", DEFAULT_APPS)
-def test_default_ids_draw_from_the_whole_catalog(app: str) -> None:
-    entries = catalog.entries_for(app)
+def test_default_ids_draw_from_the_whole_generation_one_catalog(app: str) -> None:
+    entries = [e for e in catalog.entries_for(app) if e.generation(app) == 1]
     for n, seed in itertools.product(NS, SEEDS):
         assert plan_for(PlanRef(app, n, seed), entries) == draw_plan(app, n, seed, entries)
 
@@ -77,7 +77,7 @@ def test_reliable_ids_never_draw_a_flagged_entry_and_are_deterministic(app: str)
         plan = plan_for(ref, entries)
         assert all((key, app) not in UNRELIABLE for key in _keys(plan))
         assert plan == plan_for(ref, list(reversed(entries)))  # entry order does not matter
-        assert plan == draw_plan(app, n, seed, reliable_entries(app, entries))
+        assert plan == draw_plan(app, n, seed, reliable_entries(app, [e for e in entries if e.generation(app) == 1]))
 
 
 def test_the_flag_changes_plans_that_drew_a_flagged_entry() -> None:

@@ -158,7 +158,14 @@ def build_static_plan(args: Any) -> list[RunTask]:
         weights_spec = getattr(args, "fault_count_weights", None)
         schedule = getattr(args, "schedule", "list")
         apps = getattr(args, "composition_apps", None)
-        if weights_spec or schedule != "list" or apps or getattr(args, "exclude_unreliable_faults", False):
+        generation = int(getattr(args, "catalog_generation", 1) or 1)
+        if (
+            weights_spec
+            or schedule != "list"
+            or apps
+            or getattr(args, "exclude_unreliable_faults", False)
+            or generation != 1
+        ):
             from sregym.conductor.problems.composition import catalog
             from sregym.conductor.problems.composition.generator import parse_plan_id, parse_weights, plan_for
             from sregym.conductor.problems.composition.schedule import (
@@ -177,7 +184,9 @@ def build_static_plan(args: Any) -> list[RunTask]:
             pool = [problem_id for problem_id in pool if not problem_id.startswith(("composite_", "mf__"))]
             stream = single_fault_stream(pool, schedule, args.sequence_seed) if 1 in weights else iter(())
             reliable = bool(getattr(args, "exclude_unreliable_faults", False))
-            selected = plan_sequence(args.sequence_len, weights, app_names, args.sequence_seed, stream, reliable)
+            selected = plan_sequence(
+                args.sequence_len, weights, app_names, args.sequence_seed, stream, reliable, generation
+            )
             # Raises PlanError for a fault count the catalog cannot draw conflict-free.
             for problem_id in selected:
                 ref = parse_plan_id(problem_id)
@@ -715,6 +724,7 @@ def _args_for_tests(**overrides: Any) -> SimpleNamespace:
         "fault_count_weights": None,
         "composition_apps": None,
         "exclude_unreliable_faults": False,
+        "catalog_generation": 1,
         "schedule": "list",
         "judge_rounds": 1,
         "judge_voting_temperature": 0.7,

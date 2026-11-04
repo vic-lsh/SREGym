@@ -1,0 +1,1847 @@
+{
+ "mf__social_network__n1__s12__v_": [
+  {
+   "key": "scale_pod_zero_social_net",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  }
+ ],
+ "mf__social_network__n1__s1416840650__v_": [
+  {
+   "key": "psa_restricted_blocks_recreation",
+   "params": {
+    "faulty_service": "url-shorten-service"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n1__s161__v_": [
+  {
+   "key": "k8s_target_port_misconfig",
+   "params": {
+    "app_name": "social_network",
+    "bad_port": 8888,
+    "faulty_service": "post-storage-service"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n1__s1__v_": [
+  {
+   "key": "service_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "social-graph-service"
+   },
+   "tier": "RESTARTS_PODS"
+  }
+ ],
+ "mf__social_network__n1__s2__reliable__v_": [
+  {
+   "key": "admission_webhook_outage",
+   "params": {
+    "faulty_service": "media-service",
+    "webhook_kind": "validating"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n1__s2__v_": [
+  {
+   "key": "admission_webhook_outage",
+   "params": {
+    "faulty_service": "media-service",
+    "webhook_kind": "validating"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n1__s3__v_": [
+  {
+   "key": "resource_request_too_large",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "nginx-thrift",
+    "resource_type": "cpu"
+   },
+   "tier": "RESTARTS_PODS"
+  }
+ ],
+ "mf__social_network__n1__s42__reliable__v_": [
+  {
+   "key": "resource_request_too_large",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "home-timeline-service",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  }
+ ],
+ "mf__social_network__n1__s42__v_": [
+  {
+   "key": "resource_request_too_large",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "home-timeline-service",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  }
+ ],
+ "mf__social_network__n1__s5__v_": [
+  {
+   "key": "init_container_dependency_hang",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service",
+    "init_hang_mechanism": "tcp_connect_loop"
+   },
+   "tier": "RESTARTS_PODS"
+  }
+ ],
+ "mf__social_network__n1__s7__reliable__v_": [
+  {
+   "key": "init_container_dependency_hang",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "home-timeline-service",
+    "init_hang_mechanism": "tcp_connect_loop"
+   },
+   "tier": "RESTARTS_PODS"
+  }
+ ],
+ "mf__social_network__n1__s7__v_": [
+  {
+   "key": "init_container_dependency_hang",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "home-timeline-service",
+    "init_hang_mechanism": "tcp_connect_loop"
+   },
+   "tier": "RESTARTS_PODS"
+  }
+ ],
+ "mf__social_network__n2__s12__v_": [
+  {
+   "key": "resource_request_too_large",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "media-service",
+    "resource_type": "cpu"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "admission_webhook_outage",
+   "params": {
+    "faulty_service": "nginx-thrift",
+    "webhook_kind": "mutating"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n2__s1416840650__v_": [
+  {
+   "key": "readiness_probe_misconfiguration",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "user-service",
+    "probe_error_mode": "wrong_protocol",
+    "replica_count": 1
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "resource_request_too_large",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service",
+    "resource_type": "cpu"
+   },
+   "tier": "RESTARTS_PODS"
+  }
+ ],
+ "mf__social_network__n2__s161__v_": [
+  {
+   "key": "rolling_update_misconfigured",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "compose-post-service",
+    "init_hang_mode": "crash_loop",
+    "strategy_profile": "drain_all"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "incorrect_image",
+   "params": {
+    "bad_image_kind": "nonexistent_tag",
+    "faulty_service": "text-service"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n2__s1__v_": [
+  {
+   "key": "resource_request_too_small",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "user-service",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "k8s_target_port_misconfig",
+   "params": {
+    "app_name": "social_network",
+    "bad_port": 6666,
+    "faulty_service": "user-service"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n2__s2__v_": [
+  {
+   "key": "duplicate_pvc_mounts",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "compose-post-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "duplicate_pvc_mounts",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "social-graph-service"
+   },
+   "tier": "RESTARTS_PODS"
+  }
+ ],
+ "mf__social_network__n2__s3__v_": [
+  {
+   "key": "scale_pod_zero_social_net",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "resource_request_too_large",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "media-service",
+    "resource_type": "cpu"
+   },
+   "tier": "RESTARTS_PODS"
+  }
+ ],
+ "mf__social_network__n2__s42__v_": [
+  {
+   "key": "resource_request_too_large",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "nginx-thrift",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "rolling_update_misconfigured",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service",
+    "init_hang_mode": "slow_timeout",
+    "strategy_profile": "drain_all"
+   },
+   "tier": "RESTARTS_PODS"
+  }
+ ],
+ "mf__social_network__n2__s5__v_": [
+  {
+   "key": "sidecar_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "social-graph-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mutating_webhook_resource_limits_social_network",
+   "params": {},
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n2__s7__v_": [
+  {
+   "key": "duplicate_pvc_mounts",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "nginx-thrift"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "init_container_dependency_hang",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "user-service",
+    "init_hang_mechanism": "dns_lookup_loop"
+   },
+   "tier": "RESTARTS_PODS"
+  }
+ ],
+ "mf__social_network__n3__s12__v_": [
+  {
+   "key": "incorrect_image",
+   "params": {
+    "bad_image_kind": "nonexistent_tag",
+    "faulty_service": "url-shorten-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "service_dns_resolution_failure_netpol",
+   "params": {
+    "app_name": "social_network",
+    "dns_failure_layer": "network_policy_block_dns",
+    "dns_response_code": "NXDOMAIN",
+    "faulty_service": "home-timeline-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "admission_webhook_tls_mismatch",
+   "params": {
+    "faulty_service": "text-service",
+    "webhook_kind": "validating"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n3__s1416840650__v_": [
+  {
+   "key": "wrong_dns_policy",
+   "params": {
+    "app_name": "social_network",
+    "dns_misconfiguration_type": "default_policy",
+    "faulty_service": "social-graph-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "pod_anti_affinity_deadlock",
+   "params": {
+    "anti_affinity_topology": "hostname",
+    "faulty_service": "nginx-thrift"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "scale_pod_zero_social_net",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  }
+ ],
+ "mf__social_network__n3__s161__v_": [
+  {
+   "key": "resource_request_too_small",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "user-service",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "psa_restricted_blocks_recreation",
+   "params": {
+    "faulty_service": "text-service"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  },
+  {
+   "key": "admission_webhook_outage",
+   "params": {
+    "faulty_service": "post-storage-service",
+    "webhook_kind": "validating"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n3__s1__v_": [
+  {
+   "key": "pod_anti_affinity_deadlock",
+   "params": {
+    "anti_affinity_topology": "hostname",
+    "faulty_service": "url-shorten-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "resource_request_too_large",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "home-timeline-service",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "rolling_update_misconfigured",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service",
+    "init_hang_mode": "crash_loop",
+    "strategy_profile": "stuck_canary"
+   },
+   "tier": "RESTARTS_PODS"
+  }
+ ],
+ "mf__social_network__n3__s2__reliable__v_": [
+  {
+   "key": "wrong_dns_policy",
+   "params": {
+    "app_name": "social_network",
+    "dns_misconfiguration_type": "external_resolver",
+    "faulty_service": "nginx-thrift"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "wrong_dns_policy",
+   "params": {
+    "app_name": "social_network",
+    "dns_misconfiguration_type": "external_resolver",
+    "faulty_service": "user-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "incorrect_image",
+   "params": {
+    "bad_image_kind": "wrong_base_image",
+    "faulty_service": "post-storage-service"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n3__s2__v_": [
+  {
+   "key": "wrong_dns_policy",
+   "params": {
+    "app_name": "social_network",
+    "dns_misconfiguration_type": "external_resolver",
+    "faulty_service": "nginx-thrift"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "wrong_dns_policy",
+   "params": {
+    "app_name": "social_network",
+    "dns_misconfiguration_type": "external_resolver",
+    "faulty_service": "user-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "incorrect_image",
+   "params": {
+    "bad_image_kind": "wrong_base_image",
+    "faulty_service": "post-storage-service"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n3__s3__v_": [
+  {
+   "key": "duplicate_pvc_mounts",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "user-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "k8s_target_port_misconfig",
+   "params": {
+    "app_name": "social_network",
+    "bad_port": 6666,
+    "faulty_service": "social-graph-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "admission_webhook_tls_mismatch",
+   "params": {
+    "faulty_service": "post-storage-service",
+    "webhook_kind": "validating"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n3__s42__reliable__v_": [
+  {
+   "key": "missing_service",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "text-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "incorrect_image",
+   "params": {
+    "bad_image_kind": "nonexistent_registry",
+    "faulty_service": "social-graph-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mutating_webhook_resource_limits_social_network",
+   "params": {},
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n3__s42__v_": [
+  {
+   "key": "missing_service",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "text-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "incorrect_image",
+   "params": {
+    "bad_image_kind": "nonexistent_registry",
+    "faulty_service": "social-graph-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mutating_webhook_resource_limits_social_network",
+   "params": {},
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n3__s5__v_": [
+  {
+   "key": "missing_service",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "url-shorten-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "assign_to_non_existent_node",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "service_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "nginx-thrift"
+   },
+   "tier": "RESTARTS_PODS"
+  }
+ ],
+ "mf__social_network__n3__s7__reliable__v_": [
+  {
+   "key": "missing_configmap",
+   "params": {
+    "app_name": "social_network",
+    "configmap_fault_mode": "delete",
+    "faulty_service": "media-mongodb"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "sidecar_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "compose-post-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mutating_webhook_resource_limits_social_network",
+   "params": {},
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n3__s7__v_": [
+  {
+   "key": "missing_configmap",
+   "params": {
+    "app_name": "social_network",
+    "configmap_fault_mode": "delete",
+    "faulty_service": "media-mongodb"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "sidecar_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "compose-post-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mutating_webhook_resource_limits_social_network",
+   "params": {},
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n5__s12__v_": [
+  {
+   "key": "sidecar_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "compose-post-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "sidecar_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "nginx-thrift"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "pod_anti_affinity_deadlock",
+   "params": {
+    "anti_affinity_topology": "hostname",
+    "faulty_service": "user-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "wrong_dns_policy",
+   "params": {
+    "app_name": "social_network",
+    "dns_misconfiguration_type": "default_policy",
+    "faulty_service": "social-graph-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "admission_webhook_outage",
+   "params": {
+    "faulty_service": "compose-post-service",
+    "webhook_kind": "mutating"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n5__s1416840650__v_": [
+  {
+   "key": "resource_request_too_large",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "media-service",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "sidecar_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "service_dns_resolution_failure_netpol",
+   "params": {
+    "app_name": "social_network",
+    "dns_failure_layer": "network_policy_block_dns",
+    "dns_response_code": "NXDOMAIN",
+    "faulty_service": "social-graph-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "k8s_target_port_misconfig",
+   "params": {
+    "app_name": "social_network",
+    "bad_port": 8888,
+    "faulty_service": "post-storage-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "k8s_target_port_misconfig",
+   "params": {
+    "app_name": "social_network",
+    "bad_port": 8888,
+    "faulty_service": "compose-post-service"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s161__v_": [
+  {
+   "key": "resource_request_too_small",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "social-graph-service",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "liveness_probe_misconfiguration",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service",
+    "probe_error_mode": "wrong_path",
+    "replica_count": 1
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "liveness_probe_misconfiguration",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "compose-post-service",
+    "probe_error_mode": "wrong_protocol",
+    "replica_count": 3
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "incorrect_image",
+   "params": {
+    "bad_image_kind": "nonexistent_registry",
+    "faulty_service": "user-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mutating_webhook_resource_limits_social_network",
+   "params": {},
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n5__s1__v_": [
+  {
+   "key": "liveness_probe_misconfiguration",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service",
+    "probe_error_mode": "exec_false",
+    "replica_count": 1
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "wrong_dns_policy",
+   "params": {
+    "app_name": "social_network",
+    "dns_misconfiguration_type": "external_resolver",
+    "faulty_service": "home-timeline-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "duplicate_pvc_mounts",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "url-shorten-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "duplicate_pvc_mounts",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "text-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "admission_webhook_outage",
+   "params": {
+    "faulty_service": "compose-post-service",
+    "webhook_kind": "mutating"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n5__s2__v_": [
+  {
+   "key": "rolling_update_misconfigured",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "text-service",
+    "init_hang_mode": "sleep_infinity",
+    "strategy_profile": "stuck_canary"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "missing_configmap",
+   "params": {
+    "app_name": "social_network",
+    "configmap_fault_mode": "delete",
+    "faulty_service": "media-mongodb"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "service_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "incorrect_image",
+   "params": {
+    "bad_image_kind": "nonexistent_tag",
+    "faulty_service": "nginx-thrift"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "admission_webhook_outage",
+   "params": {
+    "faulty_service": "home-timeline-service",
+    "webhook_kind": "mutating"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n5__s3__k2__v_": [
+  {
+   "key": "service_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "media-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mutating_webhook_resource_limits_social_network",
+   "params": {},
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n5__s3__v_": [
+  {
+   "key": "pod_anti_affinity_deadlock",
+   "params": {
+    "anti_affinity_topology": "hostname",
+    "faulty_service": "compose-post-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "rolling_update_misconfigured",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "text-service",
+    "init_hang_mode": "slow_timeout",
+    "strategy_profile": "drain_all"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "service_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "media-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "sidecar_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "url-shorten-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mutating_webhook_resource_limits_social_network",
+   "params": {},
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n5__s42__v_": [
+  {
+   "key": "missing_configmap",
+   "params": {
+    "app_name": "social_network",
+    "configmap_fault_mode": "delete",
+    "faulty_service": "media-mongodb"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "liveness_probe_too_aggressive",
+   "params": {
+    "aggression_profile": "slow_churn",
+    "app_name": "social_network",
+    "faulty_service": "social-graph-service",
+    "startup_probe_guard": "short_startup"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "resource_request_too_small",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "compose-post-service",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "k8s_target_port_misconfig",
+   "params": {
+    "app_name": "social_network",
+    "bad_port": 8888,
+    "faulty_service": "home-timeline-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "k8s_target_port_misconfig",
+   "params": {
+    "app_name": "social_network",
+    "bad_port": 9999,
+    "faulty_service": "text-service"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s5__v_": [
+  {
+   "key": "liveness_probe_too_aggressive",
+   "params": {
+    "aggression_profile": "slow_churn",
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service",
+    "startup_probe_guard": "none"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "init_container_dependency_hang",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "media-service",
+    "init_hang_mechanism": "http_ready_check"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "sidecar_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "home-timeline-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "k8s_target_port_misconfig",
+   "params": {
+    "app_name": "social_network",
+    "bad_port": 9999,
+    "faulty_service": "home-timeline-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "psa_restricted_blocks_recreation",
+   "params": {
+    "faulty_service": "text-service"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n5__s7__v_": [
+  {
+   "key": "rolling_update_misconfigured",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "compose-post-service",
+    "init_hang_mode": "slow_timeout",
+    "strategy_profile": "drain_all"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "resource_request_too_large",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "url-shorten-service",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "resource_request_too_large",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "text-service",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "incorrect_image",
+   "params": {
+    "bad_image_kind": "nonexistent_registry",
+    "faulty_service": "compose-post-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "wrong_service_selector",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "media-service",
+    "replica_count": 1
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s9__k2__v_": [
+  {
+   "key": "liveness_probe_too_aggressive",
+   "params": {
+    "aggression_profile": "aggressive",
+    "app_name": "social_network",
+    "faulty_service": "user-service",
+    "startup_probe_guard": "short_startup"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "admission_webhook_tls_mismatch",
+   "params": {
+    "faulty_service": "home-timeline-service",
+    "webhook_kind": "validating"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n8__s12__v_": [
+  {
+   "key": "duplicate_pvc_mounts",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "nginx-thrift"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "resource_request_too_large",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "user-service",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "init_container_dependency_hang",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service",
+    "init_hang_mechanism": "tcp_connect_loop"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "liveness_probe_too_aggressive",
+   "params": {
+    "aggression_profile": "slow_churn",
+    "app_name": "social_network",
+    "faulty_service": "text-service",
+    "startup_probe_guard": "none"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "missing_configmap",
+   "params": {
+    "app_name": "social_network",
+    "configmap_fault_mode": "delete",
+    "faulty_service": "media-mongodb"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "incorrect_image",
+   "params": {
+    "bad_image_kind": "nonexistent_tag",
+    "faulty_service": "social-graph-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "wrong_service_selector",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "social-graph-service",
+    "replica_count": 1
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "admission_webhook_outage",
+   "params": {
+    "faulty_service": "post-storage-service",
+    "webhook_kind": "validating"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n8__s1416840650__v_": [
+  {
+   "key": "resource_request_too_small",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "service_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "text-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "init_container_dependency_hang",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "home-timeline-service",
+    "init_hang_mechanism": "http_ready_check"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "assign_to_non_existent_node",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "resource_request_too_small",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "nginx-thrift",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "incorrect_image",
+   "params": {
+    "bad_image_kind": "nonexistent_tag",
+    "faulty_service": "url-shorten-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "wrong_service_selector",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "user-service",
+    "replica_count": 1
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "psa_restricted_blocks_recreation",
+   "params": {
+    "faulty_service": "url-shorten-service"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n8__s161__v_": [
+  {
+   "key": "missing_service",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "resource_request_too_small",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "social-graph-service",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "assign_to_non_existent_node",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "sidecar_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "init_container_dependency_hang",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "text-service",
+    "init_hang_mechanism": "http_ready_check"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "sidecar_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "media-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "admission_webhook_outage",
+   "params": {
+    "faulty_service": "nginx-thrift",
+    "webhook_kind": "validating"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  },
+  {
+   "key": "psa_restricted_blocks_recreation",
+   "params": {
+    "faulty_service": "text-service"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n8__s1__v_": [
+  {
+   "key": "assign_to_non_existent_node",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "duplicate_pvc_mounts",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "missing_configmap",
+   "params": {
+    "app_name": "social_network",
+    "configmap_fault_mode": "delete",
+    "faulty_service": "media-mongodb"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "incorrect_image",
+   "params": {
+    "bad_image_kind": "nonexistent_registry",
+    "faulty_service": "text-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "service_dns_resolution_failure_netpol",
+   "params": {
+    "app_name": "social_network",
+    "dns_failure_layer": "network_policy_block_dns",
+    "dns_response_code": "NXDOMAIN",
+    "faulty_service": "text-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "incorrect_image",
+   "params": {
+    "bad_image_kind": "nonexistent_registry",
+    "faulty_service": "nginx-thrift"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "service_dns_resolution_failure_netpol",
+   "params": {
+    "app_name": "social_network",
+    "dns_failure_layer": "network_policy_block_dns",
+    "dns_response_code": "NXDOMAIN",
+    "faulty_service": "home-timeline-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "psa_restricted_blocks_recreation",
+   "params": {
+    "faulty_service": "user-service"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n8__s2__reliable__v_": [
+  {
+   "key": "scale_pod_zero_social_net",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "liveness_probe_too_aggressive",
+   "params": {
+    "aggression_profile": "aggressive",
+    "app_name": "social_network",
+    "faulty_service": "compose-post-service",
+    "startup_probe_guard": "short_startup"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "duplicate_pvc_mounts",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "text-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "rolling_update_misconfigured",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "url-shorten-service",
+    "init_hang_mode": "sleep_infinity",
+    "strategy_profile": "stuck_canary"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "rolling_update_misconfigured",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "home-timeline-service",
+    "init_hang_mode": "sleep_infinity",
+    "strategy_profile": "stuck_canary"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "duplicate_pvc_mounts",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "missing_service",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "user-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "k8s_target_port_misconfig",
+   "params": {
+    "app_name": "social_network",
+    "bad_port": 8888,
+    "faulty_service": "home-timeline-service"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n8__s2__v_": [
+  {
+   "key": "scale_pod_zero_social_net",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "liveness_probe_too_aggressive",
+   "params": {
+    "aggression_profile": "aggressive",
+    "app_name": "social_network",
+    "faulty_service": "compose-post-service",
+    "startup_probe_guard": "short_startup"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "duplicate_pvc_mounts",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "text-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "rolling_update_misconfigured",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "url-shorten-service",
+    "init_hang_mode": "sleep_infinity",
+    "strategy_profile": "stuck_canary"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "rolling_update_misconfigured",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "home-timeline-service",
+    "init_hang_mode": "sleep_infinity",
+    "strategy_profile": "stuck_canary"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "duplicate_pvc_mounts",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "missing_service",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "user-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "k8s_target_port_misconfig",
+   "params": {
+    "app_name": "social_network",
+    "bad_port": 8888,
+    "faulty_service": "home-timeline-service"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n8__s3__v_": [
+  {
+   "key": "pod_anti_affinity_deadlock",
+   "params": {
+    "anti_affinity_topology": "hostname",
+    "faulty_service": "post-storage-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "liveness_probe_too_aggressive",
+   "params": {
+    "aggression_profile": "slow_churn",
+    "app_name": "social_network",
+    "faulty_service": "nginx-thrift",
+    "startup_probe_guard": "short_startup"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "missing_service",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "url-shorten-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "missing_configmap",
+   "params": {
+    "app_name": "social_network",
+    "configmap_fault_mode": "delete",
+    "faulty_service": "media-mongodb"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "scale_pod_zero_social_net",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "k8s_target_port_misconfig",
+   "params": {
+    "app_name": "social_network",
+    "bad_port": 7777,
+    "faulty_service": "nginx-thrift"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "admission_webhook_outage",
+   "params": {
+    "faulty_service": "nginx-thrift",
+    "webhook_kind": "validating"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  },
+  {
+   "key": "psa_restricted_blocks_recreation",
+   "params": {
+    "faulty_service": "home-timeline-service"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n8__s42__reliable__v_": [
+  {
+   "key": "pod_anti_affinity_deadlock",
+   "params": {
+    "anti_affinity_topology": "hostname",
+    "faulty_service": "compose-post-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "rolling_update_misconfigured",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "social-graph-service",
+    "init_hang_mode": "crash_loop",
+    "strategy_profile": "stuck_canary"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "service_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "url-shorten-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "missing_configmap",
+   "params": {
+    "app_name": "social_network",
+    "configmap_fault_mode": "delete",
+    "faulty_service": "media-mongodb"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "rolling_update_misconfigured",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "user-service",
+    "init_hang_mode": "crash_loop",
+    "strategy_profile": "drain_all"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "missing_service",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "nginx-thrift"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "admission_webhook_outage",
+   "params": {
+    "faulty_service": "social-graph-service",
+    "webhook_kind": "mutating"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  },
+  {
+   "key": "psa_restricted_blocks_recreation",
+   "params": {
+    "faulty_service": "url-shorten-service"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n8__s42__v_": [
+  {
+   "key": "pod_anti_affinity_deadlock",
+   "params": {
+    "anti_affinity_topology": "hostname",
+    "faulty_service": "compose-post-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "rolling_update_misconfigured",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "social-graph-service",
+    "init_hang_mode": "crash_loop",
+    "strategy_profile": "stuck_canary"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "service_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "url-shorten-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "missing_configmap",
+   "params": {
+    "app_name": "social_network",
+    "configmap_fault_mode": "delete",
+    "faulty_service": "media-mongodb"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "rolling_update_misconfigured",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "user-service",
+    "init_hang_mode": "crash_loop",
+    "strategy_profile": "drain_all"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "missing_service",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "nginx-thrift"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "admission_webhook_outage",
+   "params": {
+    "faulty_service": "social-graph-service",
+    "webhook_kind": "mutating"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  },
+  {
+   "key": "psa_restricted_blocks_recreation",
+   "params": {
+    "faulty_service": "url-shorten-service"
+   },
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n8__s5__v_": [
+  {
+   "key": "missing_service",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "home-timeline-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "scale_pod_zero_social_net",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "missing_service",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "user-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "init_container_dependency_hang",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "social-graph-service",
+    "init_hang_mechanism": "tcp_connect_loop"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "missing_service",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "missing_configmap",
+   "params": {
+    "app_name": "social_network",
+    "configmap_fault_mode": "delete",
+    "faulty_service": "media-mongodb"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "wrong_service_selector",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "text-service",
+    "replica_count": 3
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mutating_webhook_resource_limits_social_network",
+   "params": {},
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n8__s7__reliable__v_": [
+  {
+   "key": "assign_to_non_existent_node",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "resource_request_too_small",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "sidecar_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "text-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "pod_anti_affinity_deadlock",
+   "params": {
+    "anti_affinity_topology": "hostname",
+    "faulty_service": "compose-post-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "sidecar_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "media-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "k8s_target_port_misconfig",
+   "params": {
+    "app_name": "social_network",
+    "bad_port": 7777,
+    "faulty_service": "home-timeline-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "service_dns_resolution_failure_netpol",
+   "params": {
+    "app_name": "social_network",
+    "dns_failure_layer": "network_policy_block_dns",
+    "dns_response_code": "NXDOMAIN",
+    "faulty_service": "home-timeline-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mutating_webhook_resource_limits_social_network",
+   "params": {},
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ],
+ "mf__social_network__n8__s7__v_": [
+  {
+   "key": "assign_to_non_existent_node",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "resource_request_too_small",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "sidecar_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "text-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "pod_anti_affinity_deadlock",
+   "params": {
+    "anti_affinity_topology": "hostname",
+    "faulty_service": "compose-post-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "sidecar_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "media-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "k8s_target_port_misconfig",
+   "params": {
+    "app_name": "social_network",
+    "bad_port": 7777,
+    "faulty_service": "home-timeline-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "service_dns_resolution_failure_netpol",
+   "params": {
+    "app_name": "social_network",
+    "dns_failure_layer": "network_policy_block_dns",
+    "dns_response_code": "NXDOMAIN",
+    "faulty_service": "home-timeline-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mutating_webhook_resource_limits_social_network",
+   "params": {},
+   "tier": "BLOCKS_ADMISSION"
+  }
+ ]
+}

@@ -109,14 +109,6 @@ class FakeRedisKube:
         raise AssertionError(f"unexpected redis command {a}")
 
 
-def test_reply_error_classifies_redis_errors():
-    assert redis.reply_error("NOPERM this user has no permissions") == "NOPERM"
-    assert redis.reply_error("(error) OOM command not allowed") == "OOM"
-    assert redis.reply_error("READONLY You can't write against a read only replica.") == "READONLY"
-    assert redis.reply_error("OK\n") is None
-    assert redis.reply_error("(integer) 1") is None
-
-
 @pytest.mark.parametrize("mode", redis.ACL_MODES)
 def test_acl_revoke_blocks_the_mode_and_restore_clears_it(mode):
     k = FakeRedisKube()

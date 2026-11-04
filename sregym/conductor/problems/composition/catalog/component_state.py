@@ -78,11 +78,13 @@ ENTRIES: tuple[CatalogEntry, ...] = (
         ENABLED_APPS["redis_replica_misconfig"],
         _choose_redis_replica,
         _build_redis_replica,
+        generation=2,
     ),
     entry(
         "memcached_poisoned_entries",
         ENABLED_APPS["memcached_poisoned_entries"],
         _choose_memcached_poison,
         _build_memcached_poison,
+        generation=2,
     ),
 )
