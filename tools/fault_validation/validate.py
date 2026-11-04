@@ -337,15 +337,16 @@ def _strip(argv: list[str], flags: tuple[str, ...]) -> list[str]:
     return out
 
 
-def detach(argv: list[str], out: str | None) -> int:
-    """Re-run these arguments without --detach in a new session; rows go to ``out``."""
+def detach(argv: list[str], out: str | None, script: str | None = None) -> int:
+    """Re-run these arguments without --detach in a new session; rows go to ``out``.
+    ``script`` defaults to this file (a sibling tool passes its own)."""
     if not out:
         print("--detach needs --out", file=sys.stderr)
         return 2
     child = [a for a in argv if a != "--detach"]
     with open(out + ".log", "ab") as log:
         proc = subprocess.Popen(
-            [sys.executable, os.path.abspath(__file__), *child],
+            [sys.executable, os.path.abspath(script or __file__), *child],
             stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=subprocess.STDOUT,
