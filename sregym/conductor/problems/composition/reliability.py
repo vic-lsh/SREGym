@@ -53,12 +53,14 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
         "the diagnosis is not proven."
     ),
     ("redis_replica_misconfig", "social_network"): (
-        "Pending: new component-state fault; kept out of __reliable plans until it validates live "
-        "(tools/fault_validation/validate.py) and the pinned vanilla_s42 plans are regenerated."
+        "Held out, not unreliable: validated live 2026-11-04 (seeds 2, 5, 7: every redis target, every "
+        "trial passed), but adding it to __reliable plans changes the pinned vanilla_s42 plans "
+        "(tests/composition/fixtures); unflag when that fixture is regenerated."
     ),
     ("memcached_poisoned_entries", "social_network"): (
-        "Pending: new component-state fault; kept out of __reliable plans until it validates live "
-        "(tools/fault_validation/validate.py) and the pinned vanilla_s42 plans are regenerated."
+        "Held out, not unreliable: validated live 2026-11-04 (seeds 1, 2, 5, 12, 7: both targets, all "
+        "three corruption modes), but adding it to __reliable plans changes the pinned vanilla_s42 plans "
+        "(tests/composition/fixtures); unflag when that fixture is regenerated."
     ),
 }
 
