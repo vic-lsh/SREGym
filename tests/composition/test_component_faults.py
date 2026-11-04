@@ -83,7 +83,7 @@ class FakeKube:
     def _fetch(self, script: str) -> str:
         out = []
         for i, part in enumerate(script.split("rm -f /tmp/body; ")[1:]):
-            m = re.search(r"wget -q -T \d+ -O /tmp/body (?:--post-data (\S+) )?(\S+)", part)
+            m = re.search(r"wget -q (?:-S )?-T \d+ -O /tmp/body (?:--post-data (\S+) )?(\S+)", part)
             post = shlex.split(m.group(1))[0] if m.group(1) else None
             url = shlex.split(m.group(2))[0]
             path = url.split(":8080", 1)[1]
@@ -152,6 +152,7 @@ def offline(monkeypatch, tmp_path):
     monkeypatch.setattr(Application, "_validated_path", lambda self, path, label: Path(path).expanduser().resolve())
     monkeypatch.setattr(KubeCtl, "list_deployments", lambda self, namespace: SimpleNamespace(items=[]))
     monkeypatch.setattr(KubeCtl, "exec_command", lambda self, *args, **kwargs: "")
+    monkeypatch.setattr(http.time, "sleep", lambda s: None)
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError(f"spawned {a}")))
 
 
@@ -293,3 +294,14 @@ def test_memcached_poison_refuses_when_nothing_is_cached(offline):
     p.snapshot = http.capture(kube, p.binding, p.namespace)
     with pytest.raises(ComponentError, match="none of the hot keys"):
         p.inject()
+
+
+def test_a_prepared_snapshot_is_used_by_the_next_injection_only(offline):
+    kube = FakeKube()
+    p = _build("redis_replica_misconfig", {"target": "home-timeline-redis", "master": "127.0.0.1:1"}, kube)
+    p.prepare_injection()
+    prepared = p.snapshot
+    kube.timelines.clear()  # another fault broke the reads: the injection must not re-read them
+    kube.homes.clear()
+    p.inject_fault()
+    assert p.snapshot is prepared and kube.role == "slave"

@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import json
 import shlex
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,6 +19,8 @@ from sregym.conductor.problems.composition.grading import Request, wget_command
 from sregym.generators.fault.components.kube import ComponentError, Kube, run_client_pod
 
 _BEGIN, _END = "@@REQ", "@@END"
+SEED_ATTEMPTS = 3
+READ_RETRIES = 2
 
 
 @dataclass(frozen=True)
@@ -115,7 +118,11 @@ def capture(kube: Kube, binding: AppBinding, namespace: str) -> Snapshot:
         raise ComponentError(f"{binding.app} has no integrity check in its binding")
     reads = tuple(Request(p) for p in check.reads)
     responses = fetch(kube, binding, namespace, reads)
-    if any(not r.ok or _empty(normalize(r.body, check.volatile_keys)) for r in responses):
+    for attempt in range(SEED_ATTEMPTS):
+        if not any(not r.ok or _empty(normalize(r.body, check.volatile_keys)) for r in responses):
+            break
+        # A freshly deployed app fails its first requests while connection pools warm up: retry.
+        time.sleep(attempt * 5)
         fetch(kube, binding, namespace, check.seed)
         responses = fetch(kube, binding, namespace, reads)
     values = tuple(normalize(r.body, check.volatile_keys) for r in responses)
@@ -129,7 +136,15 @@ def compare(kube: Kube, binding: AppBinding, namespace: str, snapshot: Snapshot)
     """Do the snapshot's reads return the same data now? ``(ok, detail)``."""
     check = binding.integrity
     assert check is not None
-    responses = fetch(kube, binding, namespace, tuple(Request(p) for p in snapshot.reads))
+    reads = tuple(Request(p) for p in snapshot.reads)
+    responses = fetch(kube, binding, namespace, reads)
+    for _ in range(READ_RETRIES):
+        # The first request after a pod restart can fail once on a stale pooled connection; a
+        # failed read is retried, changed data never is.
+        if all(r.ok for r in responses):
+            break
+        time.sleep(3)
+        responses = fetch(kube, binding, namespace, reads)
     return diff(snapshot, responses, check.volatile_keys)
 
 

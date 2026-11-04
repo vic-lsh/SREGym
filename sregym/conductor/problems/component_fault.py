@@ -92,10 +92,18 @@ class ComponentFaultProblem(Problem):
         render = os.getenv("SREGYM_ACCEPTED_RENDER")
         restore_source(self.kube, self.namespace, Path(render) if render else None)
 
+    def prepare_injection(self) -> None:
+        """Take the seeded-data snapshot now, while the app is healthy. A composite calls this on
+        every fault before injecting any; the next ``inject_fault`` then uses it."""
+        self.snapshot = http.capture(self.kube, self.binding, self.namespace)
+        self._prepared = True
+
     @mark_fault_injected
     def inject_fault(self):
         print(f"== Fault Injection: {type(self).__name__} | ns={self.namespace} ==")
-        self.snapshot = http.capture(self.kube, self.binding, self.namespace)
+        if not getattr(self, "_prepared", False):
+            self.snapshot = http.capture(self.kube, self.binding, self.namespace)
+        self._prepared = False
         self.inject()
 
     @mark_fault_injected

@@ -521,6 +521,15 @@ class ColocatedComposite(Problem):
         self.rebind_workload_handles()
         changes: dict[int, tuple[liveness.Change, ...] | None] = {}
         inject_errors: dict[int, str] = {}
+        # Faults that snapshot healthy state (seeded data) take it before any fault is injected.
+        # On failure the fault's own inject_fault takes it and reports any error.
+        for i in self.injection_order:
+            prepare = getattr(self.problems[i], "prepare_injection", None)
+            if prepare is not None:
+                try:
+                    prepare()
+                except Exception as e:
+                    print(f"  fault_{i} prepare_injection failed ({type(e).__name__}: {e}); inject_fault retries it")
         snapshot_errors: list[str] = []
         validity = self._inject_and_judge(self.injection_order, changes, inject_errors, snapshot_errors)
         retry = [i for i in self.injection_order if i in inject_errors or not validity[f"fault_{i}_live"]]
