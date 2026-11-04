@@ -16,8 +16,9 @@ The per-fault verdict (``ComponentFaultOracle``) fails a component for each chec
 hold: ``fault`` (own state still there), ``write`` (a write through the entry point does not land,
 for faults that block writes), ``data`` (the binding's seeded-data snapshot changed), ``witness``
 (a store's sampled keys/documents or the marker written while the fault was live are gone). Its
-``reason`` (``Expect``) is FAULT_NOT_CLEARED when ``fault`` or ``write`` failed, else DATA_LOST
-when ``data`` or ``witness`` failed, else PASSES. An infrastructure error (``ComponentError``)
+``reason`` (``Expect``) is FAULT_NOT_CLEARED when ``fault`` failed, else DATA_LOST when ``data`` or
+``witness`` failed (a failing ``write`` is then a symptom of the loss), else FAULT_NOT_CLEARED when only
+``write`` failed, else PASSES. An infrastructure error (``ComponentError``)
 makes the verdict ``inconclusive``: never a pass, and the validation harness counts it INVALID,
 never as a decoy that correctly failed.
 
@@ -100,10 +101,15 @@ LOST_COMPONENTS = frozenset({"data", "witness"})
 
 def classify(failed: list[str] | tuple[str, ...]) -> Expect:
     """The reason of a verdict from its failed components (see the module docstring)."""
-    if NOT_CLEARED_COMPONENTS & set(failed):
+    got = set(failed)
+    if "fault" in got:
         return Expect.FAULT_NOT_CLEARED
-    if LOST_COMPONENTS & set(failed):
+    # the fault state is gone: a failing write is then a symptom of the lost data (a restarted store leaves
+    # dangling references, so the write round trip cannot read its marker back)
+    if LOST_COMPONENTS & got:
         return Expect.DATA_LOST
+    if "write" in got:
+        return Expect.FAULT_NOT_CLEARED
     if failed:
         raise ValueError(f"unknown failed components {failed}")
     return Expect.PASSES

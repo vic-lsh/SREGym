@@ -486,3 +486,12 @@ def test_a_failed_recovery_still_releases_the_snapshot(offline, monkeypatch):
     monkeypatch.setattr(p, "reference_mitigation", lambda: (_ for _ in ()).throw(ComponentError("exec flake")))
     p.recover_fault()  # the decorator logs a recovery error instead of raising
     assert p.snapshot is None and not p.witnesses and not p._prepared
+
+
+def test_classify_charges_lost_data_over_a_failing_write_once_the_fault_state_is_gone():
+    from sregym.conductor.problems.component_fault import Expect, classify
+
+    assert classify(["write", "witness"]) is Expect.DATA_LOST  # found live: restarted post-storage-mongodb
+    assert classify(["fault", "write", "witness"]) is Expect.FAULT_NOT_CLEARED
+    assert classify(["write"]) is Expect.FAULT_NOT_CLEARED
+    assert classify([]) is Expect.PASSES
