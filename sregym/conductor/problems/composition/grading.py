@@ -197,10 +197,20 @@ def probe_script(namespace: str, entry: EntryPoint, rounds: int = PROBE_ROUNDS) 
 
 
 def wget_command(base: str, req: Request, output: str = "/dev/null") -> str:
-    """The busybox wget invocation for one request (exits non-zero on 4xx/5xx and timeouts)."""
+    """The busybox wget invocation for one request; it succeeds only on a 2xx/3xx answer.
+
+    A GET exits non-zero on 4xx/5xx and timeouts (redirects followed). A POST succeeds when the
+    first status line is 2xx/3xx: a write answered with a redirect (social-network login replies
+    302 to a relative ``../../main.html`` busybox cannot follow) has already succeeded.
+    """
+    url = shlex.quote(base + req.path)
     post = req.post_data()
-    data = "" if post is None else f"--post-data {shlex.quote(post)} "
-    return f"wget -q -T {PROBE_REQUEST_TIMEOUT_S} -O {output} {data}{shlex.quote(base + req.path)}"
+    if post is None:
+        return f"wget -q -T {PROBE_REQUEST_TIMEOUT_S} -O {output} {url}"
+    return (
+        f"wget -q -S -T {PROBE_REQUEST_TIMEOUT_S} -O {output} --post-data {shlex.quote(post)} {url} 2>&1 "
+        "| grep -m1 'HTTP/1' | grep -q ' [23][0-9][0-9] '"
+    )
 
 
 def probe_deadline_s(entry: EntryPoint, rounds: int = PROBE_ROUNDS) -> int:

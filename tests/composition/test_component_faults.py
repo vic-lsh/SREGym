@@ -83,7 +83,7 @@ class FakeKube:
     def _fetch(self, script: str) -> str:
         out = []
         for i, part in enumerate(script.split("rm -f /tmp/body; ")[1:]):
-            m = re.search(r"wget -q -T \d+ -O /tmp/body (?:--post-data (\S+) )?(\S+)", part)
+            m = re.search(r"wget -q (?:-S )?-T \d+ -O /tmp/body (?:--post-data (\S+) )?(\S+)", part)
             post = shlex.split(m.group(1))[0] if m.group(1) else None
             url = shlex.split(m.group(2))[0]
             path = url.split(":8080", 1)[1]
