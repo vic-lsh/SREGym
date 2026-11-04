@@ -265,3 +265,41 @@ back without a `(error)` prefix and exit 0 through `kubectl exec`, so `redis.cli
 - A data-destroying repair (restart of post-storage-mongodb) leaves caches pointing at lost data
   (user-timeline-redis lists post ids that are gone), so later snapshots fail: the harness runs
   those repairs last and calls `--reset-cmd` (a reseeding reset) after each.
+
+## Pod-level drivers (node access and injector pods)
+
+Pod-level faults take a `WorkloadTarget` (`app_bindings.workload_targets(binding)`: workload, kind,
+container, port, protocol, `holds_primary_data`), derived from the binding rows, so no driver names an
+app. A `ServiceInstance` row carries its TCP `port` and optional `container`. `pod_fault.PodLevelFault`
+fixes the per-target restart rule: where `holds_primary_data` is true (home-timeline-redis, Mongo) a
+rollout restart or pod deletion is a decoy (the seeded-data check fails it); otherwise both are
+acceptable repairs, because the fault lives in the process or pod sandbox a restart replaces.
+
+- `node.py`: the node seam. `Nodes(kube, shell)` finds a pod's node and a container's host pid from the pod
+  spec (`crictl inspect`). `shell` is a `NodeShell` (`DockerNode`: `docker exec <node>` on kind); tests pass a
+  fake. Needs privileged node access, so it is for kind-like clusters.
+- `process.py` (`process_frozen`): SIGSTOP the container's init process from the node (a pid-1 process
+  ignores signals from inside its namespace). The pod stays Running and Ready and its port still accepts
+  connections. Reference: `kill -CONT 1` through `kubectl exec`. Cleared means the current main process is not
+  in state T. Target: any thrift service, Redis or Mongo.
+- `network.py` (`pod_network_impairment`): `tc qdisc replace ... netem delay|loss` in the pod netns via
+  `nsenter -t <pid> -n`. Severities are calibrated so the entry-point probe (5 s wget timeout) fails:
+  delay 3000 or 6000 ms; loss 90 or 95 percent (60 percent on home-timeline-redis passed the probe, 35/36, so
+  it is not offered). Reference: delete the qdisc. The qdisc dies with the pod, so a restart is also a repair on
+  stateless targets.
+- `foreign.py`: pods the injector runs in the `sregym-injector` namespace, never the app's: a client or
+  tenant, not part of the app. Stopping the pod is the repair. Everything labelled with the app namespace
+  and fault kind.
+- `load.py` (`connection_exhaustion`, `traffic_surge`): the hog runs the TARGET's own image (it ships bash, so
+  `/dev/tcp` holds thousands of sockets in one process) and re-opens its connections whenever the server drops
+  them, so restarting the victim does not end it. A thread-per-connection server runs out of its 128Mi at about
+  4-6k connections (OOM kills and restarts). The surge is busybox wget loops against the entry point from a 2 CPU
+  client. Reference for both: stop the client. For the surge that is the stated choice: scaling out is a drift
+  from accepted source that restore_source would revert and needs a capacity judgement, while removing the
+  source is exactly what a rate limit at the edge achieves.
+- `neighbor.py` (`NoisyNeighbor`, not in the catalog): a CPU burner pinned to the victim's node. On the
+  3-CPU kind worker neither six busy loops with a 6 CPU request nor sixteen with a 30 CPU request produced a
+  failing probe (it only slowed from 8 s to 14 s). Enabling it needs a latency budget in the verdict.
+
+Live validation costs about 4 minutes per trial (three probes at 5 s per failing request), so a stateful
+target with three decoys takes 15 minutes per seed.

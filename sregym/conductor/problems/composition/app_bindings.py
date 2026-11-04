@@ -205,12 +205,27 @@ class ServiceInstance:
     protocol: str  # "thrift" | "grpc" | "http"
     proxy: bool = False
     kind: str = "Deployment"
+    container: str | None = None  # None: the pod's first container
     verified: bool = True
     consumers: tuple[str, ...] = ()
 
     @property
     def restart_loses_data(self) -> bool:
         return False  # stateless
+
+
+@dataclass(frozen=True)
+class WorkloadTarget:
+    """Any bound workload seen as a process: the common shape pod-level drivers (freeze a process,
+    shape its network, hold connections open) need, derived from the typed rows."""
+
+    workload: str
+    kind: str
+    container: str | None
+    port: int
+    protocol: str
+    holds_primary_data: bool  # True: a restart loses the only copy of user data (restart is a decoy)
+    proxy: bool = False
 
 
 @dataclass(frozen=True)
@@ -257,6 +272,30 @@ class AppBinding:
 
 StoreRow = RedisInstance | MemcachedInstance | MongoInstance
 BindingRow = StoreRow | ServiceInstance
+
+
+def workload_targets(binding: AppBinding, *, verified_only: bool = True) -> tuple[WorkloadTarget, ...]:
+    """Every bound workload as a ``WorkloadTarget``. Mongo instances always hold primary data; memcached
+    and services never do; a Redis says so itself."""
+    out = [
+        *(
+            WorkloadTarget(r.workload, r.kind, r.container, r.port, "redis", r.holds_primary_data)
+            for r in instances(binding.redis, verified_only=verified_only)
+        ),
+        *(
+            WorkloadTarget(m.workload, m.kind, None, m.port, "memcached", False)
+            for m in instances(binding.memcached, verified_only=verified_only)
+        ),
+        *(
+            WorkloadTarget(m.workload, m.kind, None, m.port, "mongo", True)
+            for m in instances(binding.mongo, verified_only=verified_only)
+        ),
+        *(
+            WorkloadTarget(s.workload, s.kind, s.container, s.port, s.protocol, False, s.proxy)
+            for s in instances(binding.services, verified_only=verified_only)
+        ),
+    ]
+    return tuple(out)
 
 
 def instances(rows: tuple, *, verified_only: bool = True) -> tuple:
@@ -403,7 +442,7 @@ SOCIAL_NETWORK = AppBinding(
     services=(
         ServiceInstance("nginx-thrift", 8080, "http", proxy=True),
         *(
-            ServiceInstance(name, 9090, "thrift", verified=False)
+            ServiceInstance(name, 9090, "thrift")
             for name in (
                 "compose-post-service",
                 "home-timeline-service",

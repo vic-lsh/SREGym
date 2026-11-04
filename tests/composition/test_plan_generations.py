@@ -35,6 +35,10 @@ INCIDENT_KEYS = {
     "redis_poisoned_timeline_entry",
     "redis_timeline_key_renamed",
     "social_graph_stale_cache",
+    "process_frozen",
+    "pod_network_impairment",
+    "connection_exhaustion",
+    "traffic_surge",
 }
 
 

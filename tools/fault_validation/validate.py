@@ -136,7 +136,7 @@ class Harness:
 
     def run_trial(self, problem, name: str, repair, *, key: str = "", app: str = "", seed: int = 0, params=None):
         expect = repair.expect.value
-        row: dict[str, Any] = {"trial": name, "expect": expect}
+        row: dict[str, Any] = {"trial": name, "expect": expect, "host_load_1m_start": os.getloadavg()[0]}
         t0 = time.monotonic()
         try:
             self.save_state(key, app, seed, params or {}, problem)
@@ -161,6 +161,7 @@ class Harness:
                 row["recover_error"] = f"{type(e).__name__}: {e}"[:400]
                 row["status"] = INVALID
         row["pass"] = row["status"] == VALID
+        row["host_load_1m_end"] = os.getloadavg()[0]
         row["duration_s"] = round(time.monotonic() - t0, 1)
         return row
 
@@ -177,12 +178,14 @@ class Harness:
             "duration_s": round(time.monotonic() - t0, 1),
         }
 
-    def validate_seed(self, key: str, app: str, seed: int, namespace: str, only=None) -> Iterator[dict[str, Any]]:
+    def validate_seed(
+        self, key: str, app: str, seed: int, namespace: str, only=None, overrides: dict[str, Any] | None = None
+    ) -> Iterator[dict[str, Any]]:
         """Yield each row as soon as it finishes; the last row is the seed summary."""
         t0 = time.monotonic()
         entry = {e.key: e for e in catalog.entries_for(app)}[key]
         draw = entry.sample(app, random.Random(seed))
-        params = draw.param_dict()
+        params = {**draw.param_dict(), **(overrides or {})}  # --set pins a target or severity over the seed's draw
         problem = _build(key, app, params, namespace)
         base = {"key": key, "app": app, "seed": seed, "params": params}
         rows: list[dict[str, Any]] = []
@@ -390,6 +393,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--reset-cmd", default=None, help="shell command run after each data-destroying repair")
     ap.add_argument("--state-dir", default=str(DEFAULT_STATE_DIR), help="'' disables persisting injected state")
     ap.add_argument("--lanes", nargs="*", default=None, help="kubeconfigs: shard seeds over them in parallel")
+    ap.add_argument(
+        "--set", nargs="*", default=[], metavar="K=JSON", help='pin draw parameters, e.g. target="user-service"'
+    )
     ap.add_argument("--out", default=None, help="also append JSON lines here")
     ap.add_argument(
         "--detach",
@@ -410,6 +416,7 @@ def main(argv: list[str] | None = None) -> int:
     from sregym.conductor.problems.composition.app_bindings import BINDINGS
 
     namespace = args.namespace or BINDINGS[args.app].namespace
+    overrides = {k: json.loads(v) for k, _, v in (kv.partition("=") for kv in args.set)}
     try:  # one lock directory for every state dir: two runs differing only in --state-dir still collide
         lock = lane_lock(LOCK_DIR, os.environ.get("KUBECONFIG", ""), namespace)  # noqa: F841 (held)
     except LaneBusy as e:
@@ -436,7 +443,9 @@ def main(argv: list[str] | None = None) -> int:
     for row in harness.recover_leftovers():
         emit(row)
     for seed in args.seeds:
-        for row in harness.validate_seed(args.key, args.app, seed, namespace, set(args.only) if args.only else None):
+        for row in harness.validate_seed(
+            args.key, args.app, seed, namespace, set(args.only) if args.only else None, overrides
+        ):
             emit(row)
     return 0 if all_ok else 1
 
