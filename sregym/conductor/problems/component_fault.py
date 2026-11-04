@@ -100,6 +100,7 @@ Mitigation = Repair  # kept for subclasses that annotate with it
 
 WRITE_CHECK_ATTEMPTS = 4  # social-network writes are one-way: give one a few seconds to land
 WRITE_CHECK_WAIT_S = 3.0
+WRITE_TRIES = 3  # a write right after a store or service restart can fail once on a stale pooled connection
 INTEGRITY_ATTEMPTS = 3  # reads right after a restart can return empty until the service's pool reconnects
 INTEGRITY_WAIT_S = 5.0
 NOT_CLEARED_COMPONENTS = frozenset({"fault", "write"})
@@ -343,6 +344,16 @@ class ComponentFaultProblem(Problem):
                 return True, f"marker visible at {check.read} after {attempt + 1} reads"
         return False, f"marker written through {check.path} not visible at {check.read}"
 
+    def _write_lands(self, check: WriteCheck) -> tuple[bool, str]:
+        """A fresh marker write must become visible; retried with a new marker up to ``WRITE_TRIES`` times (a
+        settle artefact of a restarted peer, like the integrity polls). A fault that blocks writes fails every try."""
+        detail = ""
+        for _ in range(WRITE_TRIES):
+            landed, detail = self._marker_visible(check, self._write_marker(check))
+            if landed:
+                return True, detail
+        return False, f"{detail} ({WRITE_TRIES} writes)"
+
     def _integrity_settled(self) -> tuple[bool, str]:
         """Compare the seeded reads, polling briefly: a restart leaves a settle artefact (the first
         reads through a restarted store or service come back empty), which is not data loss."""
@@ -363,7 +374,7 @@ class ComponentFaultProblem(Problem):
             failed.append("fault")
         check = self.write_check()
         if self.blocks_writes and check is not None:
-            written, result["write_detail"] = self._marker_visible(check, self._write_marker(check))
+            written, result["write_detail"] = self._write_lands(check)
             if not written:
                 failed.append("write")
         blind = self.disables_target and not cleared  # the target cannot answer reads while the fault is live

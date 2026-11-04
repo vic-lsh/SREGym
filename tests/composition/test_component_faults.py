@@ -561,3 +561,23 @@ def test_classify_charges_lost_data_over_a_failing_write_once_the_fault_state_is
     assert classify(["fault", "write", "witness"]) is Expect.FAULT_NOT_CLEARED
     assert classify(["write"]) is Expect.FAULT_NOT_CLEARED
     assert classify([]) is Expect.PASSES
+
+
+def test_a_blocked_write_is_retried_with_fresh_markers_and_a_persistent_block_still_fails():
+    """A write right after a restart can fail once on a stale pooled connection (live: social_graph_stale_cache
+    after restart_stateful_pod); a fault that blocks writes fails every try."""
+    from sregym.conductor.problems.component_fault import WRITE_TRIES, ComponentFaultProblem
+
+    class Bare(ComponentFaultProblem):
+        inject = fault_cleared = reference_mitigation = lambda self: None
+
+    p = object.__new__(Bare)
+    outcomes = iter([False, False, True])
+    written = []
+    p._write_marker = lambda check: written.append(1) or f"m{len(written)}"
+    p._marker_visible = lambda check, marker: (next(outcomes), f"saw {marker}")
+    assert p._write_lands(object()) == (True, "saw m3") and len(written) == 3
+    written.clear()
+    p._marker_visible = lambda check, marker: (False, f"no {marker}")
+    landed, detail = p._write_lands(object())
+    assert not landed and len(written) == WRITE_TRIES and f"{WRITE_TRIES} writes" in detail
