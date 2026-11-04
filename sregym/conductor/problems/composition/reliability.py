@@ -59,8 +59,20 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
         "the diagnosis is not proven."
     ),
     **{
-        (key, "social_network"): _PENDING
+        (key, app): _PENDING
         for key in ("mongo_write_lock", "mongo_write_rejection", "mongo_collection_renamed", "mongo_poison_document")
+        for app in ("social_network",)
+    },
+    # hotel_reservation: enabled by binding rows only; reliable once validated live (validation/hotel).
+    **{
+        (key, "hotel_reservation"): _PENDING
+        for key in (
+            "memcached_poisoned_entries",
+            "mongo_write_lock",
+            "mongo_write_rejection",
+            "mongo_collection_renamed",
+            "mongo_poison_document",
+        )
     },
 }
 

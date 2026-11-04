@@ -63,7 +63,10 @@ class MemcachedPoisonedEntries(ComponentFaultProblem):
             values: list = list(self.snapshot.values) if self.snapshot is not None else []
             probe_reads = tuple(Request(p) for p in self.binding.entry.paths)
             values += [http.normalize(r.body) for r in http.fetch(self.kube, self.binding, self.namespace, probe_reads)]
-            keys += [k for k in http.json_field_values(values, self.instance.key_field) if k not in keys]
+            for value in http.json_field_values(values, self.instance.key_field):
+                key = self.instance.key_template.format(value)
+                if key not in keys:
+                    keys.append(key)
         return tuple(keys)
 
     def inject(self) -> None:

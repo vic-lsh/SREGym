@@ -33,7 +33,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from sregym.conductor.problems.composition.grading import ENTRY_POINTS, SOCIAL_PROBE_USERNAME, EntryPoint, Request
+from sregym.conductor.problems.composition.grading import (
+    ENTRY_POINTS,
+    SOCIAL_PROBE_USERNAME,
+    EntryPoint,
+    Request,
+)
 
 
 @dataclass(frozen=True)
@@ -81,7 +86,8 @@ class MemcachedInstance:
     """A memcached server and the hot keys its consumers read.
 
     Hot keys are ``keys`` (literal) plus, when ``key_field`` is set, every value of that JSON
-    field in the app's integrity snapshot (post ids in a timeline). ``warm`` requests make the
+    field in the app's integrity snapshot (post ids in a timeline), formatted into ``key_template``
+    when the cache key is derived from the value. ``warm`` requests make the
     consumer cache those keys before a fault reads them. ``consumers`` are the workloads that
     read the cache (rollout-restarting one is a decoy).
     """
@@ -90,6 +96,7 @@ class MemcachedInstance:
     consumers: tuple[str, ...]
     keys: tuple[str, ...] = ()
     key_field: str | None = None
+    key_template: str = "{}"  # cache key of a ``key_field`` value ("{}_cap": hotel-reservation capacities)
     warm: tuple[Request, ...] = ()
     port: int = 11211
     kind: str = "Deployment"
@@ -152,9 +159,11 @@ MONGO_FAULTS = ("mongo_write_lock", "mongo_write_rejection", "mongo_collection_r
 
 @dataclass(frozen=True)
 class MongoInstance:
-    """A mongod run by one workload. It holds the only copy of its data (nothing is behind it, and
-    the pod has no volume), so restarting it is always a decoy. ``consumers``: services whose
-    restart is a decoy too."""
+    """A mongod run by one workload. By default it holds the only copy of its data (nothing is
+    behind it, and the pod has no volume), so restarting it is a decoy. ``persistent``: its data
+    directory is a volume (hotel-reservation's PVCs), so a restart keeps the data and keeps
+    on-disk fault state (validators, renamed collections, poisoned documents) but still clears
+    process state (an fsync lock). ``consumers``: services whose restart is a decoy too."""
 
     workload: str
     database: str
@@ -168,10 +177,11 @@ class MongoInstance:
     # (username, password) for an instance started with authentication (hotel's mongodb-* run
     # createUser scripts); None: unauthenticated, as in social-network.
     auth: tuple[str, str] | None = None
+    persistent: bool = False
 
     @property
     def restart_loses_data(self) -> bool:
-        return True  # the only copy, no volume
+        return not self.persistent  # the only copy unless the data directory is a volume
 
 
 def mongo_targets(rows: tuple[MongoInstance, ...], fault: str) -> tuple[tuple[MongoInstance, MongoCollection], ...]:
@@ -205,7 +215,8 @@ class IntegrityCheck:
     normalized bodies; after mitigation the same reads must return the same data. If any read
     comes back empty (``""``, ``[]``, ``{}``), ``seed`` runs once first, so the snapshot holds
     real data. ``volatile_keys`` are JSON object keys dropped before comparing.
-    ``depends_on``: workloads whose stored data the reads return and whose restart loses it; the
+    ``unordered_keys``: JSON keys whose list values the app returns in a varying order (hotel's
+    ``features``); they are compared as sets. ``depends_on``: workloads whose stored data the reads return and whose restart loses it; the
     generator never composes a fault on one of them with a fault that relies on this check.
     """
 
@@ -213,6 +224,7 @@ class IntegrityCheck:
     seed: tuple[Request, ...] = ()
     volatile_keys: tuple[str, ...] = ()
     depends_on: tuple[str, ...] = ()
+    unordered_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -396,19 +408,88 @@ SOCIAL_NETWORK = AppBinding(
     ),
 )
 
-# --- hotel_reservation (from its manifests; not validated live) -------------------------------------
+# --- hotel_reservation ------------------------------------------------------------------------------
+# Every mongod keeps its data on a PVC (a restart keeps it), and the services seed their database at
+# startup. geo and rate run with --auth (admin/admin). The frontend takes GET query parameters.
+
+_HOTEL_SEARCH = "/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=38.0235&lon=-122.095"
+_HOTEL_LOGIN = "/user?username=Cornell_5&password=5555555555"
 
 HOTEL_RESERVATION = AppBinding(
     app="hotel_reservation",
     namespace="hotel-reservation",
     entry=ENTRY_POINTS["Hotel Reservation"],
-    memcached=tuple(
-        MemcachedInstance(f"memcached-{name}", consumers=(name,), verified=False)
-        for name in ("profile", "rate", "reservation")
+    memcached=(
+        # profile and rate cache each hotel under its id; the hotels in the snapshot's reads.
+        MemcachedInstance("memcached-profile", consumers=("profile",), key_field="id"),
+        MemcachedInstance("memcached-rate", consumers=("rate",), key_field="id"),
+        # reservation caches "<hotel>_cap" and "<hotel>_<in>_<out>" counts.
+        MemcachedInstance(
+            "memcached-reserve",
+            consumers=("reservation",),
+            key_field="id",
+            key_template="{}_cap",
+        ),
     ),
-    mongo=tuple(
-        MongoInstance(f"mongodb-{name}", database=f"{name}-db", verified=False)
-        for name in ("geo", "profile", "rate", "recommendation", "reservation", "user")
+    mongo=(
+        MongoInstance(
+            "mongodb-geo",
+            "geo-db",
+            (MongoCollection("geo", faults=("mongo_collection_renamed",)),),
+            consumers=("geo",),
+            auth=("admin", "admin"),
+            persistent=True,
+        ),
+        MongoInstance(
+            "mongodb-profile",
+            "profile-db",
+            (
+                MongoCollection(
+                    "hotels",
+                    cache="memcached-profile",
+                    key_field="id",
+                    poison_fields=("name", "address"),
+                    faults=("mongo_collection_renamed", "mongo_poison_document"),
+                ),
+            ),
+            consumers=("profile",),
+            persistent=True,
+        ),
+        MongoInstance(
+            "mongodb-rate",
+            "rate-db",
+            (MongoCollection("inventory", cache="memcached-rate", faults=("mongo_collection_renamed",)),),
+            consumers=("rate",),
+            auth=("admin", "admin"),
+            persistent=True,
+        ),
+        MongoInstance(
+            "mongodb-recommendation",
+            "recommendation-db",
+            (MongoCollection("recommendation"),),
+            consumers=("recommendation",),
+            persistent=True,
+        ),
+        MongoInstance(
+            "mongodb-reservation",
+            "reservation-db",
+            (
+                MongoCollection(
+                    "reservation",
+                    cache="memcached-reserve",
+                    faults=("mongo_write_lock", "mongo_write_rejection", "mongo_collection_renamed"),
+                ),
+            ),
+            consumers=("reservation",),
+            persistent=True,
+        ),
+        MongoInstance(
+            "mongodb-user",
+            "user-db",
+            (MongoCollection("user", faults=("mongo_collection_renamed",)),),
+            consumers=("user",),
+            persistent=True,
+        ),
     ),
     services=(
         ServiceInstance("frontend", 5000, "http", proxy=True, verified=False),
@@ -424,6 +505,18 @@ HOTEL_RESERVATION = AppBinding(
                 ("user", 8086),
             )
         ),
+    ),
+    # No seed: the services create their data at startup. recommendations?require=rate is left out
+    # (ties in the rate sort make its order vary between identical requests). No depends_on: every
+    # mongod keeps its data on a volume, so a restart loses nothing the reads return.
+    integrity=IntegrityCheck(
+        reads=(
+            _HOTEL_SEARCH,
+            "/recommendations?require=dis&lat=37.7749&lon=-122.4194",
+            "/recommendations?require=price&lat=37.7749&lon=-122.4194",
+            _HOTEL_LOGIN,
+        ),
+        unordered_keys=("features",),
     ),
 )
 

@@ -56,6 +56,17 @@ class MongoFaultProblem(ComponentFaultProblem):
     restart loses data)."""
 
     fault_kind = ""
+    # The fault state is stored in the database files (validator, index, renamed collection,
+    # poisoned documents), not in the process: a restart clears it only if the data is lost with it.
+    state_in_data = False
+
+    @property
+    def restart_clears(self) -> bool:  # type: ignore[override]
+        return not (self.state_in_data and self.instance.persistent)
+
+    def data_stores(self):
+        """Witness the instance even when its data survives a restart: the repairs rewrite documents."""
+        return (self.target,)
 
     def __init__(self, app_name: str, target: str, collection: str | None, description: str, namespace=None, kube=None):
         self.instance, self.coll = resolve(app_name, target, collection)
@@ -117,6 +128,7 @@ class MongoWriteLock(MongoFaultProblem):
 
 class MongoWriteRejection(MongoFaultProblem):
     fault_kind = "mongo_write_rejection"
+    state_in_data = True
     blocks_writes = True
 
     def __init__(self, app_name: str, target: str, collection: str, mode: str, namespace=None, kube=None):
@@ -167,6 +179,7 @@ class MongoWriteRejection(MongoFaultProblem):
 
 class MongoCollectionRenamed(MongoFaultProblem):
     fault_kind = "mongo_collection_renamed"
+    state_in_data = True
 
     def __init__(self, app_name: str, target: str, collection: str, namespace=None, kube=None):
         super().__init__(
@@ -200,6 +213,7 @@ class MongoCollectionRenamed(MongoFaultProblem):
 
 class MongoPoisonDocument(MongoFaultProblem):
     fault_kind = "mongo_poison_document"
+    state_in_data = True
     STATE_ATTRS = ("poisoned",)
 
     def __init__(self, app_name: str, target: str, collection: str, shape: str, scope: str, namespace=None, kube=None):

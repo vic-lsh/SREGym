@@ -210,7 +210,7 @@ def test_enabled_apps_have_verified_targets(key):
     for app in component_state.ENABLED_APPS[key]:
         b = app_bindings.BINDINGS[app]
         assert app_bindings.instances(b.redis if key.startswith("redis") else b.memcached)
-        assert b.integrity is not None and b.integrity.reads and b.integrity.seed
+        assert b.integrity is not None and b.integrity.reads  # the seed is optional: hotel's services seed themselves
 
 
 def test_draws_sample_every_verified_target_and_declare_the_whole_workload():
@@ -248,6 +248,18 @@ def test_diff_ignores_volatile_keys_and_reports_changes():
     ok, detail = http.diff(snap, [http.Response(True, "[]")], ("t",))
     assert not ok and "changed at /r" in detail
     assert not http.diff(snap, [http.Response(False, "")])[0]
+
+
+def test_diff_compares_unordered_keys_as_sets_but_still_sees_missing_items():
+    snap = http.Snapshot(("/r",), (http.normalize('{"features": [{"id": "1"}, {"id": "2"}]}', (), ("features",)),))
+    swapped = http.Response(True, '{"features": [{"id": "2"}, {"id": "1"}]}')
+    assert http.diff(snap, [swapped], (), ("features",))[0]
+    assert not http.diff(snap, [swapped], ())[0]  # ordered by default
+    assert not http.diff(snap, [http.Response(True, '{"features": [{"id": "2"}]}')], (), ("features",))[0]
+
+
+def test_memcached_key_template_formats_snapshot_values():
+    assert app_bindings.MemcachedInstance("m", ("c",), key_field="id", key_template="{}_cap").key_template.format(7) == "7_cap"
 
 
 def test_snapshot_json_field_values():
