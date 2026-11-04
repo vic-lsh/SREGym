@@ -159,7 +159,7 @@ def _lines(text: str) -> list[str]:
 # agent, can use it to read around the fault; ``remove_check_user`` deletes it at recover.
 
 CHECK_USER = "sregym_check"
-_CHECK_RULES = ("reset", "on", "~*", "&*", "-@all", "+@read", "+ping")
+_CHECK_RULES = ("on", "~*", "&*", "-@all", "+@read", "+ping")
 _check_passwords: dict[tuple[str, str], str] = {}
 
 
@@ -168,9 +168,11 @@ def _auth_failed(text: str) -> bool:
 
 
 def ensure_check_user(kube: Kube, namespace: str, inst: RedisInstance) -> None:
-    """(Re)create the check user with a fresh password (a pod restart wipes runtime ACLs)."""
+    """(Re)create the check user with a fresh password (a pod restart wipes runtime ACLs). ``reset``
+    must come first: it clears the password and rules given before it. A failed AUTH is not fatal to
+    redis-cli (it carries on as ``default``), so a wrong order shows up as NOPERM, not WRONGPASS."""
     password = secrets.token_urlsafe(24)
-    _exec(kube, namespace, inst, "ACL", "SETUSER", CHECK_USER, f">{password}", *_CHECK_RULES)
+    _exec(kube, namespace, inst, "ACL", "SETUSER", CHECK_USER, "reset", f">{password}", *_CHECK_RULES)
     _check_passwords[(namespace, inst.workload)] = password
 
 

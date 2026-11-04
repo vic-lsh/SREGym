@@ -61,7 +61,17 @@ class FakeRedisKube:
         if priv and (op in writes or op in {"ACL", "CONFIG", "CLIENT"}):
             return f"NOPERM this user has no permissions to run the '{op.lower()}' command\n"
         if op == "ACL" and a[1] == "SETUSER" and a[2] != "default":
-            self.users[a[2]] = a[3][1:]
+            rules = a[3:]  # ``reset`` clears the password and rules given before it, as Redis does
+            pw = None
+            for r in rules:
+                if r == "reset":
+                    pw = None
+                elif r.startswith(">"):
+                    pw = r[1:]
+            if pw is None:
+                self.users.pop(a[2], None)
+            else:
+                self.users[a[2]] = pw
             return "OK\n"
         if op == "ACL" and a[1] == "DELUSER":
             return f"(integer) {int(self.users.pop(a[2], None) is not None)}\n"
