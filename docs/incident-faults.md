@@ -332,3 +332,46 @@ acceptable repairs, because the fault lives in the process or pod sandbox a rest
 
 Live validation costs about 4 minutes per trial (three probes at 5 s per failing request), so a stateful
 target with three decoys takes 15 minutes per seed.
+
+## Catalog status (generation 2, live validation of 2026-11-04)
+
+A kind is reliable (in `__reliable__g2` plans) only with 3 seeds where every trial is VALID with its declared
+reason. Flags and one-line reasons live in `composition/reliability.py`; rows in `validation/<family>/`
+(outside the repository). "VALID n/m" counts trials; seeds are fault draws (distinct targets or variants).
+Every kind: reference repair passes; decoys `restore_source` and `rollout_restart:<consumer>` end
+`fault_not_cleared`; where a store restart loses data, `restart_stateful_pod` and `rollout_restart` end `data_lost`.
+
+| Kind | App | Family | Parameters | Reference fix | Extra decoys / acceptable | Validation | Pilot |
+|---|---|---|---|---|---|---|---|
+| redis_replica_misconfig | social | Redis | target Redis, bogus master | `REPLICAOF NO ONE` | restart stores (data_lost) | reliable (F1 seed 2) | P4 L1: SDO did not detect (replica serves reads) |
+| memcached_poisoned_entries | social, hotel | cache | target, corruption, key scope (probe, broad) | `flush_all` | restart (acceptable) | social reliable (seed 5, broad 3/12/15 VALID); hotel flagged: seeds 1,3 data_lost | P4 L2: not detected |
+| redis_acl_revoked | social | Redis | target, read or write | restore ACL | restart acceptable | flagged: home-timeline-redis seeds 1-3 VALID except restart decoys not run; user-timeline seed 7 all VALID | P4 L4 not measured |
+| redis_out_of_memory | social | Redis | target | raise maxmemory/evict | restart | flagged: 1 seed (9) VALID 6/6 | no |
+| redis_writes_paused | social | Redis | target | unpause writes | restart | flagged: 1 seed (5) VALID 6/6 | no |
+| redis_poisoned_timeline_entry | social | Redis | target, key, shape | delete poisoned entry | delete_key, restart (acceptable) | flagged: seeds 7, 1 VALID 7/7, seed 5 FAIL | no |
+| redis_timeline_key_renamed | social | Redis | target | rename back | delete_backup_key (data_lost) | flagged: 1 seed VALID 8/8 | no |
+| social_graph_stale_cache | social | Redis | ghost ids | re-add followers | restart | flagged: seeds 1, 2 FAIL | no |
+| mongo_write_rejection | social, hotel | Mongo | collection, mode (validator, ...) | drop validator | restart (data_lost) | social reliable (3 seeds VALID); hotel flagged: decoys INVALID | P5 (write path) blocked by deployer, see P5.md |
+| mongo_collection_renamed | social, hotel | Mongo | collection | rename back | restart | social reliable; hotel seeds 1,3 VALID, seed 2 FAIL | P5 queued |
+| mongo_write_lock | social, hotel | Mongo | target | `fsyncUnlock` | restart (data_lost) | hotel reliable (3 seeds, 6/6 each); social flagged: seed 1 VALID, 5 and 7 INVALID | no |
+| mongo_poison_document | social, hotel | Mongo | collection, shape, scope | repair documents | restart | flagged: social reference INVALID all seeds (ids not found); hotel decoys FAIL (no symptom) | no |
+| process_frozen | social | process | target service/store | `kill -CONT 1` | restart (acceptable on stateless) | flagged: seed 3 VALID 6/6, seed 2 FAIL (before poll fix), seed 1 INVALID | P4 L3/R3/S3: learned stall playbook, reused deterministically |
+| pod_network_impairment | social | process | target, delay 3000/6000 ms or loss 90/95% | delete qdisc | restart (acceptable) | flagged: seeds 2, 3 VALID, seed 1 INVALID | P5 B2: folded into the stall/restart playbook |
+| connection_exhaustion | social | load | compose-post-service, ~12000 sockets | stop the hog | restart is a decoy | flagged: intermittent symptom (seed 2 VALID, seed 1 one FAIL, seed 3 INVALID) | no |
+| traffic_surge | social | load | entry-point load | stop the client | none | dropped | no |
+
+Dropped and not offered:
+
+- `traffic_surge` (in the catalog, always flagged): the surge OOM-kills user-timeline-service and wedges its
+  Mongo (100m CPU), so the reference fails at verdict time (14/18, 29-31/36); needs a redesign that also
+  restarts crashed pods.
+- `noisy_neighbor` (class and driver kept, not in the catalog): a CPU burner on the 3-CPU kind worker only
+  slowed the probe (8 s to 14 s), never failed it; it would need a latency budget in the verdict.
+- nginx slowloris: not feasible; would need more than 64 workers x 1024 held connections on a 3 CPU node,
+  and nginx's 60 s header/body timeouts free them (S1-FEASIBILITY.md).
+- Clock skew / JWT: not feasible; pods share the node clock, no libfaketime in any image, and the wrk2 routes
+  do not verify JWTs; the secret is manifest drift (S1-FEASIBILITY.md).
+
+Integrity reads poll up to 3 times, 5 s apart, before reporting `data_lost` (a restarted store or service
+answers empty until its pool reconnects). A Redis row with `restricts_identity` is read through a privileged
+check user, so ACL faults do not blind the verdict.
