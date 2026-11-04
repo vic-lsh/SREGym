@@ -171,3 +171,7 @@ seed (`url-shorten-mongodb`) are `verified=False`.
 - The first request after a pod restart can fail once on a stale pooled connection. The traffic
   probe tolerates it (90% threshold) and integrity reads retry a failed read (never changed data).
 - A fresh app fails its first requests while connection pools warm up; seeding retries.
+- The harness holds the injected state in its process (which keys it poisoned). If it dies
+  mid-trial the fault stays live (a poisoned login key outlived a killed run on the F0 lane):
+  clean up by hand with the kind's broad repair (`flush_all` the memcached, `REPLICAOF NO ONE`)
+  before the next run; its baseline row fails until you do.

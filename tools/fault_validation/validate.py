@@ -25,7 +25,7 @@ import random
 import secrets
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from sregym.conductor.problems.composition import catalog, grading
@@ -89,26 +89,27 @@ def run_trial(problem, cluster, name: str, mitigation: Callable[[], None], expec
     return row
 
 
-def validate_seed(key: str, app: str, seed: int, namespace: str, persist_s: float, cluster) -> list[dict[str, Any]]:
+def validate_seed(key: str, app: str, seed: int, namespace: str, persist_s: float, cluster) -> Iterator[dict[str, Any]]:
+    """Yield each trial row as soon as it finishes."""
     entry = {e.key: e for e in catalog.entries_for(app)}[key]
     draw = entry.sample(app, random.Random(seed))
     problem = entry.build(draw)
     problem.namespace = namespace
     base = {"key": key, "app": app, "seed": seed, "params": draw.param_dict()}
-    rows = [{**base, "trial": "baseline", **_health(cluster, namespace, problem.binding.entry)}]
-    rows[0]["pass"] = rows[0]["collateral_ok"] and rows[0]["traffic_ok"]
-    if not rows[0]["pass"]:
-        return rows
+    baseline = {**base, "trial": "baseline", **_health(cluster, namespace, problem.binding.entry)}
+    baseline["pass"] = baseline["collateral_ok"] and baseline["traffic_ok"]
+    yield baseline
+    if not baseline["pass"]:
+        return
     for name, decoy in sorted(problem.decoy_mitigations().items()):
-        rows.append({**base, **run_trial(problem, cluster, f"decoy:{name}", decoy, False, persist_s)})
-    rows.append({**base, **run_trial(problem, cluster, "reference", problem.reference_mitigation, True, persist_s)})
+        yield {**base, **run_trial(problem, cluster, f"decoy:{name}", decoy, False, persist_s)}
+    yield {**base, **run_trial(problem, cluster, "reference", problem.reference_mitigation, True, persist_s)}
     for name, fix in sorted(problem.acceptable_mitigations().items()):
-        rows.append({**base, **run_trial(problem, cluster, f"acceptable:{name}", fix, True, persist_s)})
+        yield {**base, **run_trial(problem, cluster, f"acceptable:{name}", fix, True, persist_s)}
     cluster.wait_for_rollouts(namespace, SETTLE_S)
     final = {**base, "trial": "recovered", **_health(cluster, namespace, problem.binding.entry)}
     final["pass"] = final["collateral_ok"] and final["traffic_ok"]
-    rows.append(final)
-    return rows
+    yield final
 
 
 def main(argv: list[str] | None = None) -> int:
