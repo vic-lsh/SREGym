@@ -53,11 +53,22 @@ class FakeMongoKube(FakeKube):
         self.ids = ['ObjectId("a1")', 'ObjectId("a2")']
         self.poison: set[str] = set()
         self.missing: set[str] = set()
+        self.before: list[str] = []  # posts composed before the rename
+        self.during: list[str] = []  # posts composed while the collection was renamed away
 
     def _serve(self, path, post):
         if post is not None and path.endswith("/post/compose") and (self.locked or self.validator or self.index):
             return True, "Successfully upload post"  # one-way compose: the app says 200, the write is lost
-        return super()._serve(path, post)
+        before = self.next_post
+        served = super()._serve(path, post)
+        if post is not None and path.endswith("/post/compose") and self.next_post > before:
+            (self.during if self.old_exists else self.before).append(str(self.next_post))
+        return served
+
+    def _lose(self, ids):
+        """A lossy merge: these posts vanish from every timeline (the new or the old document is gone)."""
+        for tl in (*self.timelines.values(), *self.homes.values()):
+            tl[:] = [p for p in tl if p["post_id"] not in ids]
 
     def wipe(self):
         self.reset_data()
@@ -110,6 +121,8 @@ class FakeMongoKube(FakeKube):
             return out({"ok": True})
         if "var merged" in s:
             merged = self.old_exists
+            if merged and "insertOne" not in s:  # no fold: drop_target loses the writes made during the fault,
+                self._lose(set(self.before) if "replaceOne" in s else set(self.during))  # overwrite the old history
             self.old_exists = False
             return out({"merged": 0, "renamed": merged})
         if "old_exists:" in s:
@@ -167,6 +180,21 @@ def test_draws_cover_every_verified_target_and_declare_the_whole_workload(key):
         assert fps[0] == ("Deployment", params["target"], None) and all(f[2] is None for f in fps)
         assert "media-mongodb" not in params["target"]
     assert seen == expected
+
+
+@pytest.mark.parametrize("key", ["mongo_collection_renamed", "mongo_poison_document"])
+def test_faults_that_flush_a_cache_declare_it_in_the_footprint(key):
+    entry = {e.key: e for e in catalog.entries_for("social_network")}[key]
+    caches = {c.name: c.cache for r in B.mongo for c in r.collections}
+    for seed in range(32):
+        draw = entry.sample("social_network", random.Random(seed))
+        params = draw.param_dict()
+        assert (caches[params["collection"]]) in {f.name for f in draw.footprints}
+
+
+def test_user_mongodb_is_never_a_target_because_nothing_user_visible_writes_it():
+    for key in component_mongo.ENABLED_APPS:
+        assert "user-mongodb" not in {i.workload for i, _ in app_bindings.mongo_targets(B.mongo, key)}
 
 
 def test_unique_index_mode_only_where_the_collection_allows_it():

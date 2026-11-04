@@ -234,11 +234,56 @@ def rename_away(kube: Kube, namespace: str, inst: MongoInstance, collection: str
     )
 
 
-def merge_back(kube: Kube, namespace: str, inst: MongoInstance, collection: str) -> dict[str, Any]:
-    """Repair a rename: copy documents written since into ``<collection>_old`` (by ``_id``, newer
-    wins), then rename it over ``<collection>`` with ``dropTarget``. A plain rename back fails with
-    ``target namespace exists`` once writers recreated the name. No ``_old`` collection: no-op."""
+MERGE_STRATEGIES = ("append_only", "union_arrays")  # correct: keep every document from both sides
+LOSSY_MERGES = ("overwrite", "drop_target")  # wrong: lose writes made during the fault
+
+
+def merge_back(
+    kube: Kube,
+    namespace: str,
+    inst: MongoInstance,
+    collection: str,
+    strategy: str = "append_only",
+    key: str = "_id",
+) -> dict[str, Any]:
+    """Repair a rename: fold the documents written since into ``<collection>_old``, then rename it
+    over ``<collection>`` with ``dropTarget`` (a plain rename back fails with ``target namespace
+    exists`` once writers recreated the name). No ``_old`` collection: no-op. Documents are matched
+    by ``key`` (the field services look documents up by, e.g. ``user_id``; ``_id`` is an ObjectId
+    generated per insert, so the recreated collection's documents never share it).
+
+    ``append_only`` (one document per event, e.g. posts): insert the newer documents whose ``_id`` is
+    absent from ``_old``. ``union_arrays`` (one aggregate document per key, e.g. a user's timeline):
+    as append_only, and where both sides hold the ``_id``, put the newer array elements in front of the old
+    ones (services keep these arrays newest first) and let newer scalars win. The lossy strategies exist only as wrong repairs:
+    ``overwrite`` replaces the old document by the newer one (the aggregate's history is lost),
+    ``drop_target`` renames back without merging (every write made during the fault is lost).
+    Writers still active during the merge can lose a write made between the copy and the rename.
+    """
+    if strategy not in (*MERGE_STRATEGIES, *LOSSY_MERGES):
+        raise ValueError(f"unknown merge strategy {strategy!r}")
     old = collection + RENAME_SUFFIX
+    fold = {
+        "append_only": "if(!e){ chk({ok: o.insertOne(doc).acknowledged ? 1 : 0}); }",
+        "union_arrays": (
+            "if(!e){ chk({ok: o.insertOne(doc).acknowledged ? 1 : 0}); } else {"
+            " var push = {}, set = {}; Object.keys(doc).forEach(function(f){"
+            "  if(f === '_id') return;"
+            "  if(Array.isArray(doc[f])){"
+            "   var have = (e[f] || []).map(function(x){ return tojson(x); });"
+            "   var fresh = doc[f].filter(function(x){ return have.indexOf(tojson(x)) < 0; });"
+            "   if(fresh.length){ push[f] = {$each: fresh, $position: 0}; }"
+            "  } else { set[f] = doc[f]; } });"
+            " var up = {}; if(Object.keys(push).length){ up.$push = push; }"
+            " if(Object.keys(set).length){ up.$set = set; }"
+            " if(Object.keys(up).length){ chk({ok: o.updateOne({_id: e._id}, up).acknowledged ? 1 : 0}); } }"
+        ),
+        "overwrite": (
+            "var r = Object.assign({}, doc); delete r._id;"
+            " chk({ok: o.replaceOne({_id: e ? e._id : doc._id}, r, {upsert: true}).acknowledged ? 1 : 0});"
+        ),
+        "drop_target": "",
+    }[strategy]
     return run_js(
         kube,
         namespace,
@@ -247,9 +292,9 @@ def merge_back(kube: Kube, namespace: str, inst: MongoInstance, collection: str)
         f" var merged = 0; var renamed = false;"
         f" if(names.indexOf({_js(old)}) >= 0){{"
         f"  var o = d.getCollection({_js(old)});"
-        f"  if(names.indexOf({_js(collection)}) >= 0){{"
+        f"  if(names.indexOf({_js(collection)}) >= 0 && {_js(bool(fold))}){{"
         f"   d.getCollection({_js(collection)}).find().forEach(function(doc){{"
-        f"    chk({{ok: o.replaceOne({{_id: doc._id}}, doc, {{upsert: true}}).acknowledged ? 1 : 0}}); merged++; }});"
+        f"    var q = {{}}; q[{_js(key)}] = doc[{_js(key)}]; var e = o.findOne(q); {fold} merged++; }});"
         f"  }}"
         f"  chk(o.renameCollection({_js(collection)}, true)); renamed = true; }}"
         f" out({{merged: merged, renamed: renamed}});",

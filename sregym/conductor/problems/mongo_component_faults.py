@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sregym.conductor.problems.component_fault import ComponentFaultProblem, Expect, Repair
+from sregym.conductor.problems.component_fault import ComponentFaultProblem, Expect, Repair, classify
 from sregym.conductor.problems.composition.app_bindings import (
     BINDINGS,
     MemcachedInstance,
@@ -32,6 +32,7 @@ from sregym.generators.fault.components.kube import ComponentError
 
 WRITE_MODES = ("validator", "unique_index")
 POISON_SCOPES = ("one_doc", "all_seeded")
+PRE_MARKER_ATTEMPTS = 2
 
 
 def resolve(app_name: str, target: str, collection: str | None) -> tuple[MongoInstance, MongoCollection]:
@@ -167,6 +168,7 @@ class MongoWriteRejection(MongoFaultProblem):
 
 class MongoCollectionRenamed(MongoFaultProblem):
     fault_kind = "mongo_collection_renamed"
+    pre_marker = None  # (WriteCheck, marker) written before the fault
 
     def __init__(self, app_name: str, target: str, collection: str, namespace=None, kube=None):
         super().__init__(
@@ -193,9 +195,48 @@ class MongoCollectionRenamed(MongoFaultProblem):
             f"{'holds ' + str(st['old_count']) if st['old_exists'] else 'gone'}"
         )
 
+    def prepare_target(self) -> None:
+        """Besides seeding, write one marker through the entry point before the fault: the old
+        collection holds it, so a repair that overwrites or drops the old data loses it."""
+        super().prepare_target()
+        self.pre_marker = None
+        check = self.write_check()
+        if check is not None:
+            for attempt in range(PRE_MARKER_ATTEMPTS):  # the first write after a restart can fail once
+                marker = self._write_marker(check)
+                landed, detail = self._marker_visible(check, marker)
+                if landed:
+                    break
+            else:
+                raise ComponentError(
+                    f"{self.instance.workload} in {self.namespace}: pre-fault marker not readable ({detail})"
+                )
+            self.pre_marker = (check, marker)
+
+    def verdict(self) -> dict[str, Any]:
+        result = super().verdict()
+        if self.pre_marker is not None:
+            ok, detail = self._marker_visible(*self.pre_marker)
+            result["pre_marker_detail"] = detail
+            if not ok and "witness" not in result["failed"]:
+                result["failed"] = [*result["failed"], "witness"]
+                result.update(success=False, reason=classify(result["failed"]).value)
+        return result
+
     def reference_mitigation(self) -> None:
-        mongo.merge_back(*self._ns_args())
+        self.merge(self.coll.merge)
+
+    def merge(self, strategy: str) -> None:
+        mongo.merge_back(*self._ns_args(), strategy, self.coll.merge_key)
         self.flush_cache()  # readers may have cached the empty view
+
+    def extra_repairs(self) -> dict[str, Repair]:
+        # Wrong repairs a rushed operator picks: both bring the old data back and lose writes made
+        # while the fault was live (the marker written through the entry point during the fault).
+        repairs = {"rename_back_drop_target": Repair(lambda: self.merge("drop_target"), Expect.DATA_LOST)}
+        if self.coll.merge == "union_arrays":  # an aggregate document: the old side's history is overwritten
+            repairs["merge_overwrite"] = Repair(lambda: self.merge("overwrite"), Expect.DATA_LOST)
+        return repairs
 
 
 class MongoPoisonDocument(MongoFaultProblem):
