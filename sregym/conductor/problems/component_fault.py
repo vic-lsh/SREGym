@@ -9,7 +9,7 @@ injection:
 * ``extra_repairs()``: kind-specific alternative repairs, each a ``Repair`` that declares the
   outcome it must produce (``Expect``). The base adds the standard ones from the target row
   (``standard_repairs``): restore from source (a no-op, verified), rollout restart and pod
-  restart of the target (data lost when the row's ``restart_loses_data``, acceptable when
+  restart of the target (any row type: stores and services) (data lost when the row's ``restart_loses_data``, acceptable when
   ``restart_clears`` and nothing is lost, else fault not cleared), and restarting each consumer.
 
 The per-fault verdict (``ComponentFaultOracle``) fails a component for each check that does not
@@ -46,7 +46,6 @@ from sregym.conductor.problems.base import Problem
 from sregym.conductor.problems.composition.app_bindings import (
     BINDINGS,
     AppBinding,
-    MemcachedInstance,
     MongoInstance,
     RedisInstance,
     WriteCheck,
@@ -206,7 +205,7 @@ class ComponentFaultProblem(Problem):
     def standard_repairs(self) -> dict[str, Repair]:
         row = self.target
         out = {"restore_source": Repair(self.restore_source, Expect.FAULT_NOT_CLEARED, no_op=True)}
-        if isinstance(row, (RedisInstance, MemcachedInstance, MongoInstance)):
+        if hasattr(row, "restart_loses_data"):  # every binding row type
             loses = row.restart_loses_data
             if not self.restart_clears:
                 expect = Expect.FAULT_NOT_CLEARED

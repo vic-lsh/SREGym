@@ -190,6 +190,11 @@ class ServiceInstance:
     proxy: bool = False
     kind: str = "Deployment"
     verified: bool = True
+    consumers: tuple[str, ...] = ()
+
+    @property
+    def restart_loses_data(self) -> bool:
+        return False  # stateless
 
 
 @dataclass(frozen=True)
