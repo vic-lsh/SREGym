@@ -103,6 +103,14 @@ SOCIAL_PROBE_USERNAME = "sregym_probe_9200"
 SOCIAL_PROBE_FOLLOWER_ID = 9201
 SOCIAL_PROBE_FOLLOWER_USERNAME = "sregym_probe_9201"
 
+# Hotel Reservation probe identity: a seeded user (the app creates Cornell_0..500 with the password
+# its index repeated 10 times) and a hotel/date range no seeded rate or integrity read uses.
+HOTEL_PROBE_LOGIN = "/user?username=Cornell_7&password=7777777777"
+HOTEL_PROBE_RESERVATION = (
+    "/reservation?inDate=2015-05-01&outDate=2015-05-02&hotelId=80&customerName=sregym_probe"
+    "&username=Cornell_7&password=7777777777&number=1"
+)
+
 # The one table of per-app entry points, keyed by `Application.name`: the "Name" field of
 # `sregym/service/metadata/<namespace>.json`, which is not always the short app name
 # (astronomy_shop's is "OpenTelemetry Demo Astronomy Shop"). Enforced for every catalog app by
@@ -121,6 +129,13 @@ ENTRY_POINTS: Mapping[str, EntryPoint] = {
             "/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=38.0235&lon=-122.095",
             "/recommendations?require=rate&lat=38.0235&lon=-122.095",
             "/recommendations?require=dis&lat=37.7749&lon=-122.4194",
+        ),
+        # The frontend takes its parameters in the query string (GET), so these writes are GETs.
+        # Login reads mongodb-user; a reservation inserts into mongodb-reservation and fails with
+        # a 500 when that insert fails. The probe books hotel 80 on dates outside the seeded rates.
+        writes=(
+            Request(HOTEL_PROBE_LOGIN),
+            Request(HOTEL_PROBE_RESERVATION),
         ),
     ),
     "Social Network": EntryPoint(

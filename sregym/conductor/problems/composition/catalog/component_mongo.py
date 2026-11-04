@@ -27,10 +27,10 @@ from sregym.conductor.problems.composition.catalog._component import Target, com
 from sregym.conductor.problems.composition.spec import CatalogEntry
 
 ENABLED_APPS: dict[str, tuple[str, ...]] = {
-    "mongo_write_lock": ("social_network",),
-    "mongo_write_rejection": ("social_network",),
-    "mongo_collection_renamed": ("social_network",),
-    "mongo_poison_document": ("social_network",),
+    "mongo_write_lock": ("social_network", "hotel_reservation"),
+    "mongo_write_rejection": ("social_network", "hotel_reservation"),
+    "mongo_collection_renamed": ("social_network", "hotel_reservation"),
+    "mongo_poison_document": ("social_network", "hotel_reservation"),
 }
 
 # Mirrors (compared by tests/composition/test_catalog_mirrors.py).

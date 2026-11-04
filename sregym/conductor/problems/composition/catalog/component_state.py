@@ -29,7 +29,7 @@ from sregym.conductor.problems.composition.spec import CatalogEntry
 
 ENABLED_APPS: dict[str, tuple[str, ...]] = {
     "redis_replica_misconfig": ("social_network",),
-    "memcached_poisoned_entries": ("social_network",),
+    "memcached_poisoned_entries": ("social_network", "hotel_reservation"),
 }
 
 # Masters that can never serve a sync (a real full sync would flush the replica's data): connection

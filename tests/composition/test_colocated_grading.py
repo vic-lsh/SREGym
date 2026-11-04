@@ -77,11 +77,17 @@ def test_every_entry_point_is_requested_each_round_and_quoted(app):
     assert grading.probe_deadline_s(entry, 2) >= bound
 
 
-def test_only_social_network_probes_write_paths():
+def test_only_apps_with_live_evidence_probe_write_paths():
     # Other apps keep their GET-only probe; adding writes there needs live evidence first.
     with_writes = {name for name, entry in grading.ENTRY_POINTS.items() if entry.writes or entry.setup}
 
-    assert with_writes == {"Social Network"}
+    assert with_writes == {"Social Network", "Hotel Reservation"}
+
+
+def test_hotel_probe_writes_are_gets_with_query_parameters():
+    entry = grading.ENTRY_POINTS["Hotel Reservation"]
+
+    assert [(r.method, r.path.split("?")[0]) for r in entry.writes] == [("GET", "/user"), ("GET", "/reservation")]
 
 
 def test_social_probe_writes_cover_compose_follow_and_login_as_post():

@@ -73,6 +73,17 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
             "social_graph_stale_cache",
         )
     },
+    # hotel_reservation: enabled by binding rows only; reliable once validated live (validation/hotel).
+    **{
+        (key, "hotel_reservation"): _PENDING
+        for key in (
+            "memcached_poisoned_entries",
+            "mongo_write_lock",
+            "mongo_write_rejection",
+            "mongo_collection_renamed",
+            "mongo_poison_document",
+        )
+    },
     ("process_frozen", "social_network"): (
         "Pending: new pod-level fault (process driver); kept out of __reliable plans until it validates live."
     ),

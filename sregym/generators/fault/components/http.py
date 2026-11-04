@@ -65,8 +65,9 @@ def fetch(kube: Kube, binding: AppBinding, namespace: str, requests: tuple[Reque
     return parse_fetch_log(run_client_pod(kube, namespace, script, deadline, prefix="sregym-fetch"), len(requests))
 
 
-def normalize(body: str, volatile_keys: tuple[str, ...] = ()) -> Any:
-    """Parsed JSON with ``volatile_keys`` dropped from every object; non-JSON bodies stay text."""
+def normalize(body: str, volatile_keys: tuple[str, ...] = (), unordered_keys: tuple[str, ...] = ()) -> Any:
+    """Parsed JSON with ``volatile_keys`` dropped from every object and the lists under
+    ``unordered_keys`` sorted (an app that builds them from a map); non-JSON bodies stay text."""
     try:
         value = json.loads(body)
     except ValueError:
@@ -74,7 +75,11 @@ def normalize(body: str, volatile_keys: tuple[str, ...] = ()) -> Any:
 
     def strip(v: Any) -> Any:
         if isinstance(v, dict):
-            return {k: strip(x) for k, x in v.items() if k not in volatile_keys}
+            out = {k: strip(x) for k, x in v.items() if k not in volatile_keys}
+            for k in unordered_keys:
+                if isinstance(out.get(k), list):
+                    out[k] = sorted(out[k], key=lambda x: json.dumps(x, sort_keys=True))
+            return out
         if isinstance(v, list):
             return [strip(x) for x in v]
         return v
@@ -123,13 +128,13 @@ def capture(kube: Kube, binding: AppBinding, namespace: str) -> Snapshot:
     reads = tuple(Request(p) for p in check.reads)
     responses = fetch(kube, binding, namespace, reads)
     for attempt in range(SEED_ATTEMPTS):
-        if not any(not r.ok or _empty(normalize(r.body, check.volatile_keys)) for r in responses):
+        if not any(not r.ok or _empty(normalize(r.body, check.volatile_keys, check.unordered_keys)) for r in responses):
             break
         # A freshly deployed app fails its first requests while connection pools warm up: retry.
         time.sleep(attempt * 5)
         fetch(kube, binding, namespace, check.seed)
         responses = fetch(kube, binding, namespace, reads)
-    values = tuple(normalize(r.body, check.volatile_keys) for r in responses)
+    values = tuple(normalize(r.body, check.volatile_keys, check.unordered_keys) for r in responses)
     bad = [p for p, r, v in zip(check.reads, responses, values, strict=True) if not r.ok or _empty(v)]
     if bad:
         raise ComponentError(f"{binding.app} integrity reads failing or empty after seeding: {bad}")
@@ -149,15 +154,20 @@ def compare(kube: Kube, binding: AppBinding, namespace: str, snapshot: Snapshot)
             break
         time.sleep(3)
         responses = fetch(kube, binding, namespace, reads)
-    return diff(snapshot, responses, check.volatile_keys)
+    return diff(snapshot, responses, check.volatile_keys, check.unordered_keys)
 
 
-def diff(snapshot: Snapshot, responses: list[Response], volatile_keys: tuple[str, ...] = ()) -> tuple[bool, str]:
+def diff(
+    snapshot: Snapshot,
+    responses: list[Response],
+    volatile_keys: tuple[str, ...] = (),
+    unordered_keys: tuple[str, ...] = (),
+) -> tuple[bool, str]:
     """Pure comparison of current responses against a snapshot."""
     for path, want, got in zip(snapshot.reads, snapshot.values, responses, strict=True):
         if not got.ok:
             return False, f"integrity read failed: {path}"
-        now = normalize(got.body, volatile_keys)
+        now = normalize(got.body, volatile_keys, unordered_keys)
         if now != want:
             return False, f"seeded data changed at {path}: was {_short(want)}, now {_short(now)}"
     return True, f"{len(snapshot.reads)} seeded reads unchanged"
