@@ -30,6 +30,12 @@ from collections.abc import Mapping, Sequence
 
 from sregym.conductor.problems.composition.spec import CatalogEntry
 
+# One reason for every component kind added before it validates live (3 seeds, all trials VALID).
+_PENDING = (
+    "Pending: new component fault; kept out of __reliable plans until it validates live on 3 seeds "
+    "(tools/fault_validation/validate.py)."
+)
+
 UNRELIABLE: Mapping[tuple[str, str], str] = {
     ("resource_request_too_small", "hotel_reservation"): (
         "No symptom: with the 10Mi memory limit the recommendation container still fits when idle, "
@@ -52,46 +58,21 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
         "under load (enforcement and webhook registration lag); the three-trigger fix passed twice, but "
         "the diagnosis is not proven."
     ),
-    ("mongo_write_lock", "social_network"): (
-        "Pending: new MongoDB component fault; kept out of __reliable plans until it validates live "
-        "(tools/fault_validation/validate.py)."
-    ),
-    ("mongo_write_rejection", "social_network"): (
-        "Pending: new MongoDB component fault; kept out of __reliable plans until it validates live "
-        "(tools/fault_validation/validate.py)."
-    ),
-    ("mongo_collection_renamed", "social_network"): (
-        "Pending: new MongoDB component fault; kept out of __reliable plans until it validates live "
-        "(tools/fault_validation/validate.py)."
-    ),
-    ("mongo_poison_document", "social_network"): (
-        "Pending: new MongoDB component fault; kept out of __reliable plans until it validates live "
-        "(tools/fault_validation/validate.py)."
-    ),
-    ("redis_acl_revoked", "social_network"): (
-        "Pending: new Redis component fault; kept out of __reliable plans until it validates live "
-        "(tools/fault_validation/validate.py)."
-    ),
-    ("redis_out_of_memory", "social_network"): (
-        "Pending: new Redis component fault; kept out of __reliable plans until it validates live "
-        "(tools/fault_validation/validate.py)."
-    ),
-    ("redis_writes_paused", "social_network"): (
-        "Pending: new Redis component fault; kept out of __reliable plans until it validates live "
-        "(tools/fault_validation/validate.py)."
-    ),
-    ("redis_poisoned_timeline_entry", "social_network"): (
-        "Pending: new Redis component fault; kept out of __reliable plans until it validates live "
-        "(tools/fault_validation/validate.py)."
-    ),
-    ("redis_timeline_key_renamed", "social_network"): (
-        "Pending: new Redis component fault; kept out of __reliable plans until it validates live "
-        "(tools/fault_validation/validate.py)."
-    ),
-    ("social_graph_stale_cache", "social_network"): (
-        "Pending: new Redis component fault; kept out of __reliable plans until it validates live "
-        "(tools/fault_validation/validate.py)."
-    ),
+    **{
+        (key, "social_network"): _PENDING
+        for key in (
+            "mongo_write_lock",
+            "mongo_write_rejection",
+            "mongo_collection_renamed",
+            "mongo_poison_document",
+            "redis_acl_revoked",
+            "redis_out_of_memory",
+            "redis_writes_paused",
+            "redis_poisoned_timeline_entry",
+            "redis_timeline_key_renamed",
+            "social_graph_stale_cache",
+        )
+    },
 }
 
 

@@ -114,6 +114,8 @@ class Pick:
     footprints: tuple[Footprint, ...]
     tier: Tier = Tier.ORDINARY
     tags: frozenset[str] = field(default_factory=frozenset)
+    reads: frozenset[str] = field(default_factory=frozenset)  # FaultDraw.reads
+    restarts: bool = False  # FaultDraw.restarts
 
 
 Choose = Callable[[str, random.Random], Pick]
@@ -146,6 +148,8 @@ def entry(key: str, apps: Iterable[str], choose: Choose, build: Build, generatio
             footprints=pick.footprints,
             tier=pick.tier,
             exclusive_tags=pick.tags,
+            reads=pick.reads,
+            restarts=pick.restarts,
         )
 
     return CatalogEntry(

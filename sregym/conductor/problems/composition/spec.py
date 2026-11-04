@@ -87,6 +87,16 @@ class FaultDraw:
     footprints: tuple[Footprint, ...]
     tier: Tier = Tier.ORDINARY
     exclusive_tags: frozenset[str] = frozenset()  # two draws sharing a tag conflict (fixed-name resources)
+    # Workloads whose stored data this fault's oracle reads through (seeded-data checks): a draw
+    # whose footprint is one of them conflicts, since its repair or decoy may restart that store.
+    reads: frozenset[str] = frozenset()
+    # Its reference or an acceptable repair restarts its footprint workloads (data in them is lost).
+    # Draws without `reads` (no data checks of their own) are assumed to.
+    restarts: bool = False
+
+    @property
+    def may_restart(self) -> bool:
+        return self.restarts or not self.reads
 
     def __post_init__(self) -> None:
         names = [name for name, _ in self.params]
@@ -106,12 +116,19 @@ class FaultDraw:
             "footprints": [{"kind": f.kind, "name": f.name, "field": f.field} for f in self.footprints],
             "tier": self.tier.name,
             "exclusive_tags": sorted(self.exclusive_tags),
+            **({"reads": sorted(self.reads)} if self.reads else {}),
+            **({"restarts": True} if self.restarts else {}),
         }
 
 
 def conflicts(a: FaultDraw, b: FaultDraw) -> bool:
-    """Any footprint overlap, or a shared exclusive tag."""
+    """Any footprint overlap, a shared exclusive tag, or a draw that may restart a workload the
+    other's oracle reads stored data through."""
     if a.exclusive_tags & b.exclusive_tags:
+        return True
+    if a.may_restart and any(f.name in b.reads for f in a.footprints):
+        return True
+    if b.may_restart and any(f.name in a.reads for f in b.footprints):
         return True
     return any(fa.overlaps(fb) for fa in a.footprints for fb in b.footprints)
 

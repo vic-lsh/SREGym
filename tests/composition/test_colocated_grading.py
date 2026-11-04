@@ -69,7 +69,8 @@ def test_every_entry_point_is_requested_each_round_and_quoted(app):
     entry = grading.ENTRY_POINTS[app]
     script = grading.probe_script("ns-1", entry, rounds=2)
 
-    assert script.count("wget ") == len(entry.paths) + len(entry.writes) + len(entry.setup)
+    readbacks = sum(1 for r in entry.writes if r.readback)
+    assert script.count("wget ") == len(entry.paths) + len(entry.writes) + len(entry.setup) + readbacks
     for req in entry.requests() + entry.setup:
         assert shlex.quote(f"http://{entry.service}.ns-1.svc.cluster.local:{entry.port}{req.path}") in script
     bound = (2 * len(entry.requests()) + len(entry.setup)) * grading.PROBE_REQUEST_TIMEOUT_S
@@ -92,7 +93,9 @@ def test_social_probe_writes_cover_compose_follow_and_login_as_post():
         ("POST", "/api/user/login"),
     }
     script = grading.probe_script("ns-1", entry, rounds=1)
-    assert "--post-data 'user_id=9200&username=sregym_probe_9200&post_type=0&text=sregym+traffic+probe'" in script
+    # compose carries a fresh marker and must read it back (compose answers 200 on a dropped write)
+    assert '--post-data "user_id=9200&username=sregym_probe_9200&post_type=0&text=sregym+traffic+probe+$m"' in script
+    assert '/wrk2-api/user-timeline/read?user_id=9200&start=0&stop=5\' 2>/dev/null | grep -q "$m"' in script
     # Setup runs once before the loop and is never counted.
     assert script.index("/wrk2-api/user/register") < script.index("while")
     assert "PROBE_OK 'POST /api/user/login'" in script

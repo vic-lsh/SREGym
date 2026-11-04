@@ -22,10 +22,9 @@ its data), so every draw declares the whole workload (field None).
 from __future__ import annotations
 
 import random
-from typing import Any
 
-from sregym.conductor.problems.composition.app_bindings import BINDINGS, instances
-from sregym.conductor.problems.composition.catalog._kit import Pick, deployment, entry
+from sregym.conductor.problems.composition.app_bindings import AppBinding, instances
+from sregym.conductor.problems.composition.catalog._component import Target, component_entry, pick_one
 from sregym.conductor.problems.composition.spec import CatalogEntry
 
 ENABLED_APPS: dict[str, tuple[str, ...]] = {
@@ -44,70 +43,54 @@ _POISON_KINDS = ("non_numeric", "dangling_id")  # mirrors components.redis.POISO
 _GHOSTS = tuple(str(9202 + i) for i in range(8))  # user ids no seeded or probe user has
 
 
-def _row(app: str, kind: str, rng: random.Random):
-    rows = [r for r in instances(BINDINGS[app].redis) if kind in r.faults]
-    if not rows:
-        raise ValueError(f"{kind}: no verified redis target in the {app} binding")
-    return rng.choice(rows)
+def _row(binding: AppBinding, kind: str, rng: random.Random):
+    rows = tuple(r for r in instances(binding.redis) if kind in r.faults)
+    return pick_one(rows, f"redis target for {kind}", binding.app, rng)
 
 
-def _choose_acl(app: str, rng: random.Random) -> Pick:
-    inst = _row(app, "redis_acl_revoked", rng)
-    return Pick({"target": inst.workload, "mode": rng.choice(_ACL_MODES)}, (deployment(inst.workload),))
+def _choose_acl(binding: AppBinding, rng: random.Random) -> Target:
+    return Target({"target": _row(binding, "redis_acl_revoked", rng).workload, "mode": rng.choice(_ACL_MODES)})
 
 
-def _choose_oom(app: str, rng: random.Random) -> Pick:
-    inst = _row(app, "redis_out_of_memory", rng)
-    return Pick({"target": inst.workload, "fraction": rng.choice(_OOM_FRACTIONS)}, (deployment(inst.workload),))
+def _choose_oom(binding: AppBinding, rng: random.Random) -> Target:
+    return Target(
+        {"target": _row(binding, "redis_out_of_memory", rng).workload, "fraction": rng.choice(_OOM_FRACTIONS)}
+    )
 
 
-def _choose_paused(app: str, rng: random.Random) -> Pick:
-    inst = _row(app, "redis_writes_paused", rng)
-    return Pick({"target": inst.workload, "duration_ms": rng.choice(_PAUSE_MS)}, (deployment(inst.workload),))
+def _choose_paused(binding: AppBinding, rng: random.Random) -> Target:
+    return Target({"target": _row(binding, "redis_writes_paused", rng).workload, "duration_ms": rng.choice(_PAUSE_MS)})
 
 
-def _choose_poison(app: str, rng: random.Random) -> Pick:
-    inst = _row(app, "redis_poisoned_timeline_entry", rng)
+def _choose_poison(binding: AppBinding, rng: random.Random) -> Target:
+    inst = _row(binding, "redis_poisoned_timeline_entry", rng)
     poison = rng.choice(_POISON_KINDS)
     token = f"{rng.randrange(10**9, 10**10)}" if poison == "dangling_id" else f"{rng.randrange(16**8):08x}"
-    return Pick(
-        {"target": inst.workload, "key": rng.choice(inst.poison_keys), "poison": poison, "token": token},
-        (deployment(inst.workload),),
+    return Target({"target": inst.workload, "key": rng.choice(inst.poison_keys), "poison": poison, "token": token})
+
+
+def _choose_renamed(binding: AppBinding, rng: random.Random) -> Target:
+    inst = _row(binding, "redis_timeline_key_renamed", rng)
+    return Target(
+        {"target": inst.workload, "key": rng.choice(inst.rename_keys), "token": f"{rng.randrange(16**6):06x}"}
     )
 
 
-def _choose_renamed(app: str, rng: random.Random) -> Pick:
-    inst = _row(app, "redis_timeline_key_renamed", rng)
-    return Pick(
-        {"target": inst.workload, "key": rng.choice(inst.rename_keys), "token": f"{rng.randrange(16**6):06x}"},
-        (deployment(inst.workload),),
-    )
-
-
-def _choose_stale(app: str, rng: random.Random) -> Pick:
-    inst = _row(app, "social_graph_stale_cache", rng)
+def _choose_stale(binding: AppBinding, rng: random.Random) -> Target:
+    inst = _row(binding, "social_graph_stale_cache", rng)
     key, _ = rng.choice(inst.stale_sets)
-    return Pick({"target": inst.workload, "key": key, "ghost": rng.choice(_GHOSTS)}, (deployment(inst.workload),))
+    return Target({"target": inst.workload, "key": key, "ghost": rng.choice(_GHOSTS)})
 
 
-def _builder(cls_name: str):
-    def build(app: str, params: dict[str, Any]):
-        from sregym.conductor.problems import redis_incident_faults
-
-        return getattr(redis_incident_faults, cls_name)(app_name=app, **params)
-
-    return build
-
-
-_FAULTS = (
-    ("redis_acl_revoked", _choose_acl, "RedisAclRevoked"),
-    ("redis_out_of_memory", _choose_oom, "RedisOutOfMemory"),
-    ("redis_writes_paused", _choose_paused, "RedisWritesPaused"),
-    ("redis_poisoned_timeline_entry", _choose_poison, "RedisPoisonedTimelineEntry"),
-    ("redis_timeline_key_renamed", _choose_renamed, "RedisTimelineKeyRenamed"),
-    ("social_graph_stale_cache", _choose_stale, "SocialGraphStaleCache"),
-)
-
+_MODULE = "sregym.conductor.problems.redis_incident_faults"
 ENTRIES: tuple[CatalogEntry, ...] = tuple(
-    entry(key, ENABLED_APPS[key], choose, _builder(cls), generation=2) for key, choose, cls in _FAULTS
+    component_entry(key, ENABLED_APPS[key], f"{_MODULE}:{cls}", choose)
+    for key, cls, choose in (
+        ("redis_acl_revoked", "RedisAclRevoked", _choose_acl),
+        ("redis_out_of_memory", "RedisOutOfMemory", _choose_oom),
+        ("redis_writes_paused", "RedisWritesPaused", _choose_paused),
+        ("redis_poisoned_timeline_entry", "RedisPoisonedTimelineEntry", _choose_poison),
+        ("redis_timeline_key_renamed", "RedisTimelineKeyRenamed", _choose_renamed),
+        ("social_graph_stale_cache", "SocialGraphStaleCache", _choose_stale),
+    )
 )
