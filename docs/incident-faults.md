@@ -193,7 +193,7 @@ inject, repair and status:
 | --- | --- | --- | --- |
 | `mongo_write_lock` (target) | `fsync_lock` | `fsync_unlock` (until count 0) | `lock_state` |
 | `mongo_write_rejection` (target, collection, mode) | `set_validator` (a `$jsonSchema` no document meets) or `add_blocking_unique_index` | `clear_validator` / `drop_blocking_unique_index` | `validator_state` / `blocking_index_state` |
-| `mongo_collection_renamed` (target, collection) | `rename_away` (to `<name>_old`), then flush the collection's cache | `merge_back`: copy newer documents into `_old`, rename over the name with `dropTarget` (a plain rename back fails once writers recreated the name) | `collection_state` |
+| `mongo_collection_renamed` (target, collection) | `rename_away` (to `<name>_old`), then flush the collection's cache | `merge_back(strategy)`: fold the newer documents into `_old` (`append_only`: insert new `_id`s; `union_arrays`: also add new array elements to an aggregate document, as user-timeline's one-document-per-user), then rename over the name with `dropTarget` (a plain rename back fails once writers recreated the name). Decoys `rename_back_drop_target` (every write made during the fault is lost) and, for aggregate collections, `merge_overwrite` (the old history is lost) both verdict `data_lost`: a marker is composed before the fault and another during it, and both must be readable after | `collection_state` |
 | `mongo_poison_document` (target, collection, shape, scope) | `poison_documents` (`wrong_type`: a string field becomes `{v: <original>}`; `field_renamed`: a required object field gets a `_legacy` suffix), then flush the cache | `unpoison_documents` (lossless: the original is in the document) | `poison_state` |
 
 The unique-index mode builds a partial unique index over documents newer than the collection's
@@ -213,7 +213,7 @@ Binding fields (`MongoInstance`, `MongoCollection` in `app_bindings.py`): per in
 that fronts it, flushed after faults a warm cache would hide), `key_field` (a document field that
 also appears in the integrity snapshot, used to pick documents the entry points read),
 `poison_fields` (string field, object field), `unique_key`/`stamp_field` (enable the unique-index
-mode) and `faults`, the Mongo fault kinds verified live on that collection; only those sample it
+mode), `merge` (`append_only` or `union_arrays`, the rename repair's strategy) and `faults`, the Mongo fault kinds verified live on that collection; only those sample it
 (`mongo_targets`). `write_check` (a `WriteCheck`: POST, then a read that must show the marker) lets
 write-blocking faults be seen where the app swallows a failed database write: social-network's
 compose is one-way and answers 200 whatever mongod did, so a rejected post is invisible to the
@@ -221,7 +221,7 @@ HTTP probe; the verdict of `mongo_write_lock`/`mongo_write_rejection` writes a m
 probe user and reads it back. Live findings (social-network): write lock is visible on
 user-timeline, post-storage (compose) and social-graph (follow); write rejection on user-timeline
 and post (not social-graph: the follow path hides the rejected write; the `user` collection is
-only written at registration, which no probe does); rename is visible on user-timeline and post
+only written at registration: `register` is setup-only in the traffic probe and its outcome is not graded, login reads through user-memcached, so `user-mongodb` has no user-visible symptom and is in no fault's target set; it can return when a probe registers a fresh user and grades the status); rename is visible on user-timeline and post
 with the cache flushed (not `user` or social-graph). Instances unreachable from any entry point (`media-mongodb`) or empty after the
 seed (`url-shorten-mongodb`) are `verified=False`.
 
