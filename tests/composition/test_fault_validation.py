@@ -232,3 +232,60 @@ def test_a_second_harness_process_is_refused(tmp_path, monkeypatch):
     )
     held.close()
     assert out.returncode == 4 and "lane_busy" in out.stdout
+
+
+class _Clock:
+    def __init__(self):
+        self.t = 0.0
+
+    def now(self):
+        return self.t
+
+    def sleep(self, s):
+        self.t += s
+
+
+def _settling_harness(unhealthy_polls, deadline=100.0):
+    """A cluster whose probe fails for the first ``unhealthy_polls`` probes (an app right after a reseed)."""
+    clock = _Clock()
+    state = {"broken": False}
+    cluster = FakeCluster(state)
+    calls = {"n": 0}
+    real = cluster.run_pod
+
+    def run_pod(manifest, timeout_s):
+        calls["n"] += 1
+        state["broken"] = calls["n"] <= unhealthy_polls
+        return real(manifest, timeout_s)
+
+    cluster.run_pod = run_pod
+    h = validate.Harness(
+        cluster, persist_s=0, probe_rounds=1, state_dir=None, reset_cmd="true",
+        ready_deadline_s=deadline, ready_poll_s=10.0, clock=clock.now, sleep=clock.sleep,
+    )
+    return h, clock, calls
+
+
+def test_baseline_waits_for_a_passing_probe_instead_of_going_invalid():
+    h, clock, calls = _settling_harness(unhealthy_polls=3)
+    got = h.wait_ready("ns", _ENTRY)
+    assert got["ready"] and got["attempts"] == 4 and got["waited_s"] == 30.0 and calls["n"] == 4
+
+
+def test_the_settle_wait_is_bounded_by_its_deadline():
+    h, clock, calls = _settling_harness(unhealthy_polls=10**6, deadline=45.0)
+    got = h.wait_ready("ns", _ENTRY)
+    assert not got["ready"] and clock.t <= 45.0 and got["attempts"] <= 5
+
+
+def test_a_healthy_app_is_not_delayed():
+    h, clock, _ = _settling_harness(unhealthy_polls=0)
+    assert h.wait_ready("ns", _ENTRY)["attempts"] == 1 and clock.t == 0.0
+
+
+def test_reset_row_is_valid_only_once_the_app_is_ready_again():
+    h, _, _ = _settling_harness(unhealthy_polls=2)
+    row = h.reset("ns", _ENTRY)
+    assert row["status"] == "VALID" and row["settle"]["attempts"] == 3
+    h, _, _ = _settling_harness(unhealthy_polls=10**6, deadline=30.0)
+    assert h.reset("ns", _ENTRY)["status"] == "INVALID"

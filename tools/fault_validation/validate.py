@@ -43,13 +43,29 @@ from typing import Any
 from sregym.conductor.problems.composition import catalog, grading
 
 SETTLE_S = 300.0
+READY_DEADLINE_S = 900.0  # bound on waiting for a healthy app after a reseed/reset (polled, never a fixed sleep)
+READY_POLL_S = 10.0
 VALID, FAIL, INVALID = "VALID", "FAIL", "INVALID"
 DEFAULT_STATE_DIR = Path(os.path.expanduser("~/.cache/sregym/fault-validation"))
 
 
 class Harness:
-    def __init__(self, cluster, *, persist_s: float, probe_rounds: int, state_dir: Path | None, reset_cmd: str | None):
+    def __init__(
+        self,
+        cluster,
+        *,
+        persist_s: float,
+        probe_rounds: int,
+        state_dir: Path | None,
+        reset_cmd: str | None,
+        ready_deadline_s: float = READY_DEADLINE_S,
+        ready_poll_s: float = READY_POLL_S,
+        clock=time.monotonic,
+        sleep=time.sleep,
+    ):
         self.cluster = cluster
+        self.ready_deadline_s, self.ready_poll_s = ready_deadline_s, ready_poll_s
+        self._clock, self._sleep = clock, sleep
         self.persist_s = persist_s
         self.probe_rounds = probe_rounds
         self.state_dir = state_dir
@@ -71,6 +87,24 @@ class Harness:
         collateral_ok, reason = (False, error) if pods is None else grading.collateral_verdict(pods)
         probe = self.probe(namespace, entry)
         return {"collateral_ok": collateral_ok, "collateral": reason, "traffic_ok": probe["ok"], "traffic": probe}
+
+    def wait_ready(self, namespace: str, entry: grading.EntryPoint) -> dict[str, Any]:
+        """Poll until rollouts are done AND a baseline probe passes (collateral + entry-point traffic),
+        bounded by ``ready_deadline_s``. Right after a reseed/reset the app is briefly unhealthy (restarted
+        services, stale pooled connections); judging a baseline then loses the whole seed to INVALID.
+        Returns the last health reading plus ``attempts`` and ``waited_s``."""
+        start = self._clock()
+        attempts = 0
+        while True:
+            attempts += 1
+            remaining = self.ready_deadline_s - (self._clock() - start)
+            settled = self.cluster.wait_for_rollouts(namespace, max(1.0, min(SETTLE_S, remaining))).settled
+            health = self.health(namespace, entry)
+            ok = settled and health["collateral_ok"] and health["traffic_ok"]
+            waited = self._clock() - start
+            if ok or waited + self.ready_poll_s > self.ready_deadline_s:
+                return {**health, "ready": ok, "settled": settled, "attempts": attempts, "waited_s": round(waited, 1)}
+            self._sleep(self.ready_poll_s)
 
     def symptom(self, problem) -> dict[str, Any]:
         """Visible at the entry points: the traffic probe fails, seeded reads changed or fail, or a
@@ -165,13 +199,19 @@ class Harness:
         row["duration_s"] = round(time.monotonic() - t0, 1)
         return row
 
-    def reset(self) -> dict[str, Any]:
+    def reset(self, namespace: str | None = None, entry: grading.EntryPoint | None = None) -> dict[str, Any]:
+        """Run the reset command, then (given the app's namespace and entry point) wait until the app is
+        healthy again. The row is VALID iff the app is ready within the deadline."""
         t0 = time.monotonic()
         out = subprocess.run(self.reset_cmd, shell=True, capture_output=True, text=True, check=False)
         ok = out.returncode == 0
+        row: dict[str, Any] = {"trial": "reset", "cmd": self.reset_cmd, "returncode": out.returncode}
+        if namespace is not None and entry is not None:
+            settle = self.wait_ready(namespace, entry)
+            ok = settle["ready"]
+            row["settle"] = {k: settle[k] for k in ("ready", "attempts", "waited_s")}
         return {
-            "trial": "reset",
-            "cmd": self.reset_cmd,
+            **row,
             "status": VALID if ok else INVALID,
             "pass": ok,
             "tail": (out.stdout + out.stderr)[-400:],
@@ -195,8 +235,8 @@ class Harness:
             rows.append(row)
             return row
 
-        baseline = self.health(namespace, problem.binding.entry)
-        ok = baseline["collateral_ok"] and baseline["traffic_ok"]
+        baseline = self.wait_ready(namespace, problem.binding.entry)
+        ok = baseline["ready"]
         yield emit({"trial": "baseline", **baseline, "status": VALID if ok else INVALID, "pass": ok})
         if ok:
             from sregym.conductor.problems.component_fault import Expect, Repair
@@ -214,7 +254,7 @@ class Harness:
                 yield emit(self.run_trial(problem, label, repair, key=key, app=app, seed=seed, params=params))
                 if repair.destroys_data:
                     if self.reset_cmd:
-                        yield emit(self.reset())
+                        yield emit(self.reset(namespace, problem.binding.entry))
                     else:
                         yield emit({"trial": "reset_needed", "status": VALID, "pass": True, "after": name})
             self.cluster.wait_for_rollouts(namespace, SETTLE_S)
@@ -392,6 +432,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--probe-rounds", type=int, default=3, help="traffic probe rounds per check (grading uses 6)")
     ap.add_argument("--only", nargs="*", default=None, help="repair names to run (reference, restore_source, ...)")
     ap.add_argument("--reset-cmd", default=None, help="shell command run after each data-destroying repair")
+    ap.add_argument(
+        "--ready-deadline-s",
+        type=float,
+        default=READY_DEADLINE_S,
+        help="max wait for rollouts + a passing baseline probe before a seed's baseline and after a reset",
+    )
     ap.add_argument("--state-dir", default=str(DEFAULT_STATE_DIR), help="'' disables persisting injected state")
     ap.add_argument("--lanes", nargs="*", default=None, help="kubeconfigs: shard seeds over them in parallel")
     ap.add_argument(
@@ -429,6 +475,7 @@ def main(argv: list[str] | None = None) -> int:
         probe_rounds=args.probe_rounds,
         state_dir=Path(args.state_dir) if args.state_dir else None,
         reset_cmd=args.reset_cmd,
+        ready_deadline_s=args.ready_deadline_s,
     )
     all_ok = True
 
