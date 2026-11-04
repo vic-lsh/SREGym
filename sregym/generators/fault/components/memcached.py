@@ -12,6 +12,7 @@ import json
 import random
 import re
 import shlex
+from urllib.parse import unquote
 from typing import Any
 
 from sregym.conductor.problems.composition.app_bindings import MemcachedInstance
@@ -39,8 +40,18 @@ def _b64(data: bytes) -> str:
     return base64.b64encode(data).decode()
 
 
+CHUNK = 100  # payloads per client pod: keeps the exec command line far below the kernel's argument limit
+
+
 def _run(kube: Kube, namespace: str, inst: MemcachedInstance, payloads: list[bytes]) -> list[bytes]:
-    """Send each payload on its own connection; return each raw reply."""
+    """Send each payload on its own connection; return each raw reply (in chunks of ``CHUNK`` per pod)."""
+    replies: list[bytes] = []
+    for i in range(0, max(len(payloads), 1), CHUNK):
+        replies += _run_chunk(kube, namespace, inst, payloads[i : i + CHUNK])
+    return replies
+
+
+def _run_chunk(kube: Kube, namespace: str, inst: MemcachedInstance, payloads: list[bytes]) -> list[bytes]:
     host = f"{inst.workload}.{namespace}.svc.cluster.local"
     script = "; ".join(_send(host, inst.port, _b64(p + b"quit\r\n"), f"@@R{i}") for i, p in enumerate(payloads))
     log = run_client_pod(kube, namespace, script + "; echo @@END", 60 + 5 * len(payloads), prefix="sregym-memcached")
@@ -52,6 +63,23 @@ def _run(kube: Kube, namespace: str, inst: MemcachedInstance, payloads: list[byt
     if "@@END" not in log or len(replies) != len(payloads):
         raise ComponentError(f"memcached {inst.workload} in {namespace}: incomplete replies: {log[-300:]!r}")
     return [replies[i] for i in range(len(payloads))]
+
+
+def parse_metadump(reply: bytes) -> list[str]:
+    """Keys in an ``lru_crawler metadump all`` reply (``key=<urlencoded> exp=... size=...`` lines, then END)."""
+    if not reply.rstrip().endswith(b"END"):
+        raise ComponentError(f"incomplete memcached metadump reply: {reply[-80:]!r}")
+    keys = []
+    for line in reply.decode(errors="replace").splitlines():
+        if line.startswith("key="):
+            keys.append(unquote(line.split(" ", 1)[0][4:]))
+    return keys
+
+
+def live_keys(kube: Kube, namespace: str, inst: MemcachedInstance, limit: int) -> list[str]:
+    """Up to ``limit`` keys currently stored in the instance (``lru_crawler metadump all``), sorted."""
+    (reply,) = _run(kube, namespace, inst, [b"lru_crawler metadump all\r\n"])
+    return sorted(k for k in parse_metadump(reply) if _KEY.match(k))[:limit]
 
 
 def parse_get(reply: bytes) -> bytes | None:
