@@ -246,7 +246,15 @@ class MongoCollectionRenamed(MongoFaultProblem):
     def extra_repairs(self) -> dict[str, Repair]:
         # Wrong repairs a rushed operator picks: both bring the old data back and lose writes made
         # while the fault was live (the marker written through the entry point during the fault).
-        repairs = {"rename_back_drop_target": Repair(lambda: self.merge("drop_target"), Expect.DATA_LOST)}
+        # Dropping the new documents of an append-only collection (posts) leaves the aggregates that
+        # reference them (timelines) dangling, so the app needs a reseed afterwards.
+        repairs = {
+            "rename_back_drop_target": Repair(
+                lambda: self.merge("drop_target"),
+                Expect.DATA_LOST,
+                destroys_data=self.coll.merge == "append_only",
+            )
+        }
         if self.coll.merge == "union_arrays":  # an aggregate document: the old side's history is overwritten
             repairs["merge_overwrite"] = Repair(lambda: self.merge("overwrite"), Expect.DATA_LOST)
         return repairs
