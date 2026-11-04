@@ -116,8 +116,8 @@ Repairs are `Repair(run, expect, destroys_data=False, no_op=False)` with `expect
 The verdict (`verdict()`, wrapped by `ComponentFaultOracle`) lists `failed` components: `fault`
 (own state still there), `write` (a write-blocking fault's write did not land), `data` (seeded
 snapshot changed), `witness` (sampled keys/ids or the live-written marker gone), and a `reason`:
-FAULT_NOT_CLEARED if `fault` or `write` failed, else DATA_LOST if `data` or `witness` failed,
-else PASSES. A `ComponentError` in any check is retried once; then the oracle answers
+FAULT_NOT_CLEARED if `fault` failed, else DATA_LOST if `data` or `witness` failed (a failing `write` is
+then a symptom of the loss), else FAULT_NOT_CLEARED if only `write` failed, else PASSES. A `ComponentError` in any check is retried once; then the oracle answers
 `{"success": False, "inconclusive": True, "reason": "inconclusive"}`. Composite liveness treats
 inconclusive as unproven, and the harness counts it INVALID, never as a decoy that failed.
 

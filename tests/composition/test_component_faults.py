@@ -545,3 +545,12 @@ def test_integrity_read_polls_so_a_settle_artefact_is_not_data_loss(offline, mon
     monkeypatch.setattr(http, "compare", lambda *a: calls.append(1) or (False, "changed"))
     v = p.verdict()
     assert v["reason"] == "data_lost" and len(calls) == component_fault.INTEGRITY_ATTEMPTS
+
+
+def test_classify_charges_lost_data_over_a_failing_write_once_the_fault_state_is_gone():
+    from sregym.conductor.problems.component_fault import Expect, classify
+
+    assert classify(["write", "witness"]) is Expect.DATA_LOST  # found live: restarted post-storage-mongodb
+    assert classify(["fault", "write", "witness"]) is Expect.FAULT_NOT_CLEARED
+    assert classify(["write"]) is Expect.FAULT_NOT_CLEARED
+    assert classify([]) is Expect.PASSES
