@@ -81,7 +81,7 @@ def test_union_arrays_keeps_old_history_and_new_writes(mongod):
     _setup_aggregate(mongod)
     mongo.merge_back(None, "ns", INST, "tl", "union_arrays", "uid")
     docs = {d["uid"]: [p["p"] for p in d["posts"]] for d in _docs(mongod, "tl")}
-    assert docs == {1: [1, 2, 10], 2: [3], 3: [11]}
+    assert docs == {1: [10, 1, 2], 2: [3], 3: [11]}  # newest first
     assert not mongo.collection_state(None, "ns", INST, "tl")["old_exists"]
 
 

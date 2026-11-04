@@ -254,8 +254,8 @@ def merge_back(
 
     ``append_only`` (one document per event, e.g. posts): insert the newer documents whose ``_id`` is
     absent from ``_old``. ``union_arrays`` (one aggregate document per key, e.g. a user's timeline):
-    as append_only, and where both sides hold the ``_id``, add the newer array elements to the old
-    array and let newer scalars win. The lossy strategies exist only as wrong repairs:
+    as append_only, and where both sides hold the ``_id``, put the newer array elements in front of the old
+    ones (services keep these arrays newest first) and let newer scalars win. The lossy strategies exist only as wrong repairs:
     ``overwrite`` replaces the old document by the newer one (the aggregate's history is lost),
     ``drop_target`` renames back without merging (every write made during the fault is lost).
     Writers still active during the merge can lose a write made between the copy and the rename.
@@ -267,10 +267,14 @@ def merge_back(
         "append_only": "if(!e){ chk({ok: o.insertOne(doc).acknowledged ? 1 : 0}); }",
         "union_arrays": (
             "if(!e){ chk({ok: o.insertOne(doc).acknowledged ? 1 : 0}); } else {"
-            " var add = {}, set = {}; Object.keys(doc).forEach(function(f){"
+            " var push = {}, set = {}; Object.keys(doc).forEach(function(f){"
             "  if(f === '_id') return;"
-            "  if(Array.isArray(doc[f])){ add[f] = {$each: doc[f]}; } else { set[f] = doc[f]; } });"
-            " var up = {}; if(Object.keys(add).length){ up.$addToSet = add; }"
+            "  if(Array.isArray(doc[f])){"
+            "   var have = (e[f] || []).map(function(x){ return tojson(x); });"
+            "   var fresh = doc[f].filter(function(x){ return have.indexOf(tojson(x)) < 0; });"
+            "   if(fresh.length){ push[f] = {$each: fresh, $position: 0}; }"
+            "  } else { set[f] = doc[f]; } });"
+            " var up = {}; if(Object.keys(push).length){ up.$push = push; }"
             " if(Object.keys(set).length){ up.$set = set; }"
             " if(Object.keys(up).length){ chk({ok: o.updateOne({_id: e._id}, up).acknowledged ? 1 : 0}); } }"
         ),
