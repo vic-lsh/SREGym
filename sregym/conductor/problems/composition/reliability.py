@@ -72,7 +72,11 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
         "Pending: new pod-level fault (load driver); kept out of __reliable plans until it validates live."
     ),
     ("traffic_surge", "social_network"): (
-        "Pending: new pod-level fault (load driver); kept out of __reliable plans until it validates live."
+        "Reference does not reliably pass: stopping the client clears the cause, but the surge OOM-kills "
+        "user-timeline-service (128Mi; its Mongo sits at its 100m CPU limit) and the pod can sit in "
+        "CrashLoopBackOff for minutes, so the entry point still fails at verdict time (14/18 and 29-31/36 in "
+        "three live runs) although a later health check passes. A correct repair would also restart the "
+        "crashed pods; load-sensitive, so dropped pending a redesign (evidence: validation/process/fp2)."
     ),
 }
 
