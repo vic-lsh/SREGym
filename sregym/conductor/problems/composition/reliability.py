@@ -68,6 +68,30 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
         "Pending: new MongoDB component fault; kept out of __reliable plans until it validates live "
         "(tools/fault_validation/validate.py)."
     ),
+    ("redis_acl_revoked", "social_network"): (
+        "Pending: new Redis component fault; kept out of __reliable plans until it validates live "
+        "(tools/fault_validation/validate.py)."
+    ),
+    ("redis_out_of_memory", "social_network"): (
+        "Pending: new Redis component fault; kept out of __reliable plans until it validates live "
+        "(tools/fault_validation/validate.py)."
+    ),
+    ("redis_writes_paused", "social_network"): (
+        "Pending: new Redis component fault; kept out of __reliable plans until it validates live "
+        "(tools/fault_validation/validate.py)."
+    ),
+    ("redis_poisoned_timeline_entry", "social_network"): (
+        "Pending: new Redis component fault; kept out of __reliable plans until it validates live "
+        "(tools/fault_validation/validate.py)."
+    ),
+    ("redis_timeline_key_renamed", "social_network"): (
+        "Pending: new Redis component fault; kept out of __reliable plans until it validates live "
+        "(tools/fault_validation/validate.py)."
+    ),
+    ("social_graph_stale_cache", "social_network"): (
+        "Pending: new Redis component fault; kept out of __reliable plans until it validates live "
+        "(tools/fault_validation/validate.py)."
+    ),
 }
 
 

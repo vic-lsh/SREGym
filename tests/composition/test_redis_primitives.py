@@ -212,3 +212,17 @@ def test_stale_followers_keep_key_non_empty_and_del_repairs():
 def test_oom_limit_rejects_fractions_that_do_not_trip_deterministically(fraction):
     with pytest.raises(ValueError):
         redis.oom_limit(1000, fraction)
+
+
+def test_probe_write_names_the_rejection_and_cleans_up_after_success():
+    k = FakeRedisKube()
+    assert redis.probe_write(k, "ns", INST) is None
+    assert "__sregym_write_probe__" not in k.zsets
+    redis.acl_revoke(k, "ns", INST, "write")
+    assert redis.probe_write(k, "ns", INST) == "NOPERM"
+    redis.acl_restore(k, "ns", INST)
+    redis.set_maxmemory(k, "ns", INST, 1)
+    assert redis.probe_write(k, "ns", INST) == "OOM"
+    redis.set_maxmemory(k, "ns", INST, 0)
+    redis.client_pause_write(k, "ns", INST, 1000)
+    assert redis.probe_write(k, "ns", INST) == redis.PAUSED

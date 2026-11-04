@@ -311,3 +311,23 @@ def make_stale(
 def repair_stale(kube: Kube, namespace: str, inst: RedisInstance, key: str) -> None:
     """``DEL key``: the next read refills it from the database (valid only for a cache in front of one)."""
     _exec(kube, namespace, inst, "DEL", key)
+
+
+# --- write probe -------------------------------------------------------------------------------
+
+PAUSED = "PAUSED"
+_WRITE_PROBE_KEY = "__sregym_write_probe__"
+
+
+def probe_write(kube: Kube, namespace: str, inst: RedisInstance, timeout_s: int = 3) -> str | None:
+    """Try one growing write. Returns the error class that rejected it (``NOPERM``, ``OOM``,
+    ``READONLY``, ...), ``PAUSED`` if it did not answer in time, or None when it landed (the probe key
+    is removed again, best effort)."""
+    out = _exec(kube, namespace, inst, "ZADD", _WRITE_PROBE_KEY, "1", "x", timeout_s=timeout_s, check=False)
+    if out.strip() == "":
+        return PAUSED
+    err = error_reply(out)
+    if err is not None:
+        return err.split(" ", 1)[0]
+    _exec(kube, namespace, inst, "DEL", _WRITE_PROBE_KEY, check=False)
+    return None

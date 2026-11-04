@@ -70,6 +70,13 @@ class RedisInstance:
     verified: bool = True
     consumers: tuple[str, ...] = ()
     write_check: WriteCheck | None = None
+    # Incident fault kinds verified live on this server (catalog keys; only those sample it) and the
+    # keys they act on: sorted-set keys a poisoned member may go into, keys a rename hides, and
+    # (key, member) pairs whose member a stale-cache fault drops.
+    faults: tuple[str, ...] = ()
+    poison_keys: tuple[str, ...] = ()
+    rename_keys: tuple[str, ...] = ()
+    stale_sets: tuple[tuple[str, str], ...] = ()
 
     @property
     def restart_loses_data(self) -> bool:
@@ -145,6 +152,15 @@ _SOCIAL_HOME_CHECK = WriteCheck(
     (("user_id", "9200"), ("username", "sregym_probe_9200"), ("post_type", "0"), ("text", "")),
     "text",
     "/wrk2-api/home-timeline/read?user_id=9201&start=0&stop=100",
+)
+
+REDIS_FAULTS = (
+    "redis_acl_revoked",
+    "redis_out_of_memory",
+    "redis_writes_paused",
+    "redis_poisoned_timeline_entry",
+    "redis_timeline_key_renamed",
+    "social_graph_stale_cache",
 )
 
 MONGO_FAULTS = ("mongo_write_lock", "mongo_write_rejection", "mongo_collection_renamed", "mongo_poison_document")
@@ -290,10 +306,29 @@ SOCIAL_NETWORK = AppBinding(
             holds_primary_data=True,
             consumers=("home-timeline-service",),
             write_check=_SOCIAL_HOME_CHECK,
+            # Keys are user ids. 9101 is the seeded follower whose home timeline the integrity check reads.
+            faults=REDIS_FAULTS[:5],
+            poison_keys=(str(_SOCIAL_FOLLOWER),),
+            rename_keys=(str(_SOCIAL_FOLLOWER),),
         ),
-        # caches over user-timeline-mongodb and social-graph-mongodb
-        RedisInstance("user-timeline-redis", holds_primary_data=False, consumers=("user-timeline-service",)),
-        RedisInstance("social-graph-redis", holds_primary_data=False, consumers=("social-graph-service",)),
+        # caches over user-timeline-mongodb and social-graph-mongodb (a key lost from either refills from Mongo)
+        RedisInstance(
+            "user-timeline-redis",
+            holds_primary_data=False,
+            consumers=("user-timeline-service",),
+            write_check=_SOCIAL_COMPOSE_CHECK,
+            faults=REDIS_FAULTS[:4],
+            poison_keys=(str(_SOCIAL_AUTHOR),),
+        ),
+        RedisInstance(
+            "social-graph-redis",
+            holds_primary_data=False,
+            consumers=("social-graph-service",),
+            write_check=_SOCIAL_HOME_CHECK,  # compose fans out to the author's followers: reads the follower's home timeline
+            faults=(REDIS_FAULTS[0], REDIS_FAULTS[1], REDIS_FAULTS[3], REDIS_FAULTS[5]),
+            poison_keys=("9200:followers",),  # the traffic probe's author
+            stale_sets=(("9200:followers", "9201"),),
+        ),
     ),
     memcached=(
         # user-service caches "<username>:login" (password hash, salt, id) on login.

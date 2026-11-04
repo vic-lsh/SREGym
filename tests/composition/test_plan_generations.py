@@ -29,6 +29,12 @@ INCIDENT_KEYS = {
     "mongo_write_rejection",
     "mongo_collection_renamed",
     "mongo_poison_document",
+    "redis_acl_revoked",
+    "redis_out_of_memory",
+    "redis_writes_paused",
+    "redis_poisoned_timeline_entry",
+    "redis_timeline_key_renamed",
+    "social_graph_stale_cache",
 }
 
 
