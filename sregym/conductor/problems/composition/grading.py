@@ -236,7 +236,7 @@ def wget_command(base: str, req: Request, output: str = "/dev/null") -> str:
         return status
     back = shlex.quote(base + req.readback)
     return (
-        f'{{ m="pm$$$(date +%s)$i"; {status} && sleep 1 && '
+        f'{{ m="pm${{RANDOM}}${{RANDOM}}r$i"; {status} && sleep 1 && '
         f'wget -q -T {PROBE_REQUEST_TIMEOUT_S} -O - {back} 2>/dev/null | grep -q "$m"; }}'
     )
 
