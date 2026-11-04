@@ -27,7 +27,7 @@ def _build(key, params, kube):
 
 def _kube():
     k = FakeRedisKube()
-    k.zsets = {"9101": {"1": 1.0, "2": 2.0}, "9100": {"1": 1.0}, "9200:followers": {"9201": 5.0, "9300": 6.0}}
+    k.zsets = {"9101": {"1": 1.0, "2": 2.0}, "9100": {"1": 1.0}, "9200:followers": {"9210": 5.0, "9300": 6.0}}
     return k
 
 
@@ -152,12 +152,12 @@ def test_stale_cache_drops_the_follower_adds_a_ghost_and_del_clears_it():
     p.inject()
     assert set(k.zsets["9200:followers"]) == {"9300", "9203"}
     assert p.fault_cleared()[0] is False
-    assert p.write_check() is app_bindings.SOCIAL_NETWORK.row("social-graph-redis").write_check
+    assert p.write_check() is app_bindings.SOCIAL_NETWORK.row("social-graph-redis").stale_write_check
     p.reference_mitigation()
     assert "9200:followers" not in k.zsets and p.fault_cleared()[0] is True
     k.zsets["9200:followers"] = {"9300": 6.0, "9203": 0.0}
     p.repairs()["readd_follower"].run()
-    assert p.fault_cleared()[0] is True and "9201" in k.zsets["9200:followers"]
+    assert p.fault_cleared()[0] is True and "9210" in k.zsets["9200:followers"]
 
 
 def test_kinds_refuse_rows_that_do_not_list_them():
@@ -224,3 +224,19 @@ def test_every_access_control_kind_never_judges_itself_through_the_restricted_id
         assert result["fault_cleared"] is False, (key, params)
         p.recover_fault()
         assert kube.default_reads == [], f"{key} {params}: data reads ran as the restricted default user"
+
+
+def test_stale_cache_member_is_not_one_the_traffic_probe_writes():
+    """The traffic probe's setup/follow writes re-add its own follower to the author's follower set. If that were
+    the dropped member the probe would heal the symptom between the harness's two symptom reads (live: 'no symptom
+    that persisted' on every trial). The fault owns its follower and reads that follower's timeline."""
+    row = app_bindings.SOCIAL_NETWORK.row("social-graph-redis")
+    entry = app_bindings.SOCIAL_NETWORK.entry
+    ((_, member),) = row.stale_sets
+    probe_followers = {
+        dict(r.form or ()).get("user_id") for r in (*entry.setup, *entry.writes) if r.path.endswith("/follow")
+    }
+    assert member not in probe_followers
+    assert f"user_id={member}&" in row.stale_write_check.read
+    follows = [dict(r.form) for r in row.stale_setup if r.path.endswith("/follow")]
+    assert follows == [{"user_id": member, "followee_id": "9200"}]

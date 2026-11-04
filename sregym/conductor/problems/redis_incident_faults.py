@@ -260,13 +260,13 @@ class SocialGraphStaleCache(_RedisFault):
         self.member = pairs[key]
 
     def write_check(self) -> WriteCheck | None:
-        return self.instance.write_check
+        return self.instance.stale_write_check or self.instance.write_check
 
     def prepare_target(self) -> None:
-        """Make sure the follower really follows (the traffic probe's own follow write, plus its setup)."""
+        """Make sure the dropped follower exists and follows the author. It is the fault's own user: the traffic
+        probe re-adds only its own follower, so the probe cannot heal this symptom."""
         entry = self.binding.entry
-        follow = tuple(r for r in entry.writes if r.path.endswith("/follow"))
-        http.fetch(self.kube, self.binding, self.namespace, (*entry.setup, *follow))
+        http.fetch(self.kube, self.binding, self.namespace, (*entry.setup, *self.instance.stale_setup))
 
     def inject(self) -> None:
         if not self._call(redis.has_member, self.key, self.member):

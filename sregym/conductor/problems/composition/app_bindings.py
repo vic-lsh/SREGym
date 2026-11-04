@@ -82,6 +82,11 @@ class RedisInstance:
     poison_keys: tuple[str, ...] = ()
     rename_keys: tuple[str, ...] = ()
     stale_sets: tuple[tuple[str, str], ...] = ()
+    # A stale-cache fault must own its dropped follower: the traffic probe's own setup writes (follow) would
+    # re-add a probe-owned follower and heal the symptom mid-trial. ``stale_setup`` creates the fault's
+    # follower and edge (idempotent), ``stale_write_check`` reads that follower's timeline.
+    stale_setup: tuple[Request, ...] = ()
+    stale_write_check: WriteCheck | None = None
 
     @property
     def restart_loses_data(self) -> bool:
@@ -170,6 +175,15 @@ _SOCIAL_HOME_CHECK = WriteCheck(
     (("user_id", "9200"), ("username", "sregym_probe_9200"), ("post_type", "0"), ("text", "")),
     "text",
     "/wrk2-api/home-timeline/read?user_id=9201&start=0&stop=100",
+)
+
+# The stale-cache fault's own follower of probe author 9200: the traffic probe never writes it.
+_SOCIAL_STALE_FOLLOWER = 9210
+_SOCIAL_STALE_CHECK = WriteCheck(
+    "/wrk2-api/post/compose",
+    (("user_id", "9200"), ("username", "sregym_probe_9200"), ("post_type", "0"), ("text", "")),
+    "text",
+    f"/wrk2-api/home-timeline/read?user_id={_SOCIAL_STALE_FOLLOWER}&start=0&stop=100",
 )
 
 REDIS_FAULTS = (
@@ -395,7 +409,23 @@ SOCIAL_NETWORK = AppBinding(
             write_check=_SOCIAL_HOME_CHECK,  # compose fans out to the author's followers: reads the follower's home timeline
             faults=(REDIS_FAULTS[0], REDIS_FAULTS[1], REDIS_FAULTS[3], REDIS_FAULTS[5]),
             poison_keys=("9200:followers",),  # the traffic probe's author
-            stale_sets=(("9200:followers", "9201"),),
+            stale_sets=(("9200:followers", str(_SOCIAL_STALE_FOLLOWER)),),
+            stale_setup=(
+                Request(
+                    "/wrk2-api/user/register",
+                    (
+                        ("first_name", "stale"),
+                        ("last_name", str(_SOCIAL_STALE_FOLLOWER)),
+                        ("username", f"sregym_stale_{_SOCIAL_STALE_FOLLOWER}"),
+                        ("password", f"sregym_stale_{_SOCIAL_STALE_FOLLOWER}"),
+                        ("user_id", str(_SOCIAL_STALE_FOLLOWER)),
+                    ),
+                ),
+                Request(
+                    "/wrk2-api/user/follow", (("user_id", str(_SOCIAL_STALE_FOLLOWER)), ("followee_id", "9200"))
+                ),
+            ),
+            stale_write_check=_SOCIAL_STALE_CHECK,
         ),
     ),
     memcached=(
