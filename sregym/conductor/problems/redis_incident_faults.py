@@ -212,8 +212,10 @@ class RedisTimelineKeyRenamed(_RedisFault):
         self._call(redis.rename_key, self.key, self.backup_key)
 
     def fault_cleared(self) -> tuple[bool, str]:
+        # The fault's own state is the renamed copy. A repair that removed it without bringing the key back
+        # (a restart, deleting the "stray" key) cleared the state but lost the data: the data check says so.
         have, stray = self._call(redis.key_exists, self.key), self._call(redis.key_exists, self.backup_key)
-        return have and not stray, f"{self.key!r} exists={have}, {self.backup_key!r} exists={stray}"
+        return not stray, f"{self.key!r} exists={have}, {self.backup_key!r} exists={stray}"
 
     def reference_mitigation(self) -> None:
         # Idempotent: after a repair already moved or deleted the backup there is nothing to merge, and
@@ -229,7 +231,7 @@ class RedisTimelineKeyRenamed(_RedisFault):
                 Expect.PASSES,
             ),
             "delete_backup_key": Repair(
-                lambda: self._call(redis.repair_stale, self.backup_key), Expect.FAULT_NOT_CLEARED, destroys_data=True
+                lambda: self._call(redis.repair_stale, self.backup_key), Expect.DATA_LOST, destroys_data=True
             ),
         }
 

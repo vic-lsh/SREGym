@@ -132,9 +132,12 @@ def test_rename_is_cleared_only_when_the_key_is_back_and_the_backup_gone():
     assert "9101" not in k.zsets and p.fault_cleared()[0] is False
     repairs = p.extra_repairs()
     assert (
-        repairs["delete_backup_key"].expect is Expect.FAULT_NOT_CLEARED and repairs["delete_backup_key"].destroys_data
+        repairs["delete_backup_key"].expect is Expect.DATA_LOST and repairs["delete_backup_key"].destroys_data
     )
     assert repairs["rename_back"].expect is Expect.PASSES
+    repairs["delete_backup_key"].run()  # state gone, data gone: cleared, and the data check reports the loss
+    assert p.fault_cleared()[0] is True and "9101" not in k.zsets
+    k.zsets["9101:bak-a1b2c3"] = {"1": 1.0, "2": 2.0}
     k.zsets["9101"] = {"99": 9.0}  # a write re-created the key meanwhile
     p.reference_mitigation()
     assert p.fault_cleared()[0] is True and set(k.zsets["9101"]) == {"1", "2", "99"}  # nothing lost
