@@ -181,6 +181,7 @@ REDIS_FAULTS = (
     "social_graph_stale_cache",
 )
 
+
 @dataclass(frozen=True)
 class MongoInstance:
     """A mongod run by one workload. By default it holds the only copy of its data (nothing is
