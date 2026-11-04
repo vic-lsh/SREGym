@@ -13,6 +13,8 @@ from sregym.conductor.problems.component_fault import Expect
 from sregym.conductor.problems.composition import app_bindings
 from sregym.conductor.problems.composition.catalog import component_redis
 
+pytestmark = pytest.mark.usefixtures("offline")
+
 KEYS = tuple(e.key for e in component_redis.ENTRIES)
 ENTRIES = {e.key: e for e in component_redis.ENTRIES}
 
@@ -30,7 +32,7 @@ def _kube():
 
 
 @pytest.mark.parametrize("key", KEYS)
-def test_every_draw_builds_a_problem_on_a_verified_target(offline, key):
+def test_every_draw_builds_a_problem_on_a_verified_target(key):
     rows = {r.workload: r for r in app_bindings.SOCIAL_NETWORK.redis}
     seen = set()
     for seed in range(40):
@@ -50,7 +52,7 @@ def test_incident_keys_are_generation_two():
 
 
 @pytest.mark.parametrize("mode", ["write", "read"])
-def test_acl_reference_and_declared_repairs(offline, mode):
+def test_acl_reference_and_declared_repairs(mode):
     for target, restart in (("home-timeline-redis", Expect.DATA_LOST), ("user-timeline-redis", Expect.PASSES)):
         k = _kube()
         p = _build("redis_acl_revoked", {"target": target, "mode": mode}, k)
@@ -64,7 +66,7 @@ def test_acl_reference_and_declared_repairs(offline, mode):
         assert p.fault_cleared()[0] is True
 
 
-def test_acl_write_injection_raises_when_the_revoke_did_not_take(offline):
+def test_acl_write_injection_raises_when_the_revoke_did_not_take():
     k = _kube()
     p = _build("redis_acl_revoked", {"target": "home-timeline-redis", "mode": "write"}, k)
     k._denied = lambda kind: False  # the server ignores the rule
@@ -72,7 +74,7 @@ def test_acl_write_injection_raises_when_the_revoke_did_not_take(offline):
         p.inject()
 
 
-def test_oom_sets_a_limit_below_use_and_the_reference_restores_it(offline):
+def test_oom_sets_a_limit_below_use_and_the_reference_restores_it():
     k = _kube()
     p = _build("redis_out_of_memory", {"target": "user-timeline-redis", "fraction": 0.5}, k)
     p.inject()
@@ -84,7 +86,7 @@ def test_oom_sets_a_limit_below_use_and_the_reference_restores_it(offline):
         _build("redis_out_of_memory", {"target": "user-timeline-redis", "fraction": 0.9}, k)
 
 
-def test_pause_blocks_writes_until_unpaused_and_rejects_short_pauses(offline):
+def test_pause_blocks_writes_until_unpaused_and_rejects_short_pauses():
     k = _kube()
     p = _build("redis_writes_paused", {"target": "home-timeline-redis", "duration_ms": 3_600_000}, k)
     p.inject()
@@ -96,7 +98,7 @@ def test_pause_blocks_writes_until_unpaused_and_rejects_short_pauses(offline):
 
 
 @pytest.mark.parametrize("poison", ["non_numeric", "dangling_id"])
-def test_poison_reference_is_surgical_and_delete_key_is_data_loss_only_on_the_primary(offline, poison):
+def test_poison_reference_is_surgical_and_delete_key_is_data_loss_only_on_the_primary(poison):
     token = "abcd1234" if poison == "non_numeric" else "9000000001"
     k = _kube()
     p = _build(
@@ -123,7 +125,7 @@ def test_poison_reference_is_surgical_and_delete_key_is_data_loss_only_on_the_pr
         )
 
 
-def test_rename_is_cleared_only_when_the_key_is_back_and_the_backup_gone(offline):
+def test_rename_is_cleared_only_when_the_key_is_back_and_the_backup_gone():
     k = _kube()
     p = _build("redis_timeline_key_renamed", {"target": "home-timeline-redis", "key": "9101", "token": "a1b2c3"}, k)
     p.inject()
@@ -138,7 +140,7 @@ def test_rename_is_cleared_only_when_the_key_is_back_and_the_backup_gone(offline
     assert p.fault_cleared()[0] is True and set(k.zsets["9101"]) == {"1", "2", "99"}  # nothing lost
 
 
-def test_stale_cache_drops_the_follower_adds_a_ghost_and_del_clears_it(offline):
+def test_stale_cache_drops_the_follower_adds_a_ghost_and_del_clears_it():
     k = _kube()
     p = _build(
         "social_graph_stale_cache", {"target": "social-graph-redis", "key": "9200:followers", "ghost": "9203"}, k
@@ -155,7 +157,7 @@ def test_stale_cache_drops_the_follower_adds_a_ghost_and_del_clears_it(offline):
     assert p.fault_cleared()[0] is True and "9201" in k.zsets["9200:followers"]
 
 
-def test_kinds_refuse_rows_that_do_not_list_them(offline):
+def test_kinds_refuse_rows_that_do_not_list_them():
     k = _kube()
     with pytest.raises(ValueError, match="not verified"):
         _build("redis_timeline_key_renamed", {"target": "user-timeline-redis", "key": "9100", "token": "x"}, k)
