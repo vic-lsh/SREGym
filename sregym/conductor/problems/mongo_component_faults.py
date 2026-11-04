@@ -204,7 +204,9 @@ class MongoCollectionRenamed(MongoFaultProblem):
             marker = self._write_marker(check)
             landed, detail = self._marker_visible(check, marker)
             if not landed:
-                raise ComponentError(f"{self.instance.workload} in {self.namespace}: pre-fault marker not readable ({detail})")
+                raise ComponentError(
+                    f"{self.instance.workload} in {self.namespace}: pre-fault marker not readable ({detail})"
+                )
             self.pre_marker = (check, marker)
 
     def verdict(self) -> dict[str, Any]:

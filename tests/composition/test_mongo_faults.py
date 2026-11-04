@@ -182,6 +182,21 @@ def test_draws_cover_every_verified_target_and_declare_the_whole_workload(key):
     assert seen == expected
 
 
+@pytest.mark.parametrize("key", ["mongo_collection_renamed", "mongo_poison_document"])
+def test_faults_that_flush_a_cache_declare_it_in_the_footprint(key):
+    entry = {e.key: e for e in catalog.entries_for("social_network")}[key]
+    caches = {c.name: c.cache for r in B.mongo for c in r.collections}
+    for seed in range(32):
+        draw = entry.sample("social_network", random.Random(seed))
+        params = draw.param_dict()
+        assert (caches[params["collection"]]) in {f.name for f in draw.footprints}
+
+
+def test_user_mongodb_is_never_a_target_because_nothing_user_visible_writes_it():
+    for key in component_mongo.ENABLED_APPS:
+        assert "user-mongodb" not in {i.workload for i, _ in app_bindings.mongo_targets(B.mongo, key)}
+
+
 def test_unique_index_mode_only_where_the_collection_allows_it():
     entry = {e.key: e for e in catalog.entries_for("social_network")}["mongo_write_rejection"]
     modes = {}
