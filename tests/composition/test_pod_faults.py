@@ -177,3 +177,50 @@ def test_infrastructure_draws_declare_whole_workload_and_sample_every_target():
         t.workload for t in infrastructure._targets("social_network", protocols=("redis", "mongo", "thrift", "grpc"))
     }
     assert app_bindings.workload_targets(app_bindings.SOCIAL_NETWORK)
+
+
+# --- foreign-pod faults (hog, surge) -----------------------------------------------------------------
+
+
+def test_hog_script_opens_holds_and_reopens():
+    from sregym.generators.fault.components import load
+
+    s = load.hog_script("svc.ns.svc.cluster.local", 9090, 6000)
+    assert "seq 6000" in s and "/dev/tcp/svc.ns.svc.cluster.local/9090" in s and "read -t 1 -u 10" in s
+
+
+def test_foreign_pods_live_outside_the_app_namespace():
+    from sregym.generators.fault.components import foreign
+
+    m = foreign.pod_manifest("connection-hog", "social-network", "user-service", "img", "true", shell="bash")
+    assert m["metadata"]["namespace"] == foreign.FOREIGN_NAMESPACE != "social-network"
+    assert m["metadata"]["labels"]["sregym.io/app-namespace"] == "social-network"
+    assert m["spec"]["containers"][0]["command"][0] == "bash"
+
+
+def test_foreign_fault_clears_only_when_pod_is_gone(offline):  # noqa: F811
+    from sregym.conductor.problems.connection_exhaustion import ConnectionExhaustion
+
+    class K:
+        present = True
+
+        def run(self, argv, stdin=None, *, timeout_s=None):
+            if argv[:2] == ["get", "pod"]:
+                return b"pod/x" if self.present else b""
+            if argv[0] == "delete":
+                self.present = False
+                return b""
+            if argv[:2] == ["rollout", "restart"] or argv[:2] == ["rollout", "status"]:
+                return b""
+            raise AssertionError(argv)
+
+    kube = K()
+    p = ConnectionExhaustion("social_network", "unique-id-service", 6000, kube=kube)
+    assert p.fault_cleared()[0] is False
+    assert set(p.decoy_mitigations()) == {"restore_source", "rollout_restart"}
+    p.decoy_mitigations()["rollout_restart"]()
+    assert p.fault_cleared()[0] is False  # the hog outlives a restart of its victim
+    p.reference_mitigation()
+    assert p.fault_cleared()[0] is True
+    with pytest.raises(ValueError):
+        ConnectionExhaustion("social_network", "unique-id-service", 0, kube=kube)

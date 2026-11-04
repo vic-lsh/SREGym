@@ -243,7 +243,7 @@ SOCIAL_NETWORK = AppBinding(
     services=(
         ServiceInstance("nginx-thrift", 8080, "http", proxy=True),
         *(
-            ServiceInstance(name, 9090, "thrift", verified=False)
+            ServiceInstance(name, 9090, "thrift")
             for name in (
                 "compose-post-service",
                 "home-timeline-service",

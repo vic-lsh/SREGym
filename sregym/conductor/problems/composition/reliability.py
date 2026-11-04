@@ -66,6 +66,12 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
     ("pod_network_impairment", "social_network"): (
         "Pending: new pod-level fault (network driver); kept out of __reliable plans until it validates live."
     ),
+    ("connection_exhaustion", "social_network"): (
+        "Pending: new pod-level fault (load driver); kept out of __reliable plans until it validates live."
+    ),
+    ("traffic_surge", "social_network"): (
+        "Pending: new pod-level fault (load driver); kept out of __reliable plans until it validates live."
+    ),
 }
 
 

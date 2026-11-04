@@ -29,10 +29,18 @@ from sregym.conductor.problems.composition.catalog._kit import Pick, deployment,
 ENABLED_APPS: dict[str, tuple[str, ...]] = {
     "process_frozen": ("social_network",),
     "pod_network_impairment": ("social_network",),
+    "connection_exhaustion": ("social_network",),
+    "traffic_surge": ("social_network",),
 }
 
+# Calibrated live on the 1-worker kind lane (docs/incident-faults.md): connections held by the hog, request
+# loops of the surge.
+HOG_CONNECTIONS = (6000, 8000)
+SURGE_WORKERS = (100, 150)
+
+
 # (mode, severities) per mode: delay in ms, loss in percent. Calibrated live so the symptom shows at the entry points.
-NETWORK_SEVERITIES: dict[str, tuple[int, ...]] = {"delay": (3000, 6000), "loss": (60, 80)}
+NETWORK_SEVERITIES: dict[str, tuple[int, ...]] = {"delay": (3000, 6000), "loss": (90, 95)}
 
 
 def _targets(app: str, *, protocols: tuple[str, ...], proxy: bool | None = False):
@@ -65,7 +73,31 @@ def _build_netem(app: str, params: dict[str, Any]):
     return PodNetworkImpairment(app_name=app, **params)
 
 
+def _choose_hog(app: str, rng: random.Random) -> Pick:
+    t = rng.choice(_targets(app, protocols=("thrift", "grpc")))
+    return Pick({"target": t.workload, "connections": rng.choice(HOG_CONNECTIONS)}, (deployment(t.workload),))
+
+
+def _build_hog(app: str, params: dict[str, Any]):
+    from sregym.conductor.problems.connection_exhaustion import ConnectionExhaustion
+
+    return ConnectionExhaustion(app_name=app, **params)
+
+
+def _choose_surge(app: str, rng: random.Random) -> Pick:
+    (proxy,) = _targets(app, protocols=("http",), proxy=True)
+    return Pick({"target": proxy.workload, "workers": rng.choice(SURGE_WORKERS)}, (deployment(proxy.workload),))
+
+
+def _build_surge(app: str, params: dict[str, Any]):
+    from sregym.conductor.problems.traffic_surge import TrafficSurge
+
+    return TrafficSurge(app_name=app, **params)
+
+
 ENTRIES = (
     entry("process_frozen", ENABLED_APPS["process_frozen"], _choose_frozen, _build_frozen),
     entry("pod_network_impairment", ENABLED_APPS["pod_network_impairment"], _choose_netem, _build_netem),
+    entry("connection_exhaustion", ENABLED_APPS["connection_exhaustion"], _choose_hog, _build_hog),
+    entry("traffic_surge", ENABLED_APPS["traffic_surge"], _choose_surge, _build_surge),
 )

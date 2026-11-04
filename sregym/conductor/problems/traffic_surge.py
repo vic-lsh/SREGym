@@ -35,4 +35,4 @@ class TrafficSurge(ForeignPodFault):
         entry = self.binding.entry
         base = f"http://{entry.service}.{self.namespace}.svc.cluster.local:{entry.port}"
         reqs = tuple(load.Request(p) for p in entry.paths[1:]) + tuple(entry.writes[:1])
-        load.start_surge(self.kube, self.namespace, self.target.workload, base, reqs, self.workers, cpu_limit="1")
+        load.start_surge(self.kube, self.namespace, self.target.workload, base, reqs, self.workers, cpu_limit="2")
