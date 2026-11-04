@@ -30,12 +30,6 @@ from collections.abc import Mapping, Sequence
 
 from sregym.conductor.problems.composition.spec import CatalogEntry
 
-# One reason for every component kind added before it validates live (3 seeds, all trials VALID).
-_PENDING = (
-    "Pending: new component fault; kept out of __reliable plans until it validates live on 3 seeds "
-    "(tools/fault_validation/validate.py)."
-)
-
 UNRELIABLE: Mapping[tuple[str, str], str] = {
     ("resource_request_too_small", "hotel_reservation"): (
         "No symptom: with the 10Mi memory limit the recommendation container still fits when idle, "
@@ -58,38 +52,55 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
         "under load (enforcement and webhook registration lag); the three-trigger fix passed twice, but "
         "the diagnosis is not proven."
     ),
-    **{
-        (key, "social_network"): _PENDING
-        for key in (
-            "mongo_write_lock",
-            "mongo_poison_document",
-            "redis_acl_revoked",
-            "redis_out_of_memory",
-            "redis_writes_paused",
-            "redis_poisoned_timeline_entry",
-            "redis_timeline_key_renamed",
-            "social_graph_stale_cache",
-        )
-    },
-    # hotel_reservation: enabled by binding rows only; reliable once validated live (validation/hotel).
-    **{
-        (key, "hotel_reservation"): _PENDING
-        for key in (
-            "memcached_poisoned_entries",
-            "mongo_write_lock",
-            "mongo_write_rejection",
-            "mongo_collection_renamed",
-            "mongo_poison_document",
-        )
-    },
+    # Generation-2 kinds that have not validated on 3 seeds with every trial VALID. Evidence: validation/
+    # {process,redis,mongo3,hotel} (FIN handoff, 2026-11-04); the reason names what is missing.
+    ("mongo_write_lock", "social_network"): (
+        "Seed 1 all VALID; seed 5 restart decoys INVALID (social-graph-mongodb empty after reseed, no witness) and "
+        "seed 7 baseline INVALID; the rerun (mongo_write_lock3) did not finish valid. 1 of 3 seeds."
+    ),
+    ("mongo_poison_document", "social_network"): (
+        "Not validated: the reference is INVALID on seeds 1, 4, 6 (the poisoned post ids were not found in "
+        "post-storage-mongodb on the lane left by the lock run), so no decoy trial ran. 0 of 3 seeds."
+    ),
+    ("redis_acl_revoked", "social_network"): (
+        "Validated except restart decoys: home-timeline-redis read and write modes, seeds 1-3 all VALID "
+        "(reference, restore_source, consumer rollout) and user-timeline-redis seed 7 all VALID incl. restarts; "
+        "the restart decoys on home-timeline-redis were skipped (reseeding 962x10 takes ~20 min)."
+    ),
+    ("redis_out_of_memory", "social_network"): "1 of 3 seeds run (seed 9, user-timeline-redis, all 6 VALID).",
+    ("redis_writes_paused", "social_network"): "1 of 3 seeds run (seed 5, user-timeline-redis, all 6 trials VALID).",
+    ("redis_poisoned_timeline_entry", "social_network"): (
+        "Seeds 7 and 1 all VALID; seed 5 (social-graph-redis) FAIL on its decoy trials, not diagnosed. 2 of 3 seeds."
+    ),
+    ("redis_timeline_key_renamed", "social_network"): (
+        "1 of 3 seeds run (seed 1, all 8 VALID, incl. data-losing decoys); the other seeds hit the same target."
+    ),
+    ("social_graph_stale_cache", "social_network"): (
+        "Seeds 1 and 2 FAIL (reference and acceptable repairs did not pass); not diagnosed. 0 of 3 seeds."
+    ),
+    # hotel_reservation: only mongo_write_lock validated (3 seeds, 6 VALID trials each).
+    ("memcached_poisoned_entries", "hotel_reservation"): (
+        "Seeds 1 and 3 FAIL: a reference/acceptable repair reads data_lost (seeded /hotels read changed); seed 2 VALID."
+    ),
+    ("mongo_write_rejection", "hotel_reservation"): (
+        "Decoy trials INVALID on all seeds (inconclusive verdicts), seed 2 reference FAIL data_lost."
+    ),
+    ("mongo_collection_renamed", "hotel_reservation"): (
+        "Seeds 1 and 3 all VALID; seed 2 decoys FAIL (fault not visible to the traffic probe). 2 of 3 seeds."
+    ),
+    ("mongo_poison_document", "hotel_reservation"): (
+        "Decoy trials FAIL on all 3 seeds: the poisoned documents leave no entry-point symptom (traffic 15/15)."
+    ),
     ("process_frozen", "social_network"): (
-        "Pending: new pod-level fault (process driver); kept out of __reliable plans until it validates live."
+        "Seed 3 all VALID; seed 2 (user-timeline-redis) restart_stateful_pod read data_lost before the integrity "
+        "poll fix (rerun needed); seed 1 (post-storage-mongodb) INVALID on an unhealthy lane. 1 of 3 seeds."
     ),
     ("pod_network_impairment", "social_network"): (
-        "Pending: new pod-level fault (network driver); kept out of __reliable plans until it validates live."
+        "Seeds 2 and 3 all VALID; seed 1 (post-storage-mongodb) baseline INVALID (unhealthy lane). 2 of 3 seeds."
     ),
     ("connection_exhaustion", "social_network"): (
-        "Pending: new pod-level fault (load driver); kept out of __reliable plans until it validates live."
+        "Intermittent symptom: seed 2 VALID, seed 1 had a trial where the symptom did not persist 15 s, seed 3 "
+        "baseline INVALID. 1 of 3 seeds."
     ),
     ("traffic_surge", "social_network"): (
         "Reference does not reliably pass: stopping the client clears the cause, but the surge OOM-kills "
