@@ -75,9 +75,6 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
     ("redis_timeline_key_renamed", "social_network"): (
         "1 of 3 seeds run (seed 1, all 8 VALID, incl. data-losing decoys); the other seeds hit the same target."
     ),
-    ("social_graph_stale_cache", "social_network"): (
-        "Seeds 1 and 2 FAIL (reference and acceptable repairs did not pass); not diagnosed. 0 of 3 seeds."
-    ),
     # hotel_reservation: only mongo_write_lock validated (3 seeds, 6 VALID trials each).
     ("memcached_poisoned_entries", "hotel_reservation"): (
         "Seeds 1 and 3 FAIL: a reference/acceptable repair reads data_lost (seeded /hotels read changed); seed 2 VALID."
@@ -90,13 +87,6 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
     ),
     ("mongo_poison_document", "hotel_reservation"): (
         "Decoy trials FAIL on all 3 seeds: the poisoned documents leave no entry-point symptom (traffic 15/15)."
-    ),
-    ("process_frozen", "social_network"): (
-        "Seed 3 all VALID; seed 2 (user-timeline-redis) restart_stateful_pod read data_lost before the integrity "
-        "poll fix (rerun needed); seed 1 (post-storage-mongodb) INVALID on an unhealthy lane. 1 of 3 seeds."
-    ),
-    ("pod_network_impairment", "social_network"): (
-        "Seeds 2 and 3 all VALID; seed 1 (post-storage-mongodb) baseline INVALID (unhealthy lane). 2 of 3 seeds."
     ),
     ("connection_exhaustion", "social_network"): (
         "Intermittent symptom: seed 2 VALID, seed 1 had a trial where the symptom did not persist 15 s, seed 3 "
