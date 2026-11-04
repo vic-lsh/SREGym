@@ -225,6 +225,27 @@ only written at registration, which no probe does); rename is visible on user-ti
 with the cache flushed (not `user` or social-graph). Instances unreachable from any entry point (`media-mongodb`) or empty after the
 seed (`url-shorten-mongodb`) are `verified=False`.
 
+## Redis faults
+
+Six kinds on a bound Redis row (`RedisInstance.faults` lists the kinds verified live; `poison_keys`,
+`rename_keys` and `stale_sets` name the keys they act on). All state is runtime-only, so restarting
+the server clears it: acceptable for `user-timeline-redis` and `social-graph-redis` (they refill from
+Mongo), data loss on `home-timeline-redis` (the only copy of home timelines). Driver primitives are the
+"Incident-fault primitives" block of `components/redis.py`; problem classes are in
+`problems/redis_incident_faults.py`.
+
+| Key | Injection (reference) | Entry-point symptom (live, redis:6.2.4) |
+| --- | --- | --- |
+| `redis_acl_revoked` | `ACL SETUSER default -@write` or `-@read` (`+@all`) | write: compose 500 `NOPERM ... 'zadd'` (follow 500 on social-graph); read: timeline read 500 `NOPERM ... 'zrevrange'` (compose 500 on social-graph) |
+| `redis_out_of_memory` | `CONFIG SET maxmemory` at 10% or 50% of used memory (`maxmemory` back) | compose 500 `OOM command not allowed...` (follow on social-graph); reads fine. Limits near 100% of use are intermittent, so never sampled |
+| `redis_writes_paused` | `CLIENT PAUSE 3600000 WRITE` (`CLIENT UNPAUSE`; never ALL, which also blocks UNPAUSE) | compose blocks 10 s then 500 `TTransportException`; reads fine |
+| `redis_poisoned_timeline_entry` | `ZADD <key> 1e18 corrupt-<tok>` or a dangling numeric id (`ZREM` that member) | that key's read 500 `stoul` / `Return set incomplete`; `DEL` of the key repairs a cache but destroys a home timeline |
+| `redis_timeline_key_renamed` | `RENAME <uid> <uid>:bak-<tok>` on home-timeline-redis only (merge back with ZUNIONSTORE, since compose re-creates the key) | home read `{}` with HTTP 200: only a content check sees it. On the two caches a rename heals itself |
+| `social_graph_stale_cache` | drop a follower from `<uid>:followers` and add a ghost id (`DEL` the key) | compose 200 but the post skips the follower; the service trusts a non-empty key |
+
+The reference of the rename kind is idempotent (recovery runs it after any repair). Error replies come
+back without a `(error)` prefix and exit 0 through `kubectl exec`, so `redis.cli` checks the reply prefix.
+
 ## Lane notes (read before validating)
 
 - nginx-thrift: the stock `worker_processes auto` forks one worker per host CPU (64 on a large
