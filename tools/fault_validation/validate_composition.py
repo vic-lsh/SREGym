@@ -285,13 +285,14 @@ class CompositionHarness:
 
         result = self.evaluate(composite)
         row = {"trial": "all_broken", "result": summarize(result, n), **judged(result, lambda r: judge_all_broken(r, n))}
-        time.sleep(self.persist_s)
-        again = self.evaluate(composite)
-        row["persisted"] = summarize(again, n)
-        if row["status"] == VALID:
-            row.update(judged(again, lambda r: judge_all_broken(r, n)))
-            if row["status"] != VALID:
-                row["why"] = "after the persistence window: " + row["why"]
+        if self.persist_s > 0:  # --persist-s 0 skips the second grading (minutes when pods never settle)
+            time.sleep(self.persist_s)
+            again = self.evaluate(composite)
+            row["persisted"] = summarize(again, n)
+            if row["status"] == VALID:
+                row.update(judged(again, lambda r: judge_all_broken(r, n)))
+                if row["status"] != VALID:
+                    row["why"] = "after the persistence window: " + row["why"]
         yield emit(row)
 
         repaired: list[int] = []
@@ -324,7 +325,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--plan-id", action="append", required=False, default=[])
     ap.add_argument("--repair-order", choices=("declared", "reverse"), default="declared")
     ap.add_argument("--namespace", default=None, help="default: the app binding's namespace")
-    ap.add_argument("--persist-s", type=float, default=15.0)
+    ap.add_argument("--persist-s", type=float, default=15.0, help="0: grade the broken composite once")
     ap.add_argument("--probe-rounds", type=int, default=3)
     ap.add_argument("--reset-cmd", default=None, help="run after each plan (e.g. a reseeding reset)")
     ap.add_argument("--state-dir", default=str(DEFAULT_STATE_DIR), help="'' disables persisting injected state")

@@ -62,7 +62,8 @@ def component_entry(
     restarts: bool = False,
     generation: int = INCIDENT_GENERATION,
 ) -> CatalogEntry:
-    """``restarts``: the reference or an acceptable repair restarts the target (a frozen process)."""
+    """``needs_client_pods`` is always set: every component oracle reads through client pods.
+    ``restarts``: the reference or an acceptable repair restarts the target (a frozen process)."""
     module_name, _, class_name = problem.partition(":")
 
     def pick(app: str, rng: random.Random) -> Pick:
@@ -70,7 +71,7 @@ def component_entry(
         t = choose(binding, rng)
         names = [t.params["target"], *(w for w in t.touches if w != t.params["target"])]
         reads = binding.integrity.depends_on if binding.integrity is not None else ()
-        return Pick(dict(t.params), tuple(deployment(n) for n in names), reads=frozenset(reads), restarts=restarts)
+        return Pick(dict(t.params), tuple(deployment(n) for n in names), reads=frozenset(reads), restarts=restarts, needs_client_pods=True)
 
     def build(app: str, params: dict[str, Any]):
         cls = getattr(importlib.import_module(module_name), class_name)

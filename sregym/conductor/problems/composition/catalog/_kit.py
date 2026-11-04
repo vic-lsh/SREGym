@@ -116,6 +116,7 @@ class Pick:
     tags: frozenset[str] = field(default_factory=frozenset)
     reads: frozenset[str] = field(default_factory=frozenset)  # FaultDraw.reads
     restarts: bool = False  # FaultDraw.restarts
+    needs_client_pods: bool = False  # FaultDraw.needs_client_pods
 
 
 Choose = Callable[[str, random.Random], Pick]
@@ -150,6 +151,7 @@ def entry(key: str, apps: Iterable[str], choose: Choose, build: Build, generatio
             exclusive_tags=pick.tags,
             reads=pick.reads,
             restarts=pick.restarts,
+            needs_client_pods=pick.needs_client_pods,
         )
 
     return CatalogEntry(
