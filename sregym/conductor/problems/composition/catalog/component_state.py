@@ -34,13 +34,14 @@ ENABLED_APPS: dict[str, tuple[str, ...]] = {
     "memcached_poisoned_entries": ("social_network",),
 }
 
-# Hosts that resolve nowhere in any app namespace (or not at all).
-_PHANTOM_MASTERS = ("redis-primary", "cache-master", "redis-0.redis-headless")
+# Masters that can never serve a sync (a real full sync would flush the replica's data): connection
+# refused, a blackholed address (connect timeout), a name that does not resolve.
+_PHANTOM_MASTERS = ("127.0.0.1:1", "10.255.255.1:6379", "redis-primary.invalid:6379")
 
 
 def _choose_redis_replica(app: str, rng: random.Random) -> Pick:
     inst = rng.choice(instances(BINDINGS[app].redis))
-    return Pick({"target": inst.workload, "master_host": rng.choice(_PHANTOM_MASTERS)}, (deployment(inst.workload),))
+    return Pick({"target": inst.workload, "master": rng.choice(_PHANTOM_MASTERS)}, (deployment(inst.workload),))
 
 
 def _build_redis_replica(app: str, params: dict[str, Any]):

@@ -250,18 +250,20 @@ def test_capture_seeds_empty_reads_once(offline):
 
 def test_redis_replica_reference_passes_and_restore_source_is_no_fix(offline):
     kube = FakeKube()
-    p = _build("redis_replica_misconfig", {"target": "user-timeline-redis", "master_host": "redis-primary"}, kube)
+    p = _build("redis_replica_misconfig", {"target": "user-timeline-redis", "master": "127.0.0.1:1"}, kube)
     p.inject_fault()
     assert kube.role == "slave" and not p.verdict()["success"]
     assert set(p.decoy_mitigations()) == {"restore_source"}  # a cache over mongo: restart is not wrong
+    assert set(p.acceptable_mitigations()) == {"rollout_restart"}
     p.reference_mitigation()
     assert p.verdict()["success"]
 
 
 def test_redis_replica_on_primary_data_offers_rollout_restart_decoy(offline):
     kube = FakeKube()
-    p = _build("redis_replica_misconfig", {"target": "home-timeline-redis", "master_host": "cache-master"}, kube)
+    p = _build("redis_replica_misconfig", {"target": "home-timeline-redis", "master": "10.255.255.1:6379"}, kube)
     p.inject_fault()
+    assert not p.acceptable_mitigations()
     p.decoy_mitigations()["rollout_restart"]()
     assert kube.restarted == ["deployment/home-timeline-redis"]
 

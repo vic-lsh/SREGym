@@ -40,8 +40,9 @@ from sregym.conductor.problems.composition.grading import ENTRY_POINTS, SOCIAL_P
 class RedisInstance:
     """A Redis-protocol server (Redis or Valkey) run by one workload.
 
-    ``holds_primary_data``: the server holds data that exists nowhere else (no database behind
-    it), so restarting it loses user data; False for a cache in front of a database.
+    ``holds_primary_data``: the server is the source of truth for its data (nothing behind it),
+    so restarting it loses user data and a restart is a decoy; False for a rebuildable cache in
+    front of a database, where a restart is an acceptable repair.
     """
 
     workload: str

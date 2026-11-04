@@ -11,7 +11,8 @@ per decoy and one for the reference, each on a freshly injected fault:
   verdict (per-fault oracle AND namespace collateral walk AND entry-point traffic probe, the
   composite rule) -> recover
 
-A decoy trial passes when the verdict FAILS; the reference trial passes when it PASSES. A final
+A decoy trial passes when the verdict FAILS; the reference trial, and one trial per
+acceptable alternative repair for this target, pass when it PASSES. A final
 ``recovered`` trial checks the namespace is healthy again. One JSON line per trial on stdout
 (and --out). Exit status 0 only if every trial passed.
 """
@@ -101,6 +102,8 @@ def validate_seed(key: str, app: str, seed: int, namespace: str, persist_s: floa
     for name, decoy in sorted(problem.decoy_mitigations().items()):
         rows.append({**base, **run_trial(problem, cluster, f"decoy:{name}", decoy, False, persist_s)})
     rows.append({**base, **run_trial(problem, cluster, "reference", problem.reference_mitigation, True, persist_s)})
+    for name, fix in sorted(problem.acceptable_mitigations().items()):
+        rows.append({**base, **run_trial(problem, cluster, f"acceptable:{name}", fix, True, persist_s)})
     cluster.wait_for_rollouts(namespace, SETTLE_S)
     final = {**base, "trial": "recovered", **_health(cluster, namespace, problem.binding.entry)}
     final["pass"] = final["collateral_ok"] and final["traffic_ok"]

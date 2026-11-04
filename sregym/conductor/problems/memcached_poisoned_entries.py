@@ -2,8 +2,9 @@
 
 The consumer trusts its cache: a corrupt value fails its decoder (500s), a wrong-typed one fails
 its typed reads, a stale one serves wrong data. The poison outlives consumer restarts. Reference:
-delete the poisoned keys (or flush that memcached). Decoys: restore from source (no object
-changed) and rollout-restart the consuming service (the poison is in memcached, not in it).
+delete the poisoned keys; flushing or restarting that memcached is also correct (it is a cache).
+Decoys: restore from source (no object changed) and rollout-restart the consuming service (the
+poison is in memcached, not in it).
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from __future__ import annotations
 from sregym.conductor.problems.component_fault import ComponentFaultProblem, Mitigation
 from sregym.conductor.problems.composition.app_bindings import BINDINGS
 from sregym.generators.fault.components import http, memcached
-from sregym.generators.fault.components.kube import ComponentError, rollout_restart
+from sregym.generators.fault.components.kube import ComponentError, delete_pods, rollout_restart
 
 POISON_TTL_S = 7 * 24 * 3600  # long enough to outlast any episode; memcached caps relative TTLs at 30 days
 
@@ -89,3 +90,11 @@ class MemcachedPoisonedEntries(ComponentFaultProblem):
                 self.kube, self.namespace, "Deployment", svc
             )
         return decoys
+
+    def acceptable_mitigations(self) -> dict[str, Mitigation]:
+        inst = self.instance
+        return {
+            "flush_all": lambda: memcached.flush_all(self.kube, self.namespace, inst),
+            # A cache: restarting memcached empties it and consumers refill from the database.
+            "restart_stateful_pod": lambda: delete_pods(self.kube, self.namespace, inst.kind, inst.workload),
+        }

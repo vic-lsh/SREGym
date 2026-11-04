@@ -8,7 +8,11 @@ and states, beside the injection:
 * ``reference_mitigation()``: the scripted correct repair;
 * ``decoy_mitigations()``: tempting wrong repairs by name (``restore_source``,
   ``rollout_restart``, ``restart_stateful_pod``, ...), each one after which the verdict must
-  FAIL because it is wrong or harmful in production.
+  FAIL because it is wrong or harmful in production;
+* ``acceptable_mitigations()``: other repairs that are legitimately correct for THIS target
+  (restarting a Redis that only caches a database, restarting a memcached), after which the
+  verdict must PASS. Decoy expectations are per target: the same action can be a decoy on one
+  target (home-timeline-redis, the only copy of its data) and acceptable on another.
 
 The per-fault verdict (``ComponentFaultOracle``) is ``fault_cleared() AND`` the app binding's
 seeded-data snapshot is unchanged, so a repair that clears the symptom by destroying data
@@ -77,6 +81,10 @@ class ComponentFaultProblem(Problem):
     def decoy_mitigations(self) -> dict[str, Mitigation]:
         """Wrong repairs by name. Default: restore every object from accepted source."""
         return {"restore_source": self.restore_source}
+
+    def acceptable_mitigations(self) -> dict[str, Mitigation]:
+        """Repairs other than the reference that are correct for this target. Default: none."""
+        return {}
 
     # --- shared ------------------------------------------------------------------------------------
 
