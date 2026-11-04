@@ -113,6 +113,8 @@ Repairs are `Repair(run, expect, destroys_data=False, no_op=False)` with `expect
 `decoy_mitigations()` / `acceptable_mitigations()` are views (expect != / == PASSES).
 `apply(repair)` runs one and checks a declared no-op.
 
+Check channel: a fault that restricts an identity (`restricts_identity`, e.g. `redis_acl_revoked`) must not be judged through it. Every Redis verdict, witness and integrity read (`key_sample`, `keys_intact`, `key_exists`, `has_member`, `zset_members`, `zcard`) runs as a read-only `sregym_check` ACL user (random password kept only in the harness process, created lazily by `default`, `ACL DELUSER` in `recover_fault`); Mongo reads always use the binding's admin credentials. Tests enforce this for every such kind.
+
 The verdict (`verdict()`, wrapped by `ComponentFaultOracle`) lists `failed` components: `fault`
 (own state still there), `write` (a write-blocking fault's write did not land), `data` (seeded
 snapshot changed), `witness` (sampled keys/ids or the live-written marker gone), and a `reason`:
