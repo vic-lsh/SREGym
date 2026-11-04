@@ -3,6 +3,8 @@
 The consumer trusts its cache: a corrupt value fails its decoder (500s), a wrong-typed one fails
 its typed reads, a stale one serves wrong data. The poison outlives consumer restarts. Reference:
 delete the poisoned keys; flushing or restarting that memcached is also correct (it is a cache).
+Key scopes: ``one_key`` / ``all_hot_keys`` poison the keys on the traffic probe's paths; ``broad`` also
+poisons the instance's other live keys (lru_crawler metadump), so any user the traffic touches is hit.
 Decoys: restore from source (no object changed) and rollout-restart the consuming service (the
 poison is in memcached, not in it).
 """
@@ -16,7 +18,8 @@ from sregym.generators.fault.components import http, memcached
 from sregym.generators.fault.components.kube import ComponentError
 
 POISON_TTL_S = 7 * 24 * 3600  # long enough to outlast any episode; memcached caps relative TTLs at 30 days
-KEY_SCOPES = ("one_key", "all_hot_keys")
+BROAD_KEY_LIMIT = 1000  # "broad" poisons up to this many of the instance's live keys
+KEY_SCOPES = ("one_key", "all_hot_keys", "broad")
 
 
 class MemcachedPoisonedEntries(ComponentFaultProblem):
@@ -79,6 +82,10 @@ class MemcachedPoisonedEntries(ComponentFaultProblem):
         if not cached:
             raise ComponentError(f"none of the hot keys {list(keys)} is cached in {inst.workload}")
         chosen = cached[:1] if self.key_scope == "one_key" else cached
+        if self.key_scope == "broad":
+            others = [k for k in memcached.live_keys(self.kube, self.namespace, inst, BROAD_KEY_LIMIT) if k not in cached]
+            chosen = (cached + others)[:BROAD_KEY_LIMIT]
+            current = {**current, **memcached.get_many(self.kube, self.namespace, inst, tuple(others))}
         self.poisoned = {
             k: memcached.corrupt(current[k] or b"", self.corruption, self.poison_seed + i) for i, k in enumerate(chosen)
         }

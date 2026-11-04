@@ -168,6 +168,11 @@ class FakeKube:
                 reply = b"STORED\r\n"
             elif words[0] == b"delete":
                 reply = b"DELETED\r\n" if self.cache.pop(words[1].decode(), None) is not None else b"NOT_FOUND\r\n"
+            elif words[0] == b"lru_crawler":
+                from urllib.parse import quote
+
+                lines = [f"key={quote(k, safe='')} exp=-1 la=1 cas=1 fetch=no cls=1 size={len(v)}\n" for k, v in self.cache.items()]
+                reply = "".join(lines).encode() + b"END\r\n"
             else:
                 self.cache.clear()
                 reply = b"OK\r\n"
@@ -451,6 +456,32 @@ def test_memcached_hot_keys_include_the_probe_reads(offline):
     p = _build("memcached_poisoned_entries", params, kube)
     p.inject_fault()
     assert "77" in p.poisoned
+
+
+def test_broad_scope_poisons_live_keys_beyond_the_probe_paths(offline):
+    kube = _kube()
+    kube.timelines["1"] = [{"post_id": "77", "text": "probe-visible"}]
+    p = _build(
+        "memcached_poisoned_entries",
+        {"target": "post-storage-memcached", "corruption": "stale_value", "key_scope": "broad", "poison_seed": 1},
+        kube,
+    )
+    p.prepare_injection()
+    for i in range(250):  # more than one client-pod chunk, keys no probe path reads
+        kube.cache[f"u{i}:k"] = json.dumps({"v": f"val{i}"}).encode()
+    p.inject()
+    assert "77" in p.poisoned and len(p.poisoned) >= 251
+    assert all(kube.cache[k] == v for k, v in p.poisoned.items())
+    assert not p.fault_cleared()[0]
+    p.reference_mitigation()
+    assert p.fault_cleared()[0]
+
+
+def test_memcached_empty_key_lists_send_nothing(offline):
+    kube = _kube()
+    inst = app_bindings.SOCIAL_NETWORK.memcached[0]
+    assert memcached.get_many(kube, "ns", inst, ()) == {}
+    memcached.delete_many(kube, "ns", inst, ())
 
 
 def test_memcached_poison_refuses_when_nothing_is_cached(offline):

@@ -38,7 +38,7 @@ PHANTOM_MASTERS = ("127.0.0.1:1", "10.255.255.1:6379", "redis-primary.invalid:63
 # Mirrors of the problem modules' constants (the pure catalog cannot import them); compared by
 # tests/composition/test_catalog_mirrors.py.
 CORRUPTIONS = ("garbage_bytes", "wrong_type", "stale_value")  # memcached.CORRUPTION_MODES
-KEY_SCOPES = ("one_key", "all_hot_keys")  # memcached_poisoned_entries.KEY_SCOPES
+KEY_SCOPES = ("one_key", "all_hot_keys", "broad")  # memcached_poisoned_entries.KEY_SCOPES
 
 
 def _redis_replica(b: AppBinding, rng: random.Random) -> Target:
