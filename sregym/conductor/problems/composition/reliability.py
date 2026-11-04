@@ -52,6 +52,14 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
         "under load (enforcement and webhook registration lag); the three-trigger fix passed twice, but "
         "the diagnosis is not proven."
     ),
+    ("redis_replica_misconfig", "social_network"): (
+        "Pending: new component-state fault; kept out of __reliable plans until it validates live "
+        "(tools/fault_validation/validate.py) and the pinned vanilla_s42 plans are regenerated."
+    ),
+    ("memcached_poisoned_entries", "social_network"): (
+        "Pending: new component-state fault; kept out of __reliable plans until it validates live "
+        "(tools/fault_validation/validate.py) and the pinned vanilla_s42 plans are regenerated."
+    ),
 }
 
 

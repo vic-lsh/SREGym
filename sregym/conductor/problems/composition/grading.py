@@ -212,6 +212,13 @@ def probe_pod_manifest(name: str, namespace: str, entry: EntryPoint, rounds: int
     """The probe pod. It satisfies the `restricted` Pod Security Standard and declares
     small requests and limits, so a healthy namespace (PSA labels or quotas restored)
     admits it."""
+    return client_pod_manifest(name, namespace, probe_script(namespace, entry, rounds), probe_deadline_s(entry, rounds))
+
+
+def client_pod_manifest(name: str, namespace: str, script: str, deadline_s: int) -> dict[str, Any]:
+    """A short-lived busybox pod running `script` with `sh -c`, labelled as a probe pod (so the
+    collateral walk ignores it). Used by the traffic probe and by component drivers that talk to
+    an app's services from inside the namespace (seeded-data snapshots, memcached commands)."""
     return {
         "apiVersion": "v1",
         "kind": "Pod",
@@ -219,7 +226,7 @@ def probe_pod_manifest(name: str, namespace: str, entry: EntryPoint, rounds: int
         "spec": {
             "restartPolicy": "Never",
             "automountServiceAccountToken": False,
-            "activeDeadlineSeconds": probe_deadline_s(entry, rounds),
+            "activeDeadlineSeconds": int(deadline_s),
             "securityContext": {
                 "runAsNonRoot": True,
                 "runAsUser": 65534,
@@ -229,7 +236,7 @@ def probe_pod_manifest(name: str, namespace: str, entry: EntryPoint, rounds: int
                 {
                     "name": "probe",
                     "image": PROBE_IMAGE,
-                    "command": ["sh", "-c", probe_script(namespace, entry, rounds)],
+                    "command": ["sh", "-c", script],
                     "resources": {
                         "requests": {"cpu": "10m", "memory": "16Mi"},
                         "limits": {"cpu": "100m", "memory": "32Mi"},
