@@ -60,6 +60,22 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
         "Pending: new component-state fault; kept out of __reliable plans until it validates live "
         "(tools/fault_validation/validate.py) and the pinned vanilla_s42 plans are regenerated."
     ),
+    ("mongo_write_lock", "social_network"): (
+        "Pending: new MongoDB component fault; kept out of __reliable plans until it validates live "
+        "(tools/fault_validation/validate.py)."
+    ),
+    ("mongo_write_rejection", "social_network"): (
+        "Pending: new MongoDB component fault; kept out of __reliable plans until it validates live "
+        "(tools/fault_validation/validate.py)."
+    ),
+    ("mongo_collection_renamed", "social_network"): (
+        "Pending: new MongoDB component fault; kept out of __reliable plans until it validates live "
+        "(tools/fault_validation/validate.py)."
+    ),
+    ("mongo_poison_document", "social_network"): (
+        "Pending: new MongoDB component fault; kept out of __reliable plans until it validates live "
+        "(tools/fault_validation/validate.py)."
+    ),
 }
 
 

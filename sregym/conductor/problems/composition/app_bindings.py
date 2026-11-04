@@ -79,13 +79,52 @@ class MemcachedInstance:
 
 
 @dataclass(frozen=True)
+class MongoCollection:
+    """One collection of a Mongo instance and what the Mongo faults need to know about it.
+
+    ``cache``: workload (a memcached or Redis row of the binding) that fronts reads of this
+    collection; faults whose symptom is hidden by a warm cache flush it after injecting.
+    ``key_field``: a field of the collection's documents that also appears in the app's integrity
+    snapshot (post ids), so a document fault can pick documents the entry points read.
+    ``poison_fields``: (string field, object field) a malformed-document fault may break.
+    ``unique_key``/``stamp_field``: an indexable field every document carries and a numeric
+    timestamp field; together they let the unique-index write rejection reject every NEW document
+    (a partial unique index over documents newer than now) while existing ones are unaffected.
+    ``faults``: the Mongo fault kinds verified live on this collection (only those sample it).
+    """
+
+    name: str
+    cache: str | None = None
+    key_field: str | None = None
+    poison_fields: tuple[str, ...] = ()
+    unique_key: str | None = None
+    stamp_field: str | None = None
+    faults: tuple[str, ...] = ()
+
+
+MONGO_FAULTS = ("mongo_write_lock", "mongo_write_rejection", "mongo_collection_renamed", "mongo_poison_document")
+
+
+@dataclass(frozen=True)
 class MongoInstance:
+    """A mongod run by one workload. It holds the only copy of its data (nothing is behind it, and
+    the pod has no volume), so restarting it is always a decoy. ``consumers``: services whose
+    restart is a decoy too."""
+
     workload: str
     database: str
-    collections: tuple[str, ...] = ()
+    collections: tuple[MongoCollection, ...] = ()
+    consumers: tuple[str, ...] = ()
     port: int = 27017
     kind: str = "Deployment"
+    shell: str = "mongo"  # the legacy shell of mongo:4.4; "mongosh" on newer images
+    container: str | None = None
     verified: bool = True
+
+
+def mongo_targets(rows: tuple[MongoInstance, ...], fault: str) -> tuple[tuple[MongoInstance, MongoCollection], ...]:
+    """(instance, collection) pairs of verified rows whose collection lists ``fault`` as verified."""
+    return tuple((r, c) for r in instances(rows) for c in r.collections if fault in c.faults)
 
 
 @dataclass(frozen=True)
@@ -197,9 +236,45 @@ SOCIAL_NETWORK = AppBinding(
         MemcachedInstance("url-shorten-memcached", consumers=("url-shorten-service",), verified=False),
         MemcachedInstance("media-memcached", consumers=("media-service",), verified=False),
     ),
-    mongo=tuple(
-        MongoInstance(f"{name}-mongodb", database=name, verified=False)
-        for name in ("media", "post-storage", "social-graph", "url-shorten", "user", "user-timeline")
+    mongo=(
+        # Faults are listed per collection once verified live (docs/incident-faults.md, Mongo).
+        MongoInstance(
+            "user-timeline-mongodb",
+            "user-timeline",
+            (MongoCollection("user-timeline", cache="user-timeline-redis", faults=MONGO_FAULTS[:3]),),
+            consumers=("user-timeline-service",),
+        ),
+        MongoInstance(
+            "post-storage-mongodb",
+            "post",
+            (
+                MongoCollection(
+                    "post",
+                    cache="post-storage-memcached",
+                    key_field="post_id",
+                    poison_fields=("text", "creator"),
+                    unique_key="post_type",
+                    stamp_field="timestamp",
+                    faults=MONGO_FAULTS,
+                ),
+            ),
+            consumers=("post-storage-service",),
+        ),
+        MongoInstance(
+            "social-graph-mongodb",
+            "social-graph",
+            (MongoCollection("social-graph", cache="social-graph-redis", faults=MONGO_FAULTS[:3]),),
+            consumers=("social-graph-service",),
+        ),
+        MongoInstance(
+            "user-mongodb",
+            "user",
+            (MongoCollection("user", cache="user-memcached", faults=MONGO_FAULTS[:3]),),
+            ("user-service",),
+        ),
+        # No service reads or writes these: not valid targets.
+        MongoInstance("media-mongodb", "media", verified=False),
+        MongoInstance("url-shorten-mongodb", "url-shorten", verified=False),
     ),
     services=(
         ServiceInstance("nginx-thrift", 8080, "http", proxy=True),
