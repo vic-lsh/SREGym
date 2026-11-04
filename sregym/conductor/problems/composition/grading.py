@@ -36,21 +36,70 @@ import shlex
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlencode
+
+
+@dataclass(frozen=True)
+class Request:
+    """One HTTP request to an app entry point: a GET, or a form POST when `form` is set."""
+
+    path: str
+    form: tuple[tuple[str, str], ...] | None = None  # urlencoded POST fields, in order; None = GET
+
+    @property
+    def method(self) -> str:
+        return "GET" if self.form is None else "POST"
+
+    @property
+    def tag(self) -> str:
+        """The label the probe prints for this request (a GET path alone, for older logs)."""
+        return self.path if self.form is None else f"POST {self.path}"
+
+    def post_data(self) -> str | None:
+        if self.form is None:
+            return None
+        return urlencode(self.form)
 
 
 @dataclass(frozen=True)
 class EntryPoint:
+    """An app's user-facing entry: GET reads, plus optional write requests.
+
+    `writes` are requested every round like `paths` (a healthy app answers 2xx/3xx; busybox
+    wget follows a redirect with a GET). `setup` requests run once before the rounds, their
+    outcome ignored: they create what the writes need (a user to log in as), idempotently.
+    """
+
     service: str  # Service name in the app namespace
     port: int
     paths: tuple[str, ...]  # GET paths a healthy app answers with 2xx/3xx
+    writes: tuple[Request, ...] = ()
+    setup: tuple[Request, ...] = ()
 
+    def requests(self) -> tuple[Request, ...]:
+        """Every counted request of one probe round, reads first."""
+        return tuple(Request(p) for p in self.paths) + self.writes
+
+    def base_url(self, namespace: str) -> str:
+        return f"http://{self.service}.{namespace}.svc.cluster.local:{self.port}"
+
+
+# Social Network probe identities: user ids outside the wrk2 workload's 1..962 range, so the probe's
+# own writes never touch timelines the workload or a fault's seeded-data snapshot reads. The follower
+# makes every probe compose also write a home timeline (home-timeline-redis).
+SOCIAL_PROBE_USER_ID = 9200
+SOCIAL_PROBE_USERNAME = "sregym_probe_9200"
+SOCIAL_PROBE_FOLLOWER_ID = 9201
+SOCIAL_PROBE_FOLLOWER_USERNAME = "sregym_probe_9201"
 
 # The one table of per-app entry points, keyed by `Application.name`: the "Name" field of
 # `sregym/service/metadata/<namespace>.json`, which is not always the short app name
 # (astronomy_shop's is "OpenTelemetry Demo Astronomy Shop"). Enforced for every catalog app by
 # tests/composition/test_colocated_grading.py, which reads those files. Paths are the user-facing reads each app's own load generator exercises:
 #   hotel_reservation: DeathStarBench wrk2 mixed-workload_type_1.lua (/hotels, /recommendations)
-#   social_network:    nginx-thrift index plus the wrk2-api timeline reads (nginx.conf)
+#   social_network:    nginx-thrift index plus the wrk2-api timeline reads (nginx.conf), and the
+#                      write paths: compose-post, follow (wrk2-api) and login (/api/user/login) as a
+#                      dedicated probe user (SOCIAL_PROBE_*), so per-component write faults are visible
 #   astronomy_shop:    the frontend-proxy routes the upstream Locust file browses
 #   train_ticket:      the UI dashboard (nginx) and its unauthenticated verify-code API
 ENTRY_POINTS: Mapping[str, EntryPoint] = {
@@ -70,6 +119,38 @@ ENTRY_POINTS: Mapping[str, EntryPoint] = {
             "/",
             "/wrk2-api/home-timeline/read?user_id=1&start=0&stop=10",
             "/wrk2-api/user-timeline/read?user_id=1&start=0&stop=10",
+        ),
+        writes=(
+            Request(
+                "/wrk2-api/post/compose",
+                (
+                    ("user_id", str(SOCIAL_PROBE_USER_ID)),
+                    ("username", SOCIAL_PROBE_USERNAME),
+                    ("post_type", "0"),
+                    ("text", "sregym traffic probe"),
+                ),
+            ),
+            Request(
+                "/wrk2-api/user/follow",
+                (("user_id", str(SOCIAL_PROBE_FOLLOWER_ID)), ("followee_id", str(SOCIAL_PROBE_USER_ID))),
+            ),
+            Request("/api/user/login", (("username", SOCIAL_PROBE_USERNAME), ("password", SOCIAL_PROBE_USERNAME))),
+        ),
+        setup=tuple(
+            Request(
+                "/wrk2-api/user/register",
+                (
+                    ("first_name", "probe"),
+                    ("last_name", str(uid)),
+                    ("username", name),
+                    ("password", name),
+                    ("user_id", str(uid)),
+                ),
+            )
+            for uid, name in (
+                (SOCIAL_PROBE_USER_ID, SOCIAL_PROBE_USERNAME),
+                (SOCIAL_PROBE_FOLLOWER_ID, SOCIAL_PROBE_FOLLOWER_USERNAME),
+            )
         ),
     ),
     "OpenTelemetry Demo Astronomy Shop": EntryPoint(
@@ -105,22 +186,26 @@ def probe_script(namespace: str, entry: EntryPoint, rounds: int = PROBE_ROUNDS) 
     busybox wget follows redirects and exits non-zero on 4xx/5xx, timeouts, and
     connection errors, so PROBE_OK means a final 2xx (reached directly or via 3xx).
     """
-    base = f"http://{entry.service}.{namespace}.svc.cluster.local:{entry.port}"
+    base = entry.base_url(namespace)
     lines = []
-    for path in entry.paths:
-        url = shlex.quote(base + path)
-        tag = shlex.quote(path)
-        lines.append(
-            f"if wget -q -T {PROBE_REQUEST_TIMEOUT_S} -O /dev/null {url}; "
-            f"then echo {_OK} {tag}; else echo {_FAIL} {tag}; fi"
-        )
+    for req in entry.requests():
+        tag = shlex.quote(req.tag)
+        lines.append(f"if {wget_command(base, req)}; then echo {_OK} {tag}; else echo {_FAIL} {tag}; fi")
     body = "; ".join(lines)
-    return f"i=0; while [ $i -lt {int(rounds)} ]; do {body}; i=$((i+1)); done; echo {_DONE}"
+    setup = "".join(f"{wget_command(base, req)} >/dev/null 2>&1; " for req in entry.setup)
+    return f"{setup}i=0; while [ $i -lt {int(rounds)} ]; do {body}; i=$((i+1)); done; echo {_DONE}"
+
+
+def wget_command(base: str, req: Request, output: str = "/dev/null") -> str:
+    """The busybox wget invocation for one request (exits non-zero on 4xx/5xx and timeouts)."""
+    post = req.post_data()
+    data = "" if post is None else f"--post-data {shlex.quote(post)} "
+    return f"wget -q -T {PROBE_REQUEST_TIMEOUT_S} -O {output} {data}{shlex.quote(base + req.path)}"
 
 
 def probe_deadline_s(entry: EntryPoint, rounds: int = PROBE_ROUNDS) -> int:
     """Upper bound on the probe's run time (every request timing out) plus scheduling slack."""
-    return rounds * len(entry.paths) * PROBE_REQUEST_TIMEOUT_S + 60
+    return (rounds * len(entry.requests()) + len(entry.setup)) * PROBE_REQUEST_TIMEOUT_S + 60
 
 
 def probe_pod_manifest(name: str, namespace: str, entry: EntryPoint, rounds: int = PROBE_ROUNDS) -> dict[str, Any]:

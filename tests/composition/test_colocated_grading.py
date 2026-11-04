@@ -69,10 +69,41 @@ def test_every_entry_point_is_requested_each_round_and_quoted(app):
     entry = grading.ENTRY_POINTS[app]
     script = grading.probe_script("ns-1", entry, rounds=2)
 
-    assert script.count("wget ") == len(entry.paths)
-    for path in entry.paths:
-        assert shlex.quote(f"http://{entry.service}.ns-1.svc.cluster.local:{entry.port}{path}") in script
-    assert grading.probe_deadline_s(entry, 2) >= 2 * len(entry.paths) * grading.PROBE_REQUEST_TIMEOUT_S
+    assert script.count("wget ") == len(entry.paths) + len(entry.writes) + len(entry.setup)
+    for req in entry.requests() + entry.setup:
+        assert shlex.quote(f"http://{entry.service}.ns-1.svc.cluster.local:{entry.port}{req.path}") in script
+    bound = (2 * len(entry.requests()) + len(entry.setup)) * grading.PROBE_REQUEST_TIMEOUT_S
+    assert grading.probe_deadline_s(entry, 2) >= bound
+
+
+def test_only_social_network_probes_write_paths():
+    # Other apps keep their GET-only probe; adding writes there needs live evidence first.
+    with_writes = {name for name, entry in grading.ENTRY_POINTS.items() if entry.writes or entry.setup}
+
+    assert with_writes == {"Social Network"}
+
+
+def test_social_probe_writes_cover_compose_follow_and_login_as_post():
+    entry = grading.ENTRY_POINTS["Social Network"]
+
+    assert {(r.method, r.path) for r in entry.writes} == {
+        ("POST", "/wrk2-api/post/compose"),
+        ("POST", "/wrk2-api/user/follow"),
+        ("POST", "/api/user/login"),
+    }
+    script = grading.probe_script("ns-1", entry, rounds=1)
+    assert "--post-data 'user_id=9200&username=sregym_probe_9200&post_type=0&text=sregym+traffic+probe'" in script
+    # Setup runs once before the loop and is never counted.
+    assert script.index("/wrk2-api/user/register") < script.index("while")
+    assert "PROBE_OK 'POST /api/user/login'" in script
+
+
+def test_probe_log_reports_failing_write_by_its_tag():
+    log = "\n".join(["PROBE_OK /"] * 9 + ["PROBE_FAIL POST /wrk2-api/post/compose"] * 3 + ["PROBE_DONE"])
+
+    result = grading.parse_probe_log(log)
+
+    assert not result.ok and result.failed_paths == ("POST /wrk2-api/post/compose",)
 
 
 def _pod(name, phase="Running", ready=True, waiting=None, terminated=None, labels=None):
