@@ -56,7 +56,8 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
     # {process,redis,mongo3,hotel} (FIN handoff, 2026-11-04); the reason names what is missing.
     ("mongo_write_lock", "social_network"): (
         "Seed 1 all VALID; seed 5 restart decoys INVALID (social-graph-mongodb empty after reseed, no witness) and "
-        "seed 7 baseline INVALID; the rerun (mongo_write_lock3) did not finish valid. 1 of 3 seeds."
+        "seed 7 baseline INVALID; the rerun (mongo_write_lock3) did not finish valid. 1 of 3 seeds. VAL rerun (seed 1): "
+        "reference, restore_source and rollout_restart VALID, killed at the time box before the restart decoys."
     ),
     ("mongo_poison_document", "social_network"): (
         "Not validated: the reference is INVALID on seeds 1, 4, 6 (the poisoned post ids were not found in "
@@ -67,7 +68,10 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
         "(reference, restore_source, consumer rollout) and user-timeline-redis seed 7 all VALID incl. restarts; "
         "the restart decoys on home-timeline-redis were skipped (reseeding 962x10 takes ~20 min)."
     ),
-    ("redis_out_of_memory", "social_network"): "1 of 3 seeds run (seed 9, user-timeline-redis, all 6 VALID).",
+    ("redis_out_of_memory", "social_network"): (
+        "2 of 3 seeds all VALID (seed 9 user-timeline-redis; VAL seed 1 home-timeline-redis incl. data_lost restarts); "
+        "seeds 2, 3 not finished (time box, host load 100+: one trial took 5-10 min)."
+    ),
     ("redis_writes_paused", "social_network"): "1 of 3 seeds run (seed 5, user-timeline-redis, all 6 trials VALID).",
     ("redis_poisoned_timeline_entry", "social_network"): (
         "Seeds 7 and 1 all VALID; seed 5 (social-graph-redis) FAIL on its decoy trials, not diagnosed. 2 of 3 seeds."

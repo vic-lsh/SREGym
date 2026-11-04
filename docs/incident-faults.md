@@ -346,19 +346,40 @@ Every kind: reference repair passes; decoys `restore_source` and `rollout_restar
 | redis_replica_misconfig | social | Redis | target Redis, bogus master | `REPLICAOF NO ONE` | restart (data_lost on home-timeline-redis) | reliable (F1 seed 2) | P4 L1: SDO did not detect (replica serves reads) |
 | memcached_poisoned_entries | social, hotel | cache | target, corruption, key scope (probe, broad) | delete the poisoned keys | flush_all, restart (acceptable: a cache) | social reliable (seed 5, broad 3/12/15 VALID); hotel flagged: seeds 1,3 data_lost | P4 L2: not detected |
 | redis_acl_revoked | social | Redis | target, read or write | `ACL SETUSER default +@all` | restart (acceptable on caches; data_lost on home-timeline-redis) | flagged: home-timeline-redis seeds 1-3 VALID except restart decoys not run; user-timeline seed 7 all VALID | P4 L4 not measured |
-| redis_out_of_memory | social | Redis | target | restore `maxmemory` | restart (as above) | flagged: 1 seed (9) VALID 6/6 | no |
+| redis_out_of_memory | social | Redis | target | restore `maxmemory` | restart (as above) | flagged: seeds 9 and VAL 1 VALID (2 of 3); VAL seeds 2, 3 not finished (time box) | no |
 | redis_writes_paused | social | Redis | target | `CLIENT UNPAUSE` | restart (as above) | flagged: 1 seed (5) VALID 6/6 | no |
 | redis_poisoned_timeline_entry | social | Redis | target, key, shape | `ZREM` the poisoned member | delete_key, restart (acceptable on caches) | flagged: seeds 7, 1 VALID 7/7, seed 5 FAIL | no |
 | redis_timeline_key_renamed | social | Redis | target | merge back with `ZUNIONSTORE` | delete_backup_key, restart (data_lost) | flagged: 1 seed VALID 8/8 | no |
-| social_graph_stale_cache | social | Redis | ghost ids | restore the follower set (`readd_follower`) | restart (acceptable) | flagged: seeds 1, 2 FAIL | no |
+| social_graph_stale_cache | social | Redis | ghost ids | restore the follower set (`readd_follower`) | restart (acceptable) | reliable (VAL: seeds 1-3 VALID 8/8 each, after the stale-follower and write-retry fixes) | no |
 | mongo_write_rejection | social, hotel | Mongo | collection, mode (validator, ...) | clear validator / drop blocking index | restart (data_lost) | social reliable (3 seeds VALID); hotel flagged: decoys INVALID | P5 (write path) blocked by deployer, see P5.md |
 | mongo_collection_renamed | social, hotel | Mongo | collection | `merge_back` then rename with `dropTarget` | restart (data_lost) | social reliable; hotel seeds 1,3 VALID, seed 2 FAIL | P5 queued |
-| mongo_write_lock | social, hotel | Mongo | target | `fsyncUnlock` | restart (data_lost) | hotel reliable (3 seeds, 6/6 each); social flagged: seed 1 VALID, 5 and 7 INVALID | no |
+| mongo_write_lock | social, hotel | Mongo | target | `fsyncUnlock` | restart (data_lost) | hotel reliable (3 seeds, 6/6 each); social flagged: seed 1 VALID, 5 and 7 INVALID; VAL rerun of seed 1 killed at the time box (first 3 trials VALID) | no |
 | mongo_poison_document | social, hotel | Mongo | collection, shape, scope | `unpoison_documents` | flush_cache (not cleared), restart (data_lost) | flagged: social reference INVALID all seeds (ids not found); hotel decoys FAIL (no symptom) | no |
-| process_frozen | social | process | target service/store | `kill -CONT 1` | restart (acceptable on stateless) | flagged: seed 3 VALID 6/6, seed 2 FAIL (before poll fix), seed 1 INVALID | P4 L3/R3/S3: learned stall playbook, reused deterministically |
-| pod_network_impairment | social | process | target, delay 3000/6000 ms or loss 90/95% | delete qdisc | restart (acceptable) | flagged: seeds 2, 3 VALID, seed 1 INVALID | P5 B2: folded into the stall/restart playbook |
-| connection_exhaustion | social | load | compose-post-service, ~12000 sockets | stop the hog | restart is a decoy | flagged: intermittent symptom (seed 2 VALID, seed 1 one FAIL, seed 3 INVALID) | no |
+| process_frozen | social | process | target service/store | `kill -CONT 1` | restart (acceptable on stateless) | reliable (VAL: seeds 1 post-storage-mongodb 9/9, 2 user-timeline-redis 7/7, 3 compose-post-service 6/6; also a frozen Redis now verdicts without exec into it) | P4 L3/R3/S3: learned stall playbook, reused deterministically |
+| pod_network_impairment | social | process | target, delay 3000/6000 ms or loss 90/95% | delete qdisc | restart (acceptable) | reliable (VAL: seeds 1 post-storage-mongodb 9/9, 2 user-timeline-redis 7/7, 3 compose-post-service 6/6) | P5 B2: folded into the stall/restart playbook |
+| connection_exhaustion | social | load | compose-post-service, ~12000 sockets | stop the hog | restart is a decoy | reliable (VAL: seeds 1-3 VALID 6/6 with `--symptom-samples 3`: the OOM/restart waves can leave one probe reading in a healthy gap) | no |
 | traffic_surge | social | load | entry-point load | stop the client | none | dropped | no |
+
+VAL round (2026-11-04, two lanes, host load 50-190 so trials took 5-10 min): promoted `process_frozen`,
+`pod_network_impairment`, `social_graph_stale_cache`, `connection_exhaustion`. Not run before the time box, still
+flagged with their earlier evidence: `redis_writes_paused`, `redis_poisoned_timeline_entry`,
+`redis_timeline_key_renamed`, `redis_acl_revoked` (restart decoys on home-timeline-redis), social `mongo_poison_document`
+and hotel `mongo_collection_renamed`; `redis_out_of_memory` and social `mongo_write_lock` are partial (above).
+Harness and fault fixes behind the promotions:
+
+- The harness waits (polled, bounded by `--ready-deadline-s`, default 900 s) for rollouts and a passing baseline probe
+  before each seed's baseline, after every reset and before the final recovered check, instead of judging a freshly
+  reseeded lane.
+- A fault's own checks must not depend on the component it disables (`disables_target`): a frozen Redis cannot run
+  `redis-cli`, so witness and seeded-read checks are skipped while the fault is live (it is `fault_not_cleared`
+  anyway) and run after the thaw, where they decide `data_lost`.
+- `social_graph_stale_cache` owns its dropped follower (user 9210): the traffic probe's own setup `follow` re-added the
+  old follower (9201) between the harness's two symptom readings, so every earlier trial said "no symptom that
+  persisted". A blocked-write marker is also retried with up to 3 fresh writes (a write right after a Redis restart can
+  fail once on a stale pooled connection).
+- `connection_exhaustion`'s symptom comes in waves (the hog OOM-kills and restarts compose-post-service), so a single
+  reading can land in a healthy gap; the harness option `--symptom-samples N` (visible if any of N readings shows
+  it) was needed, and the rows record `samples`.
 
 Dropped and not offered:
 
