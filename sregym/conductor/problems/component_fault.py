@@ -153,6 +153,11 @@ class ComponentFaultProblem(Problem):
     # changed credential. Its verdict, witness and integrity reads must then run on the driver's
     # privileged check channel (see the module docstring); a test enforces that for every such kind.
     restricts_identity = False
+    # While the fault is live the target process cannot answer (frozen). The verdict's own reads of the target
+    # (store witnesses, the seeded-data comparison through it) would hang or time out inside the fault, so
+    # they run only once the fault is cleared: a live fault already classifies as fault_not_cleared. A fault's
+    # checks must not depend on the component the fault disables being responsive.
+    disables_target = False
     # Attributes ``recover_fault`` needs besides the constructor params (which keys were
     # poisoned); persisted by the harness so a killed run can still recover the fault.
     STATE_ATTRS: tuple[str, ...] = ()
@@ -361,8 +366,11 @@ class ComponentFaultProblem(Problem):
             written, result["write_detail"] = self._marker_visible(check, self._write_marker(check))
             if not written:
                 failed.append("write")
+        blind = self.disables_target and not cleared  # the target cannot answer reads while the fault is live
         if self.binding.integrity is None:
             result["integrity_detail"] = "no integrity check in the binding"
+        elif blind:
+            result["integrity_detail"] = "not evaluated: the faulted target cannot answer while the fault is live"
         elif self.snapshot is None:
             raise ComponentError(f"{type(self).__name__}: no seeded-data snapshot (fault not injected here)")
         else:
@@ -373,6 +381,9 @@ class ComponentFaultProblem(Problem):
         details = []
         witness_ok = True
         for row, coll, record in self.witnesses:
+            if blind and row.workload == self.target.workload:
+                details.append(f"{row.workload}: not evaluated while the fault is live")
+                continue
             ok, d = _check_witness(self.kube, self.namespace, row, coll, record)
             witness_ok, details = witness_ok and ok, [*details, d]
         if self.marker is not None:

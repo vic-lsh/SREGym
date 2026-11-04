@@ -14,6 +14,8 @@ from sregym.generators.fault.components import process
 
 
 class ProcessFrozen(PodLevelFault):
+    disables_target = True  # a frozen Redis/Mongo cannot run redis-cli/mongosh for the verdict's own reads
+
     def __init__(self, app_name: str, target: str, namespace: str | None = None, kube=None, nodes=None):
         super().__init__(
             app_name,

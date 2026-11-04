@@ -252,3 +252,44 @@ def test_hog_draws_only_the_targets_it_fails_hard():
     draws = (by_key["connection_exhaustion"].sample("social_network", random.Random(s)) for s in range(50))
     drawn = {d.param_dict()["target"] for d in draws}
     assert drawn == set(infrastructure.HOG_TARGETS)
+
+
+def test_a_frozen_targets_own_verdict_reads_never_run_inside_the_fault(world, monkeypatch):
+    """Class rule: a fault's checks must not depend on the component the fault disables being responsive.
+    A frozen Redis cannot run redis-cli (witness read) or answer the seeded reads, so while the fault is live the
+    verdict is fault_not_cleared without touching it; after the thaw the same reads run and decide data loss."""
+    from sregym.conductor.problems import component_fault
+
+    kube, shell, _ = world
+    p, _ = _frozen(world, "home-timeline-redis")
+    reads: list[str] = []
+
+    def witness(kube_, ns, row, coll, record):
+        if shell.state == "T":
+            raise ComponentError("redis-cli exec timed out inside the frozen process")
+        reads.append("witness")
+        return True, "keys intact"
+
+    def compare(kube_, binding, ns, snapshot):
+        if shell.state == "T":
+            raise ComponentError("seeded read hung")
+        reads.append("integrity")
+        return True, "unchanged"
+
+    monkeypatch.setattr(component_fault, "_check_witness", witness)
+    monkeypatch.setattr(component_fault.http, "compare", compare)
+    p.snapshot, p.witnesses = object(), [(p.target, "", object())]
+    p.inject()
+    live = p.verdict()
+    assert live["reason"] == "fault_not_cleared" and live["failed"] == ["fault"] and not reads
+    assert "not evaluated" in live["integrity_detail"]
+    p.reference_mitigation()
+    done = p.verdict()
+    assert done["success"] and done["reason"] == "passes" and reads == ["integrity", "witness"]
+
+
+def test_only_faults_that_disable_their_target_skip_reads():
+    from sregym.conductor.problems.component_fault import ComponentFaultProblem
+
+    assert ProcessFrozen.disables_target and not ComponentFaultProblem.disables_target
+    assert not PodNetworkImpairment.disables_target
