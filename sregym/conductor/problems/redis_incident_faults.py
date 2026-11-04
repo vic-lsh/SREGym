@@ -216,7 +216,10 @@ class RedisTimelineKeyRenamed(_RedisFault):
         return have and not stray, f"{self.key!r} exists={have}, {self.backup_key!r} exists={stray}"
 
     def reference_mitigation(self) -> None:
-        self._call(redis.merge_back, self.key, self.backup_key)
+        # Idempotent: after a repair already moved or deleted the backup there is nothing to merge, and
+        # recovery (which runs the reference) must not fail on it; the verdict says whether the key is back.
+        if self._call(redis.key_exists, self.backup_key):
+            self._call(redis.merge_back, self.key, self.backup_key)
 
     def extra_repairs(self) -> dict[str, Repair]:
         return {

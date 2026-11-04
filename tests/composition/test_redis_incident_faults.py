@@ -138,6 +138,8 @@ def test_rename_is_cleared_only_when_the_key_is_back_and_the_backup_gone():
     k.zsets["9101"] = {"99": 9.0}  # a write re-created the key meanwhile
     p.reference_mitigation()
     assert p.fault_cleared()[0] is True and set(k.zsets["9101"]) == {"1", "2", "99"}  # nothing lost
+    p.reference_mitigation()  # recovery after a repair already ran: a no-op, not an error
+    assert set(k.zsets["9101"]) == {"1", "2", "99"}
 
 
 def test_stale_cache_drops_the_follower_adds_a_ghost_and_del_clears_it():
