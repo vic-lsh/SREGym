@@ -1282,3 +1282,32 @@ def test_probe_manifest_is_admissible_under_restricted_psa_and_quotas():
     assert container["securityContext"] == {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}}
     assert set(container["resources"]) == {"requests", "limits"}
     assert spec["restartPolicy"] == "Never" and spec["activeDeadlineSeconds"] > 0
+
+
+def test_a_failed_prepare_invalidates_the_composite_before_anything_is_injected():
+    """A snapshot taken after other faults are live would record their damage as healthy data."""
+    cluster, log = FakeCluster(), []
+    cluster.put("Service", _service("user"))
+    a = _target_port_fault(log, cluster, "a", "user")
+    b = FakeFault(log, "b")
+
+    def prepare():
+        raise RuntimeError("integrity reads failing after seeding")
+
+    b.prepare_injection = prepare
+    c = _composite([a, b], cluster)
+    c.inject_fault()
+    fields = c.report_fields()
+    assert fields["composite_valid"] is False
+    assert "integrity reads failing" in fields["composite_prepare_errors"]
+    assert not [op for op, _ in log if op == "inject"]
+
+
+def test_an_inconclusive_oracle_does_not_prove_a_fault_live():
+    cluster, log = FakeCluster(), []
+    fault = FakeFault(log, "a", verdict=False)
+    fault.mitigation_oracle.evaluate = lambda: {"success": False, "inconclusive": True, "error": "exec flake"}
+    c = _composite([fault], cluster)
+    c.inject_fault()
+    fields = c.report_fields()
+    assert fields["fault_0_live"] is False and "inconclusive" in fields["fault_0_live_detail"]

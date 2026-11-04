@@ -16,7 +16,8 @@ from types import SimpleNamespace
 import pytest
 from test_component_faults import FakeKube, offline  # noqa: F401  (offline is a fixture)
 
-from sregym.conductor.problems import mongo_component_faults
+from sregym.conductor.problems import component_fault
+from sregym.conductor.problems.component_fault import Expect
 from sregym.conductor.problems.composition import app_bindings, catalog
 from sregym.conductor.problems.composition.catalog import component_mongo
 from sregym.generators.fault.components import mongo
@@ -27,7 +28,7 @@ pytestmark = pytest.mark.usefixtures("offline", "no_write_wait")
 
 @pytest.fixture
 def no_write_wait(monkeypatch):
-    monkeypatch.setattr(mongo_component_faults, "WRITE_CHECK_WAIT_S", 0.0)
+    monkeypatch.setattr(component_fault, "WRITE_CHECK_WAIT_S", 0.0)
 
 
 B = app_bindings.SOCIAL_NETWORK
@@ -70,14 +71,10 @@ class FakeMongoKube(FakeKube):
         if argv[0] == "exec" and "FLUSHALL" in argv:
             self.flushed += 1
             return b"OK\n"
-        if argv[0] == "apply" and "-n" in argv:  # restore_source: nothing in the fake changes
-            return b""
         if argv[:2] == ["rollout", "restart"] and "mongodb" in argv[2]:
             self.wipe()  # no volume: the new pod is empty
-            return b""
-        if argv[:3] == ["delete", "pod", "p-0"]:
+        if argv[:2] == ["delete", "pod"] and "mongodb" in argv[2]:
             self.wipe()
-            return b""
         return super().run(argv, stdin, timeout_s=timeout_s)
 
     def _shell(self, s: str) -> str:
@@ -143,6 +140,7 @@ def _build(key, params, kube):
     entry = {e.key: e for e in catalog.entries_for("social_network")}[key]
     problem = entry.build(SimpleNamespace(app="social_network", param_dict=lambda: params))
     problem.kube = kube
+    problem._key_params = (key, params)
     return problem
 
 
@@ -207,16 +205,19 @@ def test_poison_shape_is_validated():
 
 
 def _decoys_fail(p, kube, monkeypatch, tmp_path):
-    """Each decoy on a fresh injection leaves the verdict failed."""
-    render = tmp_path / "render.yaml"
-    render.write_text("")
-    monkeypatch.setenv("SREGYM_ACCEPTED_RENDER", str(render))
-    for name, decoy in sorted(p.decoy_mitigations().items()):
-        kube.reset_data()
-        p.inject_fault()
-        assert not p.verdict()["success"], f"{name}: verdict passed before any repair"
-        decoy()
-        assert not p.verdict()["success"], f"decoy {name} must fail"
+    """Each repair, on a fresh fake and injection, gives the verdict reason it declares."""
+    key, params = p._key_params
+    for name in sorted(p.repairs()):
+        fresh = FakeMongoKube()
+        fresh.followers["9200"] = {"9201"}
+        q = _build(key, params, fresh)
+        q.inject_fault()
+        assert not q.verdict()["success"], f"{name}: verdict passed before any repair"
+        repair = q.repairs()[name]
+        q.apply(repair)
+        v = q.verdict()
+        assert v["reason"] == repair.expect.value, f"repair {name}: {v}"
+        assert repair.expect is not Expect.PASSES, f"{name}: no repair but the reference is correct for mongo"
 
 
 def test_write_lock_reference_passes_and_every_decoy_fails(monkeypatch, tmp_path):
@@ -232,23 +233,23 @@ def test_write_lock_reference_passes_and_every_decoy_fails(monkeypatch, tmp_path
     assert not p.acceptable_mitigations()
     p.reference_mitigation()
     v = p.verdict()
-    assert v["success"] and v["data_intact"]
+    assert v["success"] and v["witness_ok"]
     _decoys_fail(p, kube, monkeypatch, tmp_path)
 
 
 def test_restart_decoys_fail_through_the_data_check_not_the_fault_state():
     kube = FakeMongoKube()
     p = _inject("mongo_write_lock", {"target": "social-graph-mongodb"}, kube)
-    p.decoy_mitigations()["restart_stateful_pod"]()
+    p.apply(p.decoy_mitigations()["restart_stateful_pod"])
     v = p.verdict()
-    assert v["fault_cleared"] and not v["data_intact"] and not v["success"]
+    assert v["fault_cleared"] and not v["witness_ok"] and v["reason"] == "data_lost"
 
 
 def test_inject_refuses_an_empty_collection_after_seeding():
     kube = FakeMongoKube()
     kube.count, kube.ids = 0, []
     p = _build("mongo_write_lock", {"target": "post-storage-mongodb"}, kube)
-    with pytest.raises(ComponentError, match="empty after seeding"):
+    with pytest.raises(ComponentError, match="no documents to witness"):
         p.inject_fault()
     assert not kube.locked
 
@@ -294,7 +295,6 @@ def test_poison_document_reference_repairs_in_place_and_decoys_fail(shape, scope
     kube = FakeMongoKube()
     params = {"target": "post-storage-mongodb", "collection": "post", "shape": shape, "scope": scope}
     p = _build("mongo_poison_document", params, kube)
-    p.snapshot = None
     p.inject_fault()
     assert len(p.poisoned) == (1 if scope == "one_doc" else 3)
     assert kube.poison and not p.verdict()["success"]
@@ -308,7 +308,6 @@ def test_poison_refuses_when_no_seeded_document_matches():
     kube = FakeMongoKube()
     params = {"target": "post-storage-mongodb", "collection": "post", "shape": "wrong_type", "scope": "one_doc"}
     p = _build("mongo_poison_document", params, kube)
-    p.snapshot = None
 
     kube.missing = {"1001", "1002", "1003"}
     with pytest.raises(ComponentError, match="was poisoned"):
@@ -329,10 +328,10 @@ def test_write_faults_are_visible_through_the_write_round_trip(key, params):
     kube = FakeMongoKube()
     p = _inject(key, params, kube)
     v = p.verdict()
-    assert v["integrity_ok"] is False and "did not appear" in v["write_detail"]  # symptom visible, HTTP says 200
+    assert "write" in v["failed"] and "not visible" in v["write_detail"]  # symptom visible, HTTP says 200
     p.reference_mitigation()
     v = p.verdict()
-    assert v["success"] and "marker post visible" in v["write_detail"]
+    assert v["success"] and "marker visible" in v["write_detail"]
 
 
 def test_non_write_faults_skip_the_round_trip():

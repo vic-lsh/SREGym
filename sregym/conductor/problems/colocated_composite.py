@@ -501,7 +501,10 @@ class ColocatedComposite(Problem):
         if oracle is None:
             return None, "no spec change and no mitigation_oracle"
         try:
-            return bool((oracle.evaluate() or {}).get("success", False)), ""
+            result = oracle.evaluate() or {}
+            if result.get("inconclusive"):  # an oracle step errored: liveness unproven
+                return None, f"the mitigation oracle was inconclusive: {result.get('error', '')}"
+            return bool(result.get("success", False)), ""
         except Exception as e:
             return None, f"no spec change and the mitigation oracle raised {type(e).__name__}: {e}"
 
@@ -521,15 +524,25 @@ class ColocatedComposite(Problem):
         self.rebind_workload_handles()
         changes: dict[int, tuple[liveness.Change, ...] | None] = {}
         inject_errors: dict[int, str] = {}
-        # Faults that snapshot healthy state (seeded data) take it before any fault is injected.
-        # On failure the fault's own inject_fault takes it and reports any error.
+        # Faults that snapshot healthy state (seeded data, store witnesses) take it before any fault
+        # is injected. A failure invalidates the composite before anything is injected: taking it
+        # later would snapshot other faults' damage.
+        prepare_errors: dict[str, str] = {}
         for i in self.injection_order:
             prepare = getattr(self.problems[i], "prepare_injection", None)
             if prepare is not None:
                 try:
                     prepare()
                 except Exception as e:
-                    print(f"  fault_{i} prepare_injection failed ({type(e).__name__}: {e}); inject_fault retries it")
+                    prepare_errors[f"fault_{i}"] = f"{type(e).__name__}: {e}"[:300]
+                    print(f"  fault_{i} prepare_injection failed ({type(e).__name__}: {e})")
+        if prepare_errors:
+            self.validity = {
+                "composite_valid": False,
+                "composite_prepare_errors": json.dumps(prepare_errors),
+            }
+            print(f"  composite_valid=False: prepare_injection failed for {sorted(prepare_errors)}; nothing injected")
+            return
         snapshot_errors: list[str] = []
         validity = self._inject_and_judge(self.injection_order, changes, inject_errors, snapshot_errors)
         retry = [i for i in self.injection_order if i in inject_errors or not validity[f"fault_{i}_live"]]

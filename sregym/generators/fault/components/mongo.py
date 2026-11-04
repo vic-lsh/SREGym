@@ -27,9 +27,12 @@ from typing import Any
 from sregym.conductor.problems.composition.app_bindings import MongoInstance
 from sregym.generators.fault.components.kube import ComponentError, Kube, exec_in, pod_for
 
-VALIDATOR_FIELD = "__sdo_required__"  # a field no document has, so a $jsonSchema requiring it rejects all
-BLOCKING_INDEX = "sdo_blocking_unique"
-SENTINEL_FIELD = "__sdo_fault_sentinel__"
+# Production-like names: an operator (or an agent) inspecting the collection sees an ordinary schema
+# rule and index, nothing that names a harness. The sentinel field marks the one document the
+# unique-index fault inserts, so data checks can leave it out.
+VALIDATOR_FIELD = "schema_version"  # a field no document has, so a $jsonSchema requiring it rejects all
+BLOCKING_INDEX = "idx_post_type_ts_uniq"
+SENTINEL_FIELD = "migration_placeholder"
 RENAME_SUFFIX = "_old"
 POISON_SHAPES = ("wrong_type", "field_renamed")
 POISON_RENAME_SUFFIX = "_legacy"
@@ -49,7 +52,10 @@ def _js(value: Any) -> str:
 
 def run_js(kube: Kube, namespace: str, inst: MongoInstance, script: str) -> dict[str, Any]:
     """Run ``script`` in the instance's shell and return the object it passed to ``out()``."""
-    argv = [inst.shell, "--quiet", "--port", str(inst.port), "--eval", _PRELUDE + script]
+    argv = [inst.shell, "--quiet", "--port", str(inst.port)]
+    if inst.auth is not None:
+        argv += ["-u", inst.auth[0], "-p", inst.auth[1], "--authenticationDatabase", "admin"]
+    argv += ["--eval", _PRELUDE + script]
     for attempt in range(CONNECT_ATTEMPTS):
         try:
             pod = pod_for(kube, namespace, inst.kind, inst.workload)
@@ -378,8 +384,9 @@ def data_record(kube: Kube, namespace: str, inst: MongoInstance, collection: str
         namespace,
         inst,
         _coll(inst, collection)
-        + f"var ids = c.find({{}}, {{_id: 1}}).sort({{_id: 1}}).limit({SAMPLE_IDS}).toArray().map(function(x){{return tojson(x._id);}});"
-        " out({count: c.countDocuments({}), ids: ids});",
+        + f"var real = {{{_js(SENTINEL_FIELD)}: {{$exists: false}}}};"
+        + f" var ids = c.find(real, {{_id: 1}}).sort({{_id: 1}}).limit({SAMPLE_IDS}).toArray().map(function(x){{return tojson(x._id);}});"
+        " out({count: c.countDocuments(real), ids: ids});",
     )
     return DataRecord(int(r["count"]), tuple(r["ids"]))
 
@@ -393,8 +400,9 @@ def data_intact(
         namespace,
         inst,
         _coll(inst, collection)
-        + f"var ids = {_js(list(record.ids))}.map(function(s){{ return eval('(' + s + ')'); }});"
-        " out({count: c.countDocuments({}), present: ids.length ? c.countDocuments({_id: {$in: ids}}) : 0});",
+        + f"var real = {{{_js(SENTINEL_FIELD)}: {{$exists: false}}}};"
+        + f" var ids = {_js(list(record.ids))}.map(function(s){{ return eval('(' + s + ')'); }});"
+        " out({count: c.countDocuments(real), present: ids.length ? c.countDocuments({_id: {$in: ids}}) : 0});",
     )
     ok = r["present"] == len(record.ids) and r["count"] >= record.count
     return ok, (
