@@ -245,3 +245,10 @@ def test_foreign_fault_clears_only_when_pod_is_gone(offline, monkeypatch):  # no
     assert p.fault_cleared()[0] is True and drained  # the reference waits for the entry point to drain
     with pytest.raises(ValueError):
         ConnectionExhaustion("social_network", "unique-id-service", 0, kube=kube)
+
+
+def test_hog_draws_only_the_targets_it_fails_hard():
+    by_key = {e.key: e for e in catalog.entries_for("social_network")}
+    draws = (by_key["connection_exhaustion"].sample("social_network", random.Random(s)) for s in range(50))
+    drawn = {d.param_dict()["target"] for d in draws}
+    assert drawn == set(infrastructure.HOG_TARGETS)

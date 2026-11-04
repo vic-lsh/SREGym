@@ -36,6 +36,10 @@ ENABLED_APPS: dict[str, tuple[str, ...]] = {
 # Calibrated live on the 1-worker kind lane (docs/incident-faults.md): connections held by the hog, request
 # loops of the surge.
 HOG_CONNECTIONS = (12000, 16000)
+# Only targets whose exhaustion fails the entry point HARD in every trial (live, 3 runs each): compose-post-service
+# (every compose goes through it). text-service and media-service gave intermittent or no symptom (the entry point's
+# composes tolerate or retry around them), so a verdict there would be load-dependent: not drawn.
+HOG_TARGETS = ("compose-post-service",)
 SURGE_WORKERS = (100, 150)
 
 
@@ -65,7 +69,7 @@ def _choose_netem(binding: AppBinding, rng: random.Random) -> Target:
 
 
 def _choose_hog(binding: AppBinding, rng: random.Random) -> Target:
-    t = rng.choice(_targets(binding, protocols=("thrift", "grpc")))
+    t = rng.choice([t for t in _targets(binding, protocols=("thrift", "grpc")) if t.workload in HOG_TARGETS])
     return Target({"target": t.workload, "connections": rng.choice(HOG_CONNECTIONS)})
 
 
