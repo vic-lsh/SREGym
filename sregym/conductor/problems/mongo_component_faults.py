@@ -32,6 +32,7 @@ from sregym.generators.fault.components.kube import ComponentError
 
 WRITE_MODES = ("validator", "unique_index")
 POISON_SCOPES = ("one_doc", "all_seeded")
+PRE_MARKER_ATTEMPTS = 2
 
 
 def resolve(app_name: str, target: str, collection: str | None) -> tuple[MongoInstance, MongoCollection]:
@@ -201,9 +202,12 @@ class MongoCollectionRenamed(MongoFaultProblem):
         self.pre_marker = None
         check = self.write_check()
         if check is not None:
-            marker = self._write_marker(check)
-            landed, detail = self._marker_visible(check, marker)
-            if not landed:
+            for attempt in range(PRE_MARKER_ATTEMPTS):  # the first write after a restart can fail once
+                marker = self._write_marker(check)
+                landed, detail = self._marker_visible(check, marker)
+                if landed:
+                    break
+            else:
                 raise ComponentError(
                     f"{self.instance.workload} in {self.namespace}: pre-fault marker not readable ({detail})"
                 )
