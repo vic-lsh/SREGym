@@ -487,3 +487,14 @@ def test_integrity_is_optional_per_binding(offline, monkeypatch):
     p.reference_mitigation()
     v = p.verdict()
     assert v["success"] and v["integrity_detail"] == "no integrity check in the binding"
+
+
+def test_a_failed_recovery_still_releases_the_snapshot(offline, monkeypatch):
+    """Regression (Redis family): a raising reference left _prepared set, so the next trial reused
+    a stale snapshot."""
+    kube = _kube()
+    p = _build("redis_replica_misconfig", {"target": "home-timeline-redis", "master": "127.0.0.1:1"}, kube)
+    p.inject_fault()
+    monkeypatch.setattr(p, "reference_mitigation", lambda: (_ for _ in ()).throw(ComponentError("exec flake")))
+    p.recover_fault()  # the decorator logs a recovery error instead of raising
+    assert p.snapshot is None and not p.witnesses and not p._prepared

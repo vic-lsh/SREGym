@@ -282,8 +282,10 @@ class ComponentFaultProblem(Problem):
     @mark_fault_injected
     def recover_fault(self):
         print(f"== Fault Recovery: {type(self).__name__} | ns={self.namespace} ==")
-        self.reference_mitigation()
-        self.snapshot, self.witnesses, self.marker, self._prepared = None, [], None, False
+        try:
+            self.reference_mitigation()
+        finally:  # even if the repair raised: the next injection must take a fresh snapshot
+            self.snapshot, self.witnesses, self.marker, self._prepared = None, [], None, False
 
     def injected_state(self) -> dict[str, Any]:
         """JSON-serializable state ``recover_fault`` needs (``STATE_ATTRS``)."""
