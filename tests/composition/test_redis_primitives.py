@@ -20,6 +20,8 @@ class FakeRedisKube:
         self.maxmemory = 0
         self.used = 1000
         self.paused = False
+        self.users: dict[str, str] = {}  # extra ACL users: name -> password
+        self.log: list[tuple[str, tuple[str, ...]]] = []  # (identity, redis-cli args) of every command
 
     def json(self, argv):
         return json.loads(self.run([*argv, "-o", "json"]))
@@ -32,25 +34,52 @@ class FakeRedisKube:
                 {"items": [{"metadata": {"name": "p-0", "creationTimestamp": "t"}, "status": {"phase": "Running"}}]}
             ).encode()
         cmd = argv[argv.index("--") + 1 :]
+        if cmd[0] == "env":  # check channel: env REDISCLI_AUTH=<pw> redis-cli --user <u> -p <port> ...
+            password = cmd[1].split("=", 1)[1]
+            user = cmd[4]
+            if self.users.get(user) != password:
+                return b"AUTH failed: WRONGPASS invalid username-password pair or user is disabled.\n"
+            self.log.append((user, tuple(cmd[7:])))
+            return self._cmd(cmd[7:], user=user).encode()
         if cmd[0] == "timeout":
             cmd = cmd[2:]
+            self.log.append(("default", tuple(cmd[3:])))
             out = self._cmd(cmd[3:], timed=True)
             if out is None:
                 raise ComponentError("exit 124: kubectl exec")
             return out.encode()
+        self.log.append(("default", tuple(cmd[3:])))
         return self._cmd(cmd[3:]).encode()
 
     def _denied(self, kind: str) -> bool:
         return kind in self.acl
 
-    def _cmd(self, a, timed=False):
+    def _cmd(self, a, timed=False, user="default"):
         op = a[0].upper()
         writes = {"ZADD", "ZREM", "RENAME", "DEL", "ZUNIONSTORE"}
-        if op in writes and self.paused:
-            return None
-        if op in writes and self._denied("write"):
+        priv = user != "default"  # the check user: read-only, untouched by a revoked or paused default
+        if priv and (op in writes or op in {"ACL", "CONFIG", "CLIENT"}):
             return f"NOPERM this user has no permissions to run the '{op.lower()}' command\n"
-        if op in {"ZREVRANGE", "ZSCORE", "ZCARD", "EXISTS"} and self._denied("read"):
+        if op == "ACL" and a[1] == "SETUSER" and a[2] != "default":
+            rules = a[3:]  # ``reset`` clears the password and rules given before it, as Redis does
+            pw = None
+            for r in rules:
+                if r == "reset":
+                    pw = None
+                elif r.startswith(">"):
+                    pw = r[1:]
+            if pw is None:
+                self.users.pop(a[2], None)
+            else:
+                self.users[a[2]] = pw
+            return "OK\n"
+        if op == "ACL" and a[1] == "DELUSER":
+            return f"(integer) {int(self.users.pop(a[2], None) is not None)}\n"
+        if not priv and op in writes and self.paused:
+            return None
+        if not priv and op in writes and self._denied("write"):
+            return f"NOPERM this user has no permissions to run the '{op.lower()}' command\n"
+        if not priv and op in {"ZREVRANGE", "ZSCORE", "ZCARD", "EXISTS", "DBSIZE", "SCAN"} and self._denied("read"):
             return f"NOPERM this user has no permissions to run the '{op.lower()}' command\n"
         if op in {"ZADD", "ZUNIONSTORE"} and self.maxmemory and self.used > self.maxmemory:
             return "OOM command not allowed when used memory > 'maxmemory'.\n"
@@ -89,7 +118,11 @@ class FakeRedisKube:
             z = self.zsets.get(a[1], {})
             return "".join(m + "\n" for m in sorted(z, key=lambda m: -z[m]))
         if op == "EXISTS":
-            return f"(integer) {int(a[1] in self.zsets)}\n"
+            return f"(integer) {sum(k in self.zsets for k in a[1:])}\n"
+        if op == "DBSIZE":
+            return f"(integer) {len(self.zsets)}\n"
+        if op == "SCAN":
+            return "0\n" + "".join(k + "\n" for k in self.zsets)
         if op == "RENAME":
             if a[1] not in self.zsets:
                 return "ERR no such key\n"
@@ -117,7 +150,7 @@ def test_acl_revoke_blocks_the_mode_and_restore_clears_it(mode):
     blocked = (
         (lambda: redis.zadd_member(k, "ns", INST, "1", "99", 5))
         if mode == "write"
-        else (lambda: redis.zset_members(k, "ns", INST, "1"))
+        else (lambda: redis.cli(k, "ns", INST, "ZREVRANGE", "1", "0", "-1"))  # the app's identity
     )
     with pytest.raises(ComponentError, match="NOPERM"):
         blocked()
@@ -226,3 +259,31 @@ def test_probe_write_names_the_rejection_and_cleans_up_after_success():
     redis.set_maxmemory(k, "ns", INST, 0)
     redis.client_pause_write(k, "ns", INST, 1000)
     assert redis.probe_write(k, "ns", INST) == redis.PAUSED
+
+
+# --- check channel: verdict reads must not depend on the identity a fault restricts -------------
+
+
+def test_witness_reads_survive_a_revoked_default_read_acl():
+    """Fails at the old head: EXISTS ran as ``default`` and got NOPERM, so the oracle was inconclusive."""
+    k = FakeRedisKube()
+    k.zsets = {str(i): {"1": 1.0} for i in range(50)}
+    sample = redis.key_sample(k, "ns", INST)
+    assert sample.dbsize == 50 and len(sample.keys) == redis.SAMPLE_KEYS
+    redis.acl_revoke(k, "ns", INST, "read")
+    with pytest.raises(ComponentError, match="NOPERM"):
+        redis.cli(k, "ns", INST, "EXISTS", *sample.keys)  # the default user is blind
+    assert redis.keys_intact(k, "ns", INST, sample)[0] is True
+    assert redis.key_exists(k, "ns", INST, "3") and redis.has_member(k, "ns", INST, "3", "1")
+
+
+def test_check_user_is_read_only_password_protected_recreated_and_removed():
+    k = FakeRedisKube()
+    redis.key_exists(k, "ns", INST, "1")
+    assert redis.CHECK_USER in k.users
+    with pytest.raises(ComponentError, match="NOPERM"):
+        redis.check_exec(k, "ns", INST, "DEL", "1")  # no write bypass through the channel
+    k.users.clear()  # a pod restart wipes runtime ACL users
+    assert redis.key_exists(k, "ns", INST, "1")
+    redis.remove_check_user(k, "ns", INST)
+    assert redis.CHECK_USER not in k.users

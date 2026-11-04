@@ -22,6 +22,11 @@ for faults that block writes), ``data`` (the binding's seeded-data snapshot chan
 makes the verdict ``inconclusive``: never a pass, and the validation harness counts it INVALID,
 never as a decoy that correctly failed.
 
+Privileged check channel: a fault may restrict the identity the app uses (a Redis ACL on ``default``,
+a revoked Mongo role), so every verdict, witness and integrity read of a driver goes through an
+identity the fault does not touch (Redis: a read-only ``sregym_check`` user with a process-private
+password, removed in ``recover_fault``; Mongo: the binding's admin credentials, ``inst.auth``).
+
 Snapshot lifecycle: ``prepare_injection`` takes the seeded-data snapshot and the store witnesses
 while the app is healthy (a composite calls it on every fault before injecting any). They are
 kept until ``recover_fault``; ``inject_fault`` never re-takes them, so a retried injection cannot
@@ -144,6 +149,10 @@ class ComponentFaultProblem(Problem):
     # The fault stops writes, so the verdict also needs a write that lands (``write_check``) and
     # no witness marker is written while it is live.
     blocks_writes = False
+    # The fault restricts the identity the app (or a default client) uses: an ACL, a revoked role, a
+    # changed credential. Its verdict, witness and integrity reads must then run on the driver's
+    # privileged check channel (see the module docstring); a test enforces that for every such kind.
+    restricts_identity = False
     # Attributes ``recover_fault`` needs besides the constructor params (which keys were
     # poisoned); persisted by the harness so a killed run can still recover the fault.
     STATE_ATTRS: tuple[str, ...] = ()
@@ -290,10 +299,19 @@ class ComponentFaultProblem(Problem):
     @mark_fault_injected
     def recover_fault(self):
         print(f"== Fault Recovery: {type(self).__name__} | ns={self.namespace} ==")
+        rows = [self.target, *(w[0] for w in self.witnesses)]
         try:
             self.reference_mitigation()
         finally:  # even if the repair raised: the next injection must take a fresh snapshot
             self.snapshot, self.witnesses, self.marker, self._prepared = None, [], None, False
+            self._close_check_channels(rows)
+
+    def _close_check_channels(self, rows: list[Any]) -> None:
+        """Remove the privileged verdict-read identity the drivers opened on each store row."""
+        from sregym.generators.fault.components import redis
+
+        for row in {r.workload: r for r in rows if isinstance(r, RedisInstance)}.values():
+            redis.remove_check_user(self.kube, self.namespace, row)
 
     def injected_state(self) -> dict[str, Any]:
         """JSON-serializable state ``recover_fault`` needs (``STATE_ATTRS``)."""

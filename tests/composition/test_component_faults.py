@@ -70,6 +70,10 @@ class FakeKube:
         if argv[0] == "exec":
             cmd = argv[argv.index("--") + 1 :]
             workload = argv[argv.index("--") - 1].rsplit("-", 1)[0]
+            if cmd[0] == "env":  # the check channel: env REDISCLI_AUTH=.. redis-cli --user U -p PORT args
+                cmd = [cmd[2], *cmd[5:]]
+            if cmd[3] == "ACL":
+                return b"OK\n" if cmd[4] == "SETUSER" else b"(integer) 1\n"
             if cmd[3:] == ["INFO", "replication"]:
                 return f"# Replication\r\nrole:{self.role}\r\n".encode()
             if cmd[3] == "REPLICAOF":
@@ -264,7 +268,10 @@ def test_diff_compares_unordered_keys_as_sets_but_still_sees_missing_items():
 
 
 def test_memcached_key_template_formats_snapshot_values():
-    assert app_bindings.MemcachedInstance("m", ("c",), key_field="id", key_template="{}_cap").key_template.format(7) == "7_cap"
+    assert (
+        app_bindings.MemcachedInstance("m", ("c",), key_field="id", key_template="{}_cap").key_template.format(7)
+        == "7_cap"
+    )
 
 
 def test_snapshot_json_field_values():

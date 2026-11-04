@@ -54,6 +54,7 @@ class _RedisFault(ComponentFaultProblem):
 
 class RedisAclRevoked(_RedisFault):
     kind_key = "redis_acl_revoked"
+    restricts_identity = True
     STATE_ATTRS = ("mode",)
 
     def __init__(self, app_name: str, target: str, mode: str, namespace=None, kube=None):

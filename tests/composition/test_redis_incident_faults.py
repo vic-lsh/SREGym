@@ -6,12 +6,12 @@ import random
 from types import SimpleNamespace
 
 import pytest
-from test_component_faults import offline  # noqa: F401  (offline is a fixture)
+from test_component_faults import FakeKube, offline  # noqa: F401  (offline is a fixture)
 from test_redis_primitives import FakeRedisKube
 
 from sregym.conductor.problems.component_fault import Expect
 from sregym.conductor.problems.composition import app_bindings
-from sregym.conductor.problems.composition.catalog import component_redis
+from sregym.conductor.problems.composition.catalog import component_mongo, component_redis, component_state
 
 pytestmark = pytest.mark.usefixtures("offline")
 
@@ -131,9 +131,7 @@ def test_rename_is_cleared_only_when_the_key_is_back_and_the_backup_gone():
     p.inject()
     assert "9101" not in k.zsets and p.fault_cleared()[0] is False
     repairs = p.extra_repairs()
-    assert (
-        repairs["delete_backup_key"].expect is Expect.DATA_LOST and repairs["delete_backup_key"].destroys_data
-    )
+    assert repairs["delete_backup_key"].expect is Expect.DATA_LOST and repairs["delete_backup_key"].destroys_data
     assert repairs["rename_back"].expect is Expect.PASSES
     repairs["delete_backup_key"].run()  # state gone, data gone: cleared, and the data check reports the loss
     assert p.fault_cleared()[0] is True and "9101" not in k.zsets
@@ -166,3 +164,63 @@ def test_kinds_refuse_rows_that_do_not_list_them():
     k = _kube()
     with pytest.raises(ValueError, match="not verified"):
         _build("redis_timeline_key_renamed", {"target": "user-timeline-redis", "key": "9100", "token": "x"}, k)
+
+
+# --- the access-control class rule -------------------------------------------------------------
+# A fault that restricts an identity must not be judged through that identity: its verdict, witness
+# and integrity reads use the driver's privileged check channel (Redis: the sregym_check user;
+# Mongo: the binding's admin credentials, which no Mongo fault restricts).
+
+
+DATA_READS = {"EXISTS", "SCAN", "DBSIZE", "ZSCORE", "ZREVRANGE", "ZCARD", "GET"}
+
+
+class AclBlindKube(FakeKube):
+    """The ``default`` user has lost both its read and its write categories (the worst case of any
+    access-control kind). Anything run as another identity (``env REDISCLI_AUTH=.. --user``) is served."""
+
+    def __init__(self):
+        super().__init__()
+        self.default_reads: list[str] = []
+
+    def run(self, argv, stdin=None, *, timeout_s=None):
+        if argv[0] == "exec" and "--" in argv:
+            cmd = argv[argv.index("--") + 1 :]
+            if cmd[0] == "timeout":
+                cmd = cmd[2:]
+            if cmd[0] != "env" and len(cmd) > 3 and cmd[0].endswith("-cli"):
+                op = cmd[3].upper()
+                if op == "ACL" and cmd[4].upper() == "LIST":
+                    return b"user default on nopass ~* &* +@all -@write -@read\n"
+                if op in DATA_READS | {"ZADD"}:
+                    if op in DATA_READS:
+                        self.default_reads.append(op)
+                    return f"NOPERM this user has no permissions to run the '{op.lower()}' command\n".encode()
+        return super().run(argv, stdin, timeout_s=timeout_s)
+
+
+def _access_control_cases():
+    """(key, params) of every draw, over several seeds, whose problem class restricts an identity."""
+    cases = []
+    for module in (component_redis, component_mongo, component_state):
+        for entry in module.ENTRIES:
+            for seed in range(30):
+                draw = entry.sample("social_network", random.Random(seed))
+                problem = entry.build(draw)
+                if problem.restricts_identity:
+                    cases.append((entry.key, draw.param_dict()))
+    return cases
+
+
+def test_every_access_control_kind_never_judges_itself_through_the_restricted_identity():
+    cases = _access_control_cases()
+    assert {key for key, _ in cases} >= {"redis_acl_revoked"}, "the registry of access-control kinds is empty"
+    for key, params in cases:
+        kube = AclBlindKube()
+        kube.homes = {"9101": [{"post_id": 1}]}
+        p = _build(key, params, kube)
+        p.inject_fault()
+        result = p.verdict()  # raises ComponentError (-> inconclusive) if a read went through default
+        assert result["fault_cleared"] is False, (key, params)
+        p.recover_fault()
+        assert kube.default_reads == [], f"{key} {params}: data reads ran as the restricted default user"
