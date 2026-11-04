@@ -37,12 +37,28 @@ from sregym.conductor.problems.composition.grading import ENTRY_POINTS, SOCIAL_P
 
 
 @dataclass(frozen=True)
+class WriteCheck:
+    """A write whose effect the entry points show: POST ``path`` with ``fields`` (the ``marker_field``
+    value is replaced by a fresh marker each time), then ``read`` must return a body containing the
+    marker. Needed where the app swallows a failed database write (social-network's compose is
+    one-way and answers 200 whatever the database did), so an HTTP status probe cannot see it."""
+
+    path: str
+    fields: tuple[tuple[str, str], ...]
+    marker_field: str
+    read: str
+
+
+@dataclass(frozen=True)
 class RedisInstance:
     """A Redis-protocol server (Redis or Valkey) run by one workload.
 
     ``holds_primary_data``: the server is the source of truth for its data (nothing behind it),
     so restarting it loses user data and a restart is a decoy; False for a rebuildable cache in
     front of a database, where a restart is an acceptable repair.
+    ``consumers``: services that talk to it (restarting one is a decoy).
+    ``write_check``: an entry-point write that lands in this server and the read that shows it;
+    the store witness writes a marker through it while a fault is live (where writes work).
     """
 
     workload: str
@@ -52,6 +68,12 @@ class RedisInstance:
     container: str | None = None  # None: the pod's first container
     kind: str = "Deployment"
     verified: bool = True
+    consumers: tuple[str, ...] = ()
+    write_check: WriteCheck | None = None
+
+    @property
+    def restart_loses_data(self) -> bool:
+        return self.holds_primary_data
 
 
 @dataclass(frozen=True)
@@ -77,15 +99,84 @@ class MemcachedInstance:
     def has_hot_keys(self) -> bool:
         return bool(self.keys) or self.key_field is not None
 
+    @property
+    def restart_loses_data(self) -> bool:
+        return False  # a cache: consumers refill it
+
+
+@dataclass(frozen=True)
+class MongoCollection:
+    """One collection of a Mongo instance and what the Mongo faults need to know about it.
+
+    ``cache``: workload (a memcached or Redis row of the binding) that fronts reads of this
+    collection; faults whose symptom is hidden by a warm cache flush it after injecting.
+    ``key_field``: a field of the collection's documents that also appears in the app's integrity
+    snapshot (post ids), so a document fault can pick documents the entry points read.
+    ``poison_fields``: (string field, object field) a malformed-document fault may break.
+    ``unique_key``/``stamp_field``: an indexable field every document carries and a numeric
+    timestamp field; together they let the unique-index write rejection reject every NEW document
+    (a partial unique index over documents newer than now) while existing ones are unaffected.
+    ``write_check``: a write plus the read that must show it, used by faults that block writes.
+    ``faults``: the Mongo fault kinds verified live on this collection (only those sample it).
+    """
+
+    name: str
+    cache: str | None = None
+    key_field: str | None = None
+    poison_fields: tuple[str, ...] = ()
+    unique_key: str | None = None
+    stamp_field: str | None = None
+    write_check: WriteCheck | None = None
+    faults: tuple[str, ...] = ()
+
+
+# Compose as the traffic probe's user (9200) and read it back from that user's timeline. Compose is
+# one-way, so a database that refuses the write still answers 200; only the missing post shows it.
+# Probe user 9200 composes; 9201 follows it (grading.ENTRY_POINTS setup). Reads go deep enough
+# that the traffic probe's own composes during one trial do not push a marker out of the window.
+_SOCIAL_COMPOSE_CHECK = WriteCheck(
+    "/wrk2-api/post/compose",
+    (("user_id", "9200"), ("username", "sregym_probe_9200"), ("post_type", "0"), ("text", "")),
+    "text",
+    "/wrk2-api/user-timeline/read?user_id=9200&start=0&stop=100",
+)
+_SOCIAL_HOME_CHECK = WriteCheck(
+    "/wrk2-api/post/compose",
+    (("user_id", "9200"), ("username", "sregym_probe_9200"), ("post_type", "0"), ("text", "")),
+    "text",
+    "/wrk2-api/home-timeline/read?user_id=9201&start=0&stop=100",
+)
+
+MONGO_FAULTS = ("mongo_write_lock", "mongo_write_rejection", "mongo_collection_renamed", "mongo_poison_document")
+
 
 @dataclass(frozen=True)
 class MongoInstance:
+    """A mongod run by one workload. It holds the only copy of its data (nothing is behind it, and
+    the pod has no volume), so restarting it is always a decoy. ``consumers``: services whose
+    restart is a decoy too."""
+
     workload: str
     database: str
-    collections: tuple[str, ...] = ()
+    collections: tuple[MongoCollection, ...] = ()
+    consumers: tuple[str, ...] = ()
     port: int = 27017
     kind: str = "Deployment"
+    shell: str = "mongo"  # the legacy shell of mongo:4.4; "mongosh" on newer images
+    container: str | None = None
     verified: bool = True
+    # (username, password) for an instance started with authentication (hotel's mongodb-* run
+    # createUser scripts); None: unauthenticated, as in social-network.
+    auth: tuple[str, str] | None = None
+
+    @property
+    def restart_loses_data(self) -> bool:
+        return True  # the only copy, no volume
+
+
+def mongo_targets(rows: tuple[MongoInstance, ...], fault: str) -> tuple[tuple[MongoInstance, MongoCollection], ...]:
+    """(instance, collection) pairs of verified rows whose collection lists ``fault`` as verified."""
+    return tuple((r, c) for r in instances(rows) for c in r.collections if fault in c.faults)
 
 
 @dataclass(frozen=True)
@@ -100,6 +191,11 @@ class ServiceInstance:
     kind: str = "Deployment"
     container: str | None = None  # None: the pod's first container
     verified: bool = True
+    consumers: tuple[str, ...] = ()
+
+    @property
+    def restart_loses_data(self) -> bool:
+        return False  # stateless
 
 
 @dataclass(frozen=True)
@@ -124,11 +220,14 @@ class IntegrityCheck:
     normalized bodies; after mitigation the same reads must return the same data. If any read
     comes back empty (``""``, ``[]``, ``{}``), ``seed`` runs once first, so the snapshot holds
     real data. ``volatile_keys`` are JSON object keys dropped before comparing.
+    ``depends_on``: workloads whose stored data the reads return and whose restart loses it; the
+    generator never composes a fault on one of them with a fault that relies on this check.
     """
 
     reads: tuple[str, ...]
     seed: tuple[Request, ...] = ()
     volatile_keys: tuple[str, ...] = ()
+    depends_on: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -142,6 +241,21 @@ class AppBinding:
     services: tuple[ServiceInstance, ...] = ()
     integrity: IntegrityCheck | None = None
     notes: tuple[str, ...] = field(default=())
+
+    def rows(self) -> tuple:
+        return (*self.redis, *self.memcached, *self.mongo, *self.services)
+
+    def row(self, workload: str, kind: type | None = None):
+        """The binding row run by ``workload`` (of row type ``kind`` if given); ValueError if none."""
+        found = [r for r in self.rows() if r.workload == workload and (kind is None or isinstance(r, kind))]
+        if not found:
+            what = kind.__name__ if kind else "row"
+            raise ValueError(f"{self.app} binding has no {what} for workload {workload!r}")
+        return found[0]
+
+
+StoreRow = RedisInstance | MemcachedInstance | MongoInstance
+BindingRow = StoreRow | ServiceInstance
 
 
 def workload_targets(binding: AppBinding, *, verified_only: bool = True) -> tuple[WorkloadTarget, ...]:
@@ -218,9 +332,15 @@ SOCIAL_NETWORK = AppBinding(
     namespace="social-network",
     entry=ENTRY_POINTS["Social Network"],
     redis=(
-        RedisInstance("home-timeline-redis", holds_primary_data=True),
-        RedisInstance("user-timeline-redis", holds_primary_data=False),  # cache over user-timeline-mongodb
-        RedisInstance("social-graph-redis", holds_primary_data=False),  # cache over social-graph-mongodb
+        RedisInstance(
+            "home-timeline-redis",
+            holds_primary_data=True,
+            consumers=("home-timeline-service",),
+            write_check=_SOCIAL_HOME_CHECK,
+        ),
+        # caches over user-timeline-mongodb and social-graph-mongodb
+        RedisInstance("user-timeline-redis", holds_primary_data=False, consumers=("user-timeline-service",)),
+        RedisInstance("social-graph-redis", holds_primary_data=False, consumers=("social-graph-service",)),
     ),
     memcached=(
         # user-service caches "<username>:login" (password hash, salt, id) on login.
@@ -236,9 +356,53 @@ SOCIAL_NETWORK = AppBinding(
         MemcachedInstance("url-shorten-memcached", consumers=("url-shorten-service",), verified=False),
         MemcachedInstance("media-memcached", consumers=("media-service",), verified=False),
     ),
-    mongo=tuple(
-        MongoInstance(f"{name}-mongodb", database=name, verified=False)
-        for name in ("media", "post-storage", "social-graph", "url-shorten", "user", "user-timeline")
+    mongo=(
+        # Faults are listed per collection once verified live (docs/incident-faults.md, Mongo).
+        MongoInstance(
+            "user-timeline-mongodb",
+            "user-timeline",
+            (
+                MongoCollection(
+                    "user-timeline",
+                    cache="user-timeline-redis",
+                    write_check=_SOCIAL_COMPOSE_CHECK,
+                    faults=("mongo_write_lock", "mongo_write_rejection", "mongo_collection_renamed"),
+                ),
+            ),
+            consumers=("user-timeline-service",),
+        ),
+        MongoInstance(
+            "post-storage-mongodb",
+            "post",
+            (
+                MongoCollection(
+                    "post",
+                    cache="post-storage-memcached",
+                    key_field="post_id",
+                    poison_fields=("text", "creator"),
+                    unique_key="post_type",
+                    stamp_field="timestamp",
+                    write_check=_SOCIAL_COMPOSE_CHECK,
+                    faults=MONGO_FAULTS,
+                ),
+            ),
+            consumers=("post-storage-service",),
+        ),
+        MongoInstance(
+            "social-graph-mongodb",
+            "social-graph",
+            (MongoCollection("social-graph", cache="social-graph-redis", faults=("mongo_write_lock",)),),
+            consumers=("social-graph-service",),
+        ),
+        MongoInstance(
+            "user-mongodb",
+            "user",
+            (MongoCollection("user", cache="user-memcached", faults=()),),
+            ("user-service",),
+        ),
+        # No service reads or writes these: not valid targets.
+        MongoInstance("media-mongodb", "media", verified=False),
+        MongoInstance("url-shorten-mongodb", "url-shorten", verified=False),
     ),
     services=(
         ServiceInstance("nginx-thrift", 8080, "http", proxy=True),
@@ -265,6 +429,9 @@ SOCIAL_NETWORK = AppBinding(
             f"/wrk2-api/home-timeline/read?user_id={_SOCIAL_FOLLOWER}&start=0&stop=20",
         ),
         seed=_SOCIAL_SEED,
+        # user timelines: user-timeline-redis is a cache over user-timeline-mongodb; posts:
+        # post-storage-memcached over post-storage-mongodb; home timelines: only home-timeline-redis.
+        depends_on=("home-timeline-redis", "user-timeline-mongodb", "post-storage-mongodb"),
     ),
 )
 

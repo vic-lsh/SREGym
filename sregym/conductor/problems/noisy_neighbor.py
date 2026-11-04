@@ -41,8 +41,8 @@ class NoisyNeighbor(ForeignPodFault):
         neighbor.start(
             self.kube,
             self.namespace,
-            self.target.kind,
-            self.target.workload,
+            self.pod.kind,
+            self.pod.workload,
             workers=self.workers,
             cpu_request=self.cpu_request,
             cpu_limit=self.cpu_request,

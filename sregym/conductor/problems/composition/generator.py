@@ -24,6 +24,11 @@ are nested (K=1 within K=2 within ... within K=N), so faults can be matched acro
 An optional `__reliable` suffix (after any take-K), `mf__<app>__n<N>__s<seed>[__k<K>]__reliable__v_`,
 draws from the catalog without the entries `reliability.UNRELIABLE` flags for the app. Ids
 without it draw from the whole catalog, as before.
+
+An optional catalog generation segment (after any `__reliable`),
+`mf__<app>__n<N>__s<seed>[__k<K>][__reliable]__g<G>__v_` with G >= 2, opts in to the entries of
+generations 2..G (spec.LATEST_GENERATION). Ids without it draw from generation 1 only, so adding
+a fault family never changes what an existing id draws.
 """
 
 from __future__ import annotations
@@ -36,7 +41,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from sregym.conductor.problems.composition.reliability import reliable_entries
-from sregym.conductor.problems.composition.spec import CatalogEntry, FaultDraw, conflicts
+from sregym.conductor.problems.composition.spec import LATEST_GENERATION, CatalogEntry, FaultDraw, conflicts
 
 PLAN_ID_PREFIX = "mf__"
 
@@ -48,7 +53,7 @@ _ATTEMPTS_PER_FAULT = 50
 
 _PLAN_ID_RE = re.compile(
     r"^mf__(?P<app>[a-z0-9]+(?:_[a-z0-9]+)*)__n(?P<n>[1-9][0-9]*)__s(?P<seed>0|[1-9][0-9]*)"
-    r"(?:__k(?P<take>[1-9][0-9]*))?(?P<reliable>__reliable)?__v_$"
+    r"(?:__k(?P<take>[1-9][0-9]*))?(?P<reliable>__reliable)?(?:__g(?P<gen>[1-9][0-9]*))?__v_$"
 )
 
 
@@ -61,6 +66,7 @@ class PlanRef:
     """What a multi-fault id names: the N-fault plan for (app, n, seed), or its take-K subset.
 
     `reliable` draws from the catalog without the entries flagged unreliable for the app.
+    `generation` draws from the entries of catalog generations 1..generation (spec.LATEST_GENERATION).
     """
 
     app: str
@@ -68,6 +74,7 @@ class PlanRef:
     seed: int
     take: int | None = None
     reliable: bool = False
+    generation: int = 1
 
 
 @dataclass(frozen=True)
@@ -93,20 +100,22 @@ class CompositionPlan:
             raise ValueError(f"base_index has {len(self.base_index)} entries for {len(self.draws)} draws")
 
 
-def plan_id(app: str, n: int, seed: int, take: int | None = None, reliable: bool = False) -> str:
+def plan_id(app: str, n: int, seed: int, take: int | None = None, reliable: bool = False, generation: int = 1) -> str:
     """Return the problem id for a plan (or its take-K subset); `parse_plan_id` inverts it."""
     suffix = ("" if take is None else f"__k{take}") + ("__reliable" if reliable else "")
+    suffix += "" if generation == 1 else f"__g{generation}"
     pid = f"{PLAN_ID_PREFIX}{app}__n{n}__s{seed}{suffix}__v_"
-    if parse_plan_id(pid) != PlanRef(app, n, seed, take, reliable):
+    if parse_plan_id(pid) != PlanRef(app, n, seed, take, reliable, generation):
         raise ValueError(
             f"cannot form a multi-fault plan id from app={app!r}, n={n!r}, seed={seed!r}, take={take!r}, "
-            f"reliable={reliable!r}"
+            f"reliable={reliable!r}, generation={generation!r}"
         )
     return pid
 
 
 def parse_plan_id(problem_id: str) -> PlanRef | None:
-    """Return the PlanRef for a well-formed multi-fault id, else None (also when K > N)."""
+    """Return the PlanRef for a well-formed multi-fault id, else None (also when K > N, and for a
+    generation segment outside 2..LATEST_GENERATION: generation 1 is spelled without one)."""
     match = _PLAN_ID_RE.match(problem_id)
     if match is None:
         return None
@@ -114,7 +123,10 @@ def parse_plan_id(problem_id: str) -> PlanRef | None:
     take = None if match["take"] is None else int(match["take"])
     if take is not None and take > n:
         return None
-    return PlanRef(match["app"], n, int(match["seed"]), take, match["reliable"] is not None)
+    generation = 1 if match["gen"] is None else int(match["gen"])
+    if match["gen"] is not None and not 2 <= generation <= LATEST_GENERATION:
+        return None
+    return PlanRef(match["app"], n, int(match["seed"]), take, match["reliable"] is not None, generation)
 
 
 def _seeded_rng(text: str) -> random.Random:
@@ -152,8 +164,9 @@ def take_plan(plan: CompositionPlan, k: int) -> CompositionPlan:
 
 
 def plan_for(ref: PlanRef, entries: Sequence[CatalogEntry]) -> CompositionPlan:
-    """Draw the plan a PlanRef names: `draw_plan` (over the reliable entries when `ref.reliable`),
-    then `take_plan` when it has a take-K."""
+    """Draw the plan a PlanRef names: `draw_plan` over the entries of generations <= `ref.generation`
+    (and only the reliable ones when `ref.reliable`), then `take_plan` when it has a take-K."""
+    entries = [e for e in entries if ref.app in e.apps and e.generation(ref.app) <= ref.generation]
     if ref.reliable:
         entries = reliable_entries(ref.app, entries)
     plan = draw_plan(ref.app, ref.n, ref.seed, entries)

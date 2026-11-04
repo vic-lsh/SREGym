@@ -15,16 +15,16 @@
 
 Targets come from the app binding's workload rows (``workload_targets``): stateless services, caches
 and stores alike, each with its own restart expectation (``holds_primary_data``). Apps are opt-in per
-key. The state lives in the pod, so every draw declares the whole workload (field None).
+key. The state lives in the pod, so every draw declares the whole workload (field None). These keys are
+catalog generation 3 (tests/composition/test_plan_generations.py).
 """
 
 from __future__ import annotations
 
 import random
-from typing import Any
 
-from sregym.conductor.problems.composition.app_bindings import BINDINGS, workload_targets
-from sregym.conductor.problems.composition.catalog._kit import Pick, deployment, entry
+from sregym.conductor.problems.composition.app_bindings import AppBinding, workload_targets
+from sregym.conductor.problems.composition.catalog._component import Target, component_entry
 
 ENABLED_APPS: dict[str, tuple[str, ...]] = {
     "process_frozen": ("social_network",),
@@ -43,61 +43,67 @@ SURGE_WORKERS = (100, 150)
 NETWORK_SEVERITIES: dict[str, tuple[int, ...]] = {"delay": (3000, 6000), "loss": (90, 95)}
 
 
-def _targets(app: str, *, protocols: tuple[str, ...], proxy: bool | None = False):
+GENERATION = 3
+
+
+def _targets(binding: AppBinding, *, protocols: tuple[str, ...], proxy: bool | None = False):
     return [
-        t for t in workload_targets(BINDINGS[app]) if t.protocol in protocols and (proxy is None or t.proxy == proxy)
+        t for t in workload_targets(binding) if t.protocol in protocols and (proxy is None or t.proxy == proxy)
     ]
 
 
-def _choose_frozen(app: str, rng: random.Random) -> Pick:
-    t = rng.choice(_targets(app, protocols=("redis", "mongo", "thrift", "grpc")))
-    return Pick({"target": t.workload}, (deployment(t.workload),))
+def _choose_frozen(binding: AppBinding, rng: random.Random) -> Target:
+    t = rng.choice(_targets(binding, protocols=("redis", "mongo", "thrift", "grpc")))
+    return Target({"target": t.workload})
 
 
-def _build_frozen(app: str, params: dict[str, Any]):
-    from sregym.conductor.problems.process_frozen import ProcessFrozen
-
-    return ProcessFrozen(app_name=app, **params)
-
-
-def _choose_netem(app: str, rng: random.Random) -> Pick:
-    t = rng.choice(_targets(app, protocols=("redis", "mongo", "thrift", "grpc")))
+def _choose_netem(binding: AppBinding, rng: random.Random) -> Target:
+    t = rng.choice(_targets(binding, protocols=("redis", "mongo", "thrift", "grpc")))
     mode = rng.choice(sorted(NETWORK_SEVERITIES))
     severity = rng.choice(NETWORK_SEVERITIES[mode])
-    return Pick({"target": t.workload, "mode": mode, "severity": severity}, (deployment(t.workload),))
+    return Target({"target": t.workload, "mode": mode, "severity": severity})
 
 
-def _build_netem(app: str, params: dict[str, Any]):
-    from sregym.conductor.problems.pod_network_impairment import PodNetworkImpairment
-
-    return PodNetworkImpairment(app_name=app, **params)
-
-
-def _choose_hog(app: str, rng: random.Random) -> Pick:
-    t = rng.choice(_targets(app, protocols=("thrift", "grpc")))
-    return Pick({"target": t.workload, "connections": rng.choice(HOG_CONNECTIONS)}, (deployment(t.workload),))
+def _choose_hog(binding: AppBinding, rng: random.Random) -> Target:
+    t = rng.choice(_targets(binding, protocols=("thrift", "grpc")))
+    return Target({"target": t.workload, "connections": rng.choice(HOG_CONNECTIONS)})
 
 
-def _build_hog(app: str, params: dict[str, Any]):
-    from sregym.conductor.problems.connection_exhaustion import ConnectionExhaustion
-
-    return ConnectionExhaustion(app_name=app, **params)
-
-
-def _choose_surge(app: str, rng: random.Random) -> Pick:
-    (proxy,) = _targets(app, protocols=("http",), proxy=True)
-    return Pick({"target": proxy.workload, "workers": rng.choice(SURGE_WORKERS)}, (deployment(proxy.workload),))
+def _choose_surge(binding: AppBinding, rng: random.Random) -> Target:
+    (proxy,) = _targets(binding, protocols=("http",), proxy=True)
+    return Target({"target": proxy.workload, "workers": rng.choice(SURGE_WORKERS)})
 
 
-def _build_surge(app: str, params: dict[str, Any]):
-    from sregym.conductor.problems.traffic_surge import TrafficSurge
-
-    return TrafficSurge(app_name=app, **params)
-
-
+# freeze and netem: a restart replaces the pod and clears the fault, so a repair may restart the target.
 ENTRIES = (
-    entry("process_frozen", ENABLED_APPS["process_frozen"], _choose_frozen, _build_frozen),
-    entry("pod_network_impairment", ENABLED_APPS["pod_network_impairment"], _choose_netem, _build_netem),
-    entry("connection_exhaustion", ENABLED_APPS["connection_exhaustion"], _choose_hog, _build_hog),
-    entry("traffic_surge", ENABLED_APPS["traffic_surge"], _choose_surge, _build_surge),
+    component_entry(
+        "process_frozen",
+        ENABLED_APPS["process_frozen"],
+        "sregym.conductor.problems.process_frozen:ProcessFrozen",
+        _choose_frozen,
+        restarts=True,
+        generation=GENERATION,
+    ),
+    component_entry(
+        "pod_network_impairment",
+        ENABLED_APPS["pod_network_impairment"],
+        "sregym.conductor.problems.pod_network_impairment:PodNetworkImpairment",
+        _choose_netem,
+        restarts=True,
+        generation=GENERATION,
+    ),
+    component_entry(
+        "connection_exhaustion",
+        ENABLED_APPS["connection_exhaustion"],
+        "sregym.conductor.problems.connection_exhaustion:ConnectionExhaustion",
+        _choose_hog,
+        generation=GENERATION,
+    ),
+    component_entry(
+        "traffic_surge",
+        ENABLED_APPS["traffic_surge"],
+        "sregym.conductor.problems.traffic_surge:TrafficSurge",
+        _choose_surge,
+        generation=GENERATION,
+    ),
 )

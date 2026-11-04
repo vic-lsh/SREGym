@@ -29,7 +29,7 @@ class ProcessFrozen(PodLevelFault):
         )
 
     def _args(self):
-        t = self.target
+        t = self.pod
         return self.namespace, t.kind, t.workload, t.container
 
     def inject(self) -> None:

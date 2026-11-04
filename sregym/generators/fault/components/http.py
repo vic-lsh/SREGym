@@ -20,6 +20,7 @@ from sregym.generators.fault.components.kube import ComponentError, Kube, run_cl
 
 _BEGIN, _END = "@@REQ", "@@END"
 SEED_ATTEMPTS = 3
+READ_RETRIES = 2
 
 
 @dataclass(frozen=True)
@@ -82,7 +83,7 @@ def normalize(body: str, volatile_keys: tuple[str, ...] = ()) -> Any:
 
 
 def _empty(v: Any) -> bool:
-    return v in ("", [], {})
+    return v is None or v in ("", [], {})
 
 
 @dataclass(frozen=True)
@@ -92,21 +93,25 @@ class Snapshot:
 
     def json_field_values(self, name: str) -> tuple[str, ...]:
         """Every value of JSON key ``name`` anywhere in the snapshot, as strings, first-seen order."""
-        found: list[str] = []
+        return json_field_values(self.values, name)
 
-        def walk(v: Any) -> None:
-            if isinstance(v, dict):
-                for k, x in v.items():
-                    if k == name and not isinstance(x, (dict, list)) and str(x) not in found:
-                        found.append(str(x))
-                    walk(x)
-            elif isinstance(v, list):
-                for x in v:
-                    walk(x)
 
-        for v in self.values:
-            walk(v)
-        return tuple(found)
+def json_field_values(values: Any, name: str) -> tuple[str, ...]:
+    """Every scalar value of JSON key ``name`` anywhere in ``values``, as strings, first-seen order."""
+    found: list[str] = []
+
+    def walk(v: Any) -> None:
+        if isinstance(v, dict):
+            for k, x in v.items():
+                if k == name and not isinstance(x, (dict, list)) and str(x) not in found:
+                    found.append(str(x))
+                walk(x)
+        elif isinstance(v, (list, tuple)):
+            for x in v:
+                walk(x)
+
+    walk(values)
+    return tuple(found)
 
 
 def capture(kube: Kube, binding: AppBinding, namespace: str) -> Snapshot:
@@ -135,7 +140,15 @@ def compare(kube: Kube, binding: AppBinding, namespace: str, snapshot: Snapshot)
     """Do the snapshot's reads return the same data now? ``(ok, detail)``."""
     check = binding.integrity
     assert check is not None
-    responses = fetch(kube, binding, namespace, tuple(Request(p) for p in snapshot.reads))
+    reads = tuple(Request(p) for p in snapshot.reads)
+    responses = fetch(kube, binding, namespace, reads)
+    for _ in range(READ_RETRIES):
+        # The first request after a pod restart can fail once on a stale pooled connection; a
+        # failed read is retried, changed data never is.
+        if all(r.ok for r in responses):
+            break
+        time.sleep(3)
+        responses = fetch(kube, binding, namespace, reads)
     return diff(snapshot, responses, check.volatile_keys)
 
 

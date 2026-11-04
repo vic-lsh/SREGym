@@ -30,6 +30,12 @@ from collections.abc import Mapping, Sequence
 
 from sregym.conductor.problems.composition.spec import CatalogEntry
 
+# One reason for every component kind added before it validates live (3 seeds, all trials VALID).
+_PENDING = (
+    "Pending: new component fault; kept out of __reliable plans until it validates live on 3 seeds "
+    "(tools/fault_validation/validate.py)."
+)
+
 UNRELIABLE: Mapping[tuple[str, str], str] = {
     ("resource_request_too_small", "hotel_reservation"): (
         "No symptom: with the 10Mi memory limit the recommendation container still fits when idle, "
@@ -52,14 +58,10 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
         "under load (enforcement and webhook registration lag); the three-trigger fix passed twice, but "
         "the diagnosis is not proven."
     ),
-    ("redis_replica_misconfig", "social_network"): (
-        "Pending: new component-state fault; kept out of __reliable plans until it validates live "
-        "(tools/fault_validation/validate.py) and the pinned vanilla_s42 plans are regenerated."
-    ),
-    ("memcached_poisoned_entries", "social_network"): (
-        "Pending: new component-state fault; kept out of __reliable plans until it validates live "
-        "(tools/fault_validation/validate.py) and the pinned vanilla_s42 plans are regenerated."
-    ),
+    **{
+        (key, "social_network"): _PENDING
+        for key in ("mongo_write_lock", "mongo_write_rejection", "mongo_collection_renamed", "mongo_poison_document")
+    },
     ("process_frozen", "social_network"): (
         "Pending: new pod-level fault (process driver); kept out of __reliable plans until it validates live."
     ),

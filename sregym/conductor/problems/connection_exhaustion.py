@@ -31,6 +31,6 @@ class ConnectionExhaustion(ForeignPodFault):
         )
 
     def inject(self) -> None:
-        t = self.target
+        t = self.pod
         host = f"{t.workload}.{self.namespace}.svc.cluster.local"
         load.start_hog(self.kube, self.namespace, t.kind, t.workload, t.container, host, t.port, self.connections)

@@ -11,22 +11,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Catalog family: runtime-state faults on bound components (Redis, memcached, ...).
+"""Catalog family: runtime-state faults on Redis and memcached rows of the app binding.
 
-Each entry is defined once per component kind and samples its target from the app binding
-(``composition/app_bindings.py``). Apps are opt-in per key (``ENABLED_APPS``): enable a key for
+Each entry is one ``component_entry`` call: a target sampler over the binding (verified rows
+only) and the problem class path. Apps are opt-in per key (``ENABLED_APPS``): enable a key for
 another app once its binding rows are verified and the key validates live there
-(``tools/fault_validation/validate.py``). The state lives in the component's pod, so every draw
-declares the whole workload (field None).
+(``tools/fault_validation/validate.py``).
 """
 
 from __future__ import annotations
 
 import random
-from typing import Any
 
-from sregym.conductor.problems.composition.app_bindings import BINDINGS, instances
-from sregym.conductor.problems.composition.catalog._kit import Pick, deployment, entry
+from sregym.conductor.problems.composition.app_bindings import AppBinding, instances
+from sregym.conductor.problems.composition.catalog._component import Target, component_entry, pick_one
 from sregym.conductor.problems.composition.spec import CatalogEntry
 
 ENABLED_APPS: dict[str, tuple[str, ...]] = {
@@ -36,53 +34,41 @@ ENABLED_APPS: dict[str, tuple[str, ...]] = {
 
 # Masters that can never serve a sync (a real full sync would flush the replica's data): connection
 # refused, a blackholed address (connect timeout), a name that does not resolve.
-_PHANTOM_MASTERS = ("127.0.0.1:1", "10.255.255.1:6379", "redis-primary.invalid:6379")
+PHANTOM_MASTERS = ("127.0.0.1:1", "10.255.255.1:6379", "redis-primary.invalid:6379")
+# Mirrors of the problem modules' constants (the pure catalog cannot import them); compared by
+# tests/composition/test_catalog_mirrors.py.
+CORRUPTIONS = ("garbage_bytes", "wrong_type", "stale_value")  # memcached.CORRUPTION_MODES
+KEY_SCOPES = ("one_key", "all_hot_keys")  # memcached_poisoned_entries.KEY_SCOPES
 
 
-def _choose_redis_replica(app: str, rng: random.Random) -> Pick:
-    inst = rng.choice(instances(BINDINGS[app].redis))
-    return Pick({"target": inst.workload, "master": rng.choice(_PHANTOM_MASTERS)}, (deployment(inst.workload),))
+def _redis_replica(b: AppBinding, rng: random.Random) -> Target:
+    inst = pick_one(instances(b.redis), "redis row", b.app, rng)
+    return Target({"target": inst.workload, "master": rng.choice(PHANTOM_MASTERS)})
 
 
-def _build_redis_replica(app: str, params: dict[str, Any]):
-    from sregym.conductor.problems.redis_replica_misconfig import RedisReplicaMisconfig
-
-    return RedisReplicaMisconfig(app_name=app, **params)
-
-
-_CORRUPTIONS = ("garbage_bytes", "wrong_type", "stale_value")  # mirrors memcached.CORRUPTION_MODES
-
-
-def _choose_memcached_poison(app: str, rng: random.Random) -> Pick:
-    inst = rng.choice([m for m in instances(BINDINGS[app].memcached) if m.has_hot_keys])
-    return Pick(
+def _memcached_poison(b: AppBinding, rng: random.Random) -> Target:
+    inst = pick_one([m for m in instances(b.memcached) if m.has_hot_keys], "memcached row", b.app, rng)
+    return Target(
         {
             "target": inst.workload,
-            "corruption": rng.choice(_CORRUPTIONS),
-            "key_scope": rng.choice(("one_key", "all_hot_keys")),
+            "corruption": rng.choice(CORRUPTIONS),
+            "key_scope": rng.choice(KEY_SCOPES),
             "poison_seed": rng.randrange(2**31),
-        },
-        (deployment(inst.workload),),
+        }
     )
 
 
-def _build_memcached_poison(app: str, params: dict[str, Any]):
-    from sregym.conductor.problems.memcached_poisoned_entries import MemcachedPoisonedEntries
-
-    return MemcachedPoisonedEntries(app_name=app, **params)
-
-
 ENTRIES: tuple[CatalogEntry, ...] = (
-    entry(
+    component_entry(
         "redis_replica_misconfig",
         ENABLED_APPS["redis_replica_misconfig"],
-        _choose_redis_replica,
-        _build_redis_replica,
+        "sregym.conductor.problems.redis_replica_misconfig:RedisReplicaMisconfig",
+        _redis_replica,
     ),
-    entry(
+    component_entry(
         "memcached_poisoned_entries",
         ENABLED_APPS["memcached_poisoned_entries"],
-        _choose_memcached_poison,
-        _build_memcached_poison,
+        "sregym.conductor.problems.memcached_poisoned_entries:MemcachedPoisonedEntries",
+        _memcached_poison,
     ),
 )

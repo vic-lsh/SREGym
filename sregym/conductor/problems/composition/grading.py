@@ -45,6 +45,17 @@ class Request:
 
     path: str
     form: tuple[tuple[str, str], ...] | None = None  # urlencoded POST fields, in order; None = GET
+    # Read-back for a write whose HTTP status does not prove it landed (social-network compose
+    # answers 200 when the database dropped the write): the probe appends a fresh marker to the
+    # value of form field `marker_field`, then GETs `readback`, which must contain the marker.
+    marker_field: str | None = None
+    readback: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.marker_field is None) != (self.readback is None):
+            raise ValueError(f"{self.path}: marker_field and readback go together")
+        if self.marker_field is not None and self.marker_field not in dict(self.form or ()):
+            raise ValueError(f"{self.path}: marker_field {self.marker_field!r} is not a form field")
 
     @property
     def method(self) -> str:
@@ -127,8 +138,10 @@ ENTRY_POINTS: Mapping[str, EntryPoint] = {
                     ("user_id", str(SOCIAL_PROBE_USER_ID)),
                     ("username", SOCIAL_PROBE_USERNAME),
                     ("post_type", "0"),
-                    ("text", "sregym traffic probe"),
+                    ("text", "sregym traffic probe "),
                 ),
+                marker_field="text",
+                readback=f"/wrk2-api/user-timeline/read?user_id={SOCIAL_PROBE_USER_ID}&start=0&stop=5",
             ),
             Request(
                 "/wrk2-api/user/follow",
@@ -196,6 +209,9 @@ def probe_script(namespace: str, entry: EntryPoint, rounds: int = PROBE_ROUNDS) 
     return f"{setup}i=0; while [ $i -lt {int(rounds)} ]; do {body}; i=$((i+1)); done; echo {_DONE}"
 
 
+_MARKER_SLOT = "MARKERSLOT"
+
+
 def wget_command(base: str, req: Request, output: str = "/dev/null") -> str:
     """The busybox wget invocation for one request; it succeeds only on a 2xx/3xx answer.
 
@@ -207,15 +223,28 @@ def wget_command(base: str, req: Request, output: str = "/dev/null") -> str:
     post = req.post_data()
     if post is None:
         return f"wget -q -T {PROBE_REQUEST_TIMEOUT_S} -O {output} {url}"
-    return (
-        f"wget -q -S -T {PROBE_REQUEST_TIMEOUT_S} -O {output} --post-data {shlex.quote(post)} {url} 2>&1 "
+    data = shlex.quote(post)
+    if req.marker_field is not None:
+        # The marker ($m, set per request by the probe) goes at the end of the marker field's value.
+        form = tuple((k, v + _MARKER_SLOT if k == req.marker_field else v) for k, v in req.form or ())
+        data = '"' + urlencode(form).replace(_MARKER_SLOT, "$m") + '"'
+    status = (
+        f"wget -q -S -T {PROBE_REQUEST_TIMEOUT_S} -O {output} --post-data {data} {url} 2>&1 "
         "| grep -m1 'HTTP/1' | grep -q ' [23][0-9][0-9] '"
+    )
+    if req.readback is None:
+        return status
+    back = shlex.quote(base + req.readback)
+    return (
+        f'{{ m="pm$$$(date +%s)$i"; {status} && sleep 1 && '
+        f'wget -q -T {PROBE_REQUEST_TIMEOUT_S} -O - {back} 2>/dev/null | grep -q "$m"; }}'
     )
 
 
 def probe_deadline_s(entry: EntryPoint, rounds: int = PROBE_ROUNDS) -> int:
     """Upper bound on the probe's run time (every request timing out) plus scheduling slack."""
-    return (rounds * len(entry.requests()) + len(entry.setup)) * PROBE_REQUEST_TIMEOUT_S + 60
+    per_round = sum(2 + (2 if r.readback else 0) for r in entry.requests()) / 2
+    return int((rounds * per_round + len(entry.setup)) * PROBE_REQUEST_TIMEOUT_S) + 60
 
 
 def probe_pod_manifest(name: str, namespace: str, entry: EntryPoint, rounds: int = PROBE_ROUNDS) -> dict[str, Any]:

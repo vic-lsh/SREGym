@@ -902,6 +902,14 @@ if __name__ == "__main__":
         "(composition/reliability.py). Their ids carry the __reliable suffix, so a run is reproducible "
         "from its ids. Off by default: existing ids keep their plans.",
     )
+    parser.add_argument(
+        "--catalog-generation",
+        type=int,
+        default=1,
+        help="In a planned sequence, draw N>=2 compositions from catalog generations 1..G "
+        "(composition/spec.py LATEST_GENERATION; 2 adds the component incident faults). Ids carry "
+        "__g<G>; the default 1 keeps existing ids and their plans.",
+    )
     parser.add_argument("--worker-child", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
@@ -923,6 +931,10 @@ if __name__ == "__main__":
         parser.error("--sequence-len must not be negative")
     if args.max_turns < 0:
         parser.error("--max-turns must be 0 (no cap) or a positive integer")
+    from sregym.conductor.problems.composition.spec import LATEST_GENERATION
+
+    if not 1 <= args.catalog_generation <= LATEST_GENERATION:
+        parser.error(f"--catalog-generation must be in 1..{LATEST_GENERATION}")
     if args.fault_count_weights is not None:
         try:
             parse_weights(args.fault_count_weights)
@@ -937,7 +949,11 @@ if __name__ == "__main__":
         if unknown_apps:
             parser.error(f"--apps contains unsupported applications: {sorted(unknown_apps)}")
     if (
-        args.fault_count_weights or args.composition_apps or args.schedule != "list" or args.exclude_unreliable_faults
+        args.fault_count_weights
+        or args.composition_apps
+        or args.schedule != "list"
+        or args.exclude_unreliable_faults
+        or args.catalog_generation != 1
     ) and not args.sequence_len:
         parser.error("--num-problems is required for a planned sequence")
     if args.seed_summary and not Path(args.seed_summary).is_file():

@@ -11,6 +11,7 @@ import random
 
 import pytest
 
+from sregym.conductor.problems.component_fault import Expect
 from sregym.conductor.problems.composition import app_bindings, catalog
 from sregym.conductor.problems.composition.catalog import infrastructure
 from sregym.conductor.problems.pod_network_impairment import PodNetworkImpairment
@@ -127,15 +128,24 @@ def test_freeze_raises_when_signal_did_not_take(world):
         process.freeze(nodes, "ns", "Deployment", "x", None)
 
 
-def test_decoys_are_per_target(world):
-    store, _ = _frozen(world, "home-timeline-redis")
-    assert {"restore_source", "rollout_restart", "restart_stateful_pod"} == set(store.decoy_mitigations())
+def _expect(p):
+    return {name: (r.expect, r.destroys_data) for name, r in p.repairs().items()}
+
+
+def test_restart_expectations_are_per_target(world):
+    store, _ = _frozen(world, "home-timeline-redis")  # the only copy of the timelines: restart loses data
+    assert _expect(store)["rollout_restart"] == (Expect.DATA_LOST, True)
+    assert _expect(store)["restart_stateful_pod"] == (Expect.DATA_LOST, True)
+    assert _expect(store)["restore_source"][0] is Expect.FAULT_NOT_CLEARED
     assert not store.acceptable_mitigations()
+    assert store.data_stores() == (store.target,)  # witnessed
     svc, _ = _frozen(world, "user-service")
+    assert svc.restart_clears and not svc.data_stores()
+    assert _expect(svc)["rollout_restart"] == (Expect.PASSES, False)
+    assert _expect(svc)["restart_stateful_pod"] == (Expect.PASSES, False)
     assert set(svc.decoy_mitigations()) == {"restore_source"}
-    assert {"rollout_restart", "restart_stateful_pod"} == set(svc.acceptable_mitigations())
-    cache, _ = _frozen(world, "user-timeline-redis")
-    assert "rollout_restart" in cache.acceptable_mitigations()
+    cache, _ = _frozen(world, "user-timeline-redis")  # rebuildable cache
+    assert _expect(cache)["rollout_restart"] == (Expect.PASSES, False)
 
 
 def test_restart_clears_a_freeze_and_netem_on_stateless_target(world):
@@ -143,7 +153,7 @@ def test_restart_clears_a_freeze_and_netem_on_stateless_target(world):
     p = PodNetworkImpairment("social_network", "user-service", "delay", 3000, kube=kube, nodes=nodes)
     p.inject()
     assert p.fault_cleared()[0] is False
-    p.acceptable_mitigations()["rollout_restart"]()
+    p.acceptable_mitigations()["rollout_restart"].run()
     assert p.fault_cleared()[0] is True
 
 
@@ -174,7 +184,10 @@ def test_infrastructure_draws_declare_whole_workload_and_sample_every_target():
         seen.add(t)
         assert [(f.kind, f.name, f.field) for f in draw.footprints] == [("Deployment", t, None)]
     assert seen == {
-        t.workload for t in infrastructure._targets("social_network", protocols=("redis", "mongo", "thrift", "grpc"))
+        t.workload
+        for t in infrastructure._targets(
+            app_bindings.SOCIAL_NETWORK, protocols=("redis", "mongo", "thrift", "grpc")
+        )
     }
     assert app_bindings.workload_targets(app_bindings.SOCIAL_NETWORK)
 
@@ -220,8 +233,13 @@ def test_foreign_fault_clears_only_when_pod_is_gone(offline, monkeypatch):  # no
     monkeypatch.setattr(ForeignPodFault, "_wait_drained", lambda self: drained.append(True))
     p = ConnectionExhaustion("social_network", "unique-id-service", 6000, kube=kube)
     assert p.fault_cleared()[0] is False
-    assert set(p.decoy_mitigations()) == {"restore_source", "rollout_restart"}
-    p.decoy_mitigations()["rollout_restart"]()
+    assert not p.restart_clears
+    assert {n: r.expect for n, r in p.decoy_mitigations().items()} == {
+        "restore_source": Expect.FAULT_NOT_CLEARED,
+        "rollout_restart": Expect.FAULT_NOT_CLEARED,
+        "restart_stateful_pod": Expect.FAULT_NOT_CLEARED,
+    }
+    p.decoy_mitigations()["rollout_restart"].run()
     assert p.fault_cleared()[0] is False  # the hog outlives a restart of its victim
     p.reference_mitigation()
     assert p.fault_cleared()[0] is True and drained  # the reference waits for the entry point to drain
