@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import os
 import random
 import secrets
 import sys
@@ -67,7 +68,11 @@ def _symptom(problem, cluster) -> dict[str, Any]:
 
 
 def run_trial(problem, cluster, name: str, mitigation: Callable[[], None], expect_pass: bool, persist_s: float):
-    row: dict[str, Any] = {"trial": name, "expect": "PASS" if expect_pass else "FAIL"}
+    row: dict[str, Any] = {
+        "trial": name,
+        "expect": "PASS" if expect_pass else "FAIL",
+        "host_load_1m_start": os.getloadavg()[0],
+    }
     t0 = time.monotonic()
     try:
         problem.inject_fault()
@@ -86,6 +91,7 @@ def run_trial(problem, cluster, name: str, mitigation: Callable[[], None], expec
             problem.recover_fault()
         except Exception as e:
             row["recover_error"] = f"{type(e).__name__}: {e}"[:400]
+    row["host_load_1m_end"] = os.getloadavg()[0]
     row["duration_s"] = round(time.monotonic() - t0, 1)
     return row
 
