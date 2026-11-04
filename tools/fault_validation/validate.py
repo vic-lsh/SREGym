@@ -60,11 +60,14 @@ class Harness:
         reset_cmd: str | None,
         ready_deadline_s: float = READY_DEADLINE_S,
         ready_poll_s: float = READY_POLL_S,
+        symptom_samples: int = 1,
+        symptom_gap_s: float = 10.0,
         clock=time.monotonic,
         sleep=time.sleep,
     ):
         self.cluster = cluster
         self.ready_deadline_s, self.ready_poll_s = ready_deadline_s, ready_poll_s
+        self.symptom_samples, self.symptom_gap_s = symptom_samples, symptom_gap_s
         self._clock, self._sleep = clock, sleep
         self.persist_s = persist_s
         self.probe_rounds = probe_rounds
@@ -107,6 +110,17 @@ class Harness:
             self._sleep(self.ready_poll_s)
 
     def symptom(self, problem) -> dict[str, Any]:
+        """Visible in any of ``symptom_samples`` readings (default 1) spaced ``symptom_gap_s`` apart. A fault whose
+        victim is repeatedly OOM-killed and restarted (connection_exhaustion) shows its symptom in waves, so one
+        reading can land in a healthy gap; the row records ``samples`` taken."""
+        for taken in range(1, max(1, self.symptom_samples) + 1):
+            out = self._symptom_once(problem)
+            if out["visible"] or taken >= self.symptom_samples:
+                return {**out, "samples": taken}
+            self._sleep(self.symptom_gap_s)
+        raise AssertionError("unreachable")
+
+    def _symptom_once(self, problem) -> dict[str, Any]:
         """Visible at the entry points: the traffic probe fails, seeded reads changed or fail, or a
         write through the entry point does not land."""
         fault = problem.mitigation_oracle.evaluate()
@@ -258,8 +272,8 @@ class Harness:
                     else:
                         yield emit({"trial": "reset_needed", "status": VALID, "pass": True, "after": name})
             self.cluster.wait_for_rollouts(namespace, SETTLE_S)
-            final = self.health(namespace, problem.binding.entry)
-            ok = final["collateral_ok"] and final["traffic_ok"]
+            final = self.wait_ready(namespace, problem.binding.entry)
+            ok = final["ready"]
             yield emit({"trial": "recovered", **final, "status": VALID if ok else INVALID, "pass": ok})
         counts = {s: sum(r.get("status") == s for r in rows) for s in (VALID, FAIL, INVALID)}
         yield {
@@ -438,6 +452,12 @@ def main(argv: list[str] | None = None) -> int:
         default=READY_DEADLINE_S,
         help="max wait for rollouts + a passing baseline probe before a seed's baseline and after a reset",
     )
+    ap.add_argument(
+        "--symptom-samples",
+        type=int,
+        default=1,
+        help="readings per symptom check (visible if any shows it); for faults whose symptom comes in waves",
+    )
     ap.add_argument("--state-dir", default=str(DEFAULT_STATE_DIR), help="'' disables persisting injected state")
     ap.add_argument("--lanes", nargs="*", default=None, help="kubeconfigs: shard seeds over them in parallel")
     ap.add_argument(
@@ -476,6 +496,7 @@ def main(argv: list[str] | None = None) -> int:
         state_dir=Path(args.state_dir) if args.state_dir else None,
         reset_cmd=args.reset_cmd,
         ready_deadline_s=args.ready_deadline_s,
+        symptom_samples=args.symptom_samples,
     )
     all_ok = True
 

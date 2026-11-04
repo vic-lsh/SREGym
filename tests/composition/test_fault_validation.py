@@ -289,3 +289,26 @@ def test_reset_row_is_valid_only_once_the_app_is_ready_again():
     assert row["status"] == "VALID" and row["settle"]["attempts"] == 3
     h, _, _ = _settling_harness(unhealthy_polls=10**6, deadline=30.0)
     assert h.reset("ns", _ENTRY)["status"] == "INVALID"
+
+
+def test_a_wave_symptom_is_seen_when_any_sample_shows_it():
+    state = {"broken": True}
+    h = validate.Harness(
+        FakeCluster(state), persist_s=0, probe_rounds=1, state_dir=None, reset_cmd=None, symptom_samples=3,
+        symptom_gap_s=1.0, sleep=lambda s: None,
+    )
+    problem = FakeProblem(state)
+    seen = iter([False, False, True])
+    h._symptom_once = lambda p: {"visible": next(seen), "traffic": {}, "fault": {}}
+    got = h.symptom(problem)
+    assert got["visible"] and got["samples"] == 3
+
+
+def test_a_symptom_that_never_shows_stays_invisible_after_all_samples():
+    h = validate.Harness(
+        FakeCluster({"broken": False}), persist_s=0, probe_rounds=1, state_dir=None, reset_cmd=None,
+        symptom_samples=2, symptom_gap_s=1.0, sleep=lambda s: None,
+    )
+    h._symptom_once = lambda p: {"visible": False, "traffic": {}, "fault": {}}
+    got = h.symptom(FakeProblem({"broken": False}))
+    assert not got["visible"] and got["samples"] == 2
