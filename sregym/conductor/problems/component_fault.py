@@ -94,6 +94,8 @@ Mitigation = Repair  # kept for subclasses that annotate with it
 
 WRITE_CHECK_ATTEMPTS = 4  # social-network writes are one-way: give one a few seconds to land
 WRITE_CHECK_WAIT_S = 3.0
+INTEGRITY_ATTEMPTS = 3  # reads right after a restart can return empty until the service's pool reconnects
+INTEGRITY_WAIT_S = 5.0
 NOT_CLEARED_COMPONENTS = frozenset({"fault", "write"})
 LOST_COMPONENTS = frozenset({"data", "witness"})
 
@@ -312,6 +314,17 @@ class ComponentFaultProblem(Problem):
                 return True, f"marker visible at {check.read} after {attempt + 1} reads"
         return False, f"marker written through {check.path} not visible at {check.read}"
 
+    def _integrity_settled(self) -> tuple[bool, str]:
+        """Compare the seeded reads, polling briefly: a restart leaves a settle artefact (the first
+        reads through a restarted store or service come back empty), which is not data loss."""
+        for attempt in range(INTEGRITY_ATTEMPTS):
+            intact, detail = http.compare(self.kube, self.binding, self.namespace, self.snapshot)
+            if intact:
+                return True, detail if attempt == 0 else f"{detail} (settled after {attempt + 1} reads)"
+            if attempt + 1 < INTEGRITY_ATTEMPTS:
+                time.sleep(INTEGRITY_WAIT_S)
+        return False, detail
+
     def verdict(self) -> dict[str, Any]:
         """The per-fault verdict; raises ComponentError when a check could not run."""
         failed: list[str] = []
@@ -329,7 +342,7 @@ class ComponentFaultProblem(Problem):
         elif self.snapshot is None:
             raise ComponentError(f"{type(self).__name__}: no seeded-data snapshot (fault not injected here)")
         else:
-            intact, result["integrity_detail"] = http.compare(self.kube, self.binding, self.namespace, self.snapshot)
+            intact, result["integrity_detail"] = self._integrity_settled()
             result["integrity_ok"] = intact
             if not intact:
                 failed.append("data")

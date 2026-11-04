@@ -529,3 +529,19 @@ def test_a_failed_recovery_still_releases_the_snapshot(offline, monkeypatch):
     monkeypatch.setattr(p, "reference_mitigation", lambda: (_ for _ in ()).throw(ComponentError("exec flake")))
     p.recover_fault()  # the decorator logs a recovery error instead of raising
     assert p.snapshot is None and not p.witnesses and not p._prepared
+
+
+def test_integrity_read_polls_so_a_settle_artefact_is_not_data_loss(offline, monkeypatch):
+    """Regression (FR2/FP2): the first seeded read after a restart came back empty and was charged
+    as DATA_LOST; a read that settles within the poll window passes, a persistent diff still fails."""
+    kube = _kube()
+    p = _build("redis_replica_misconfig", {"target": "home-timeline-redis", "master": "127.0.0.1:1"}, kube)
+    p.inject_fault()
+    p.reference_mitigation()
+    answers = iter([(False, "empty"), (False, "empty"), (True, "same")])
+    monkeypatch.setattr(http, "compare", lambda *a: next(answers))
+    assert p.verdict()["integrity_ok"] is True
+    calls = []
+    monkeypatch.setattr(http, "compare", lambda *a: calls.append(1) or (False, "changed"))
+    v = p.verdict()
+    assert v["reason"] == "data_lost" and len(calls) == component_fault.INTEGRITY_ATTEMPTS
