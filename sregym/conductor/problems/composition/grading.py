@@ -226,6 +226,8 @@ def wget_command(base: str, req: Request, output: str = "/dev/null") -> str:
     data = shlex.quote(post)
     if req.marker_field is not None:
         # The marker ($m, set per request by the probe) goes at the end of the marker field's value.
+        # It is [a-z0-9] only (form-encoding safe) and built without "$(" or "$$": Kubernetes
+        # expands $(VAR) and $$ in a container command before the shell sees it.
         form = tuple((k, v + _MARKER_SLOT if k == req.marker_field else v) for k, v in req.form or ())
         data = '"' + urlencode(form).replace(_MARKER_SLOT, "$m") + '"'
     status = (
@@ -236,7 +238,7 @@ def wget_command(base: str, req: Request, output: str = "/dev/null") -> str:
         return status
     back = shlex.quote(base + req.readback)
     return (
-        f'{{ m="pm$$$(date +%s)$i"; {status} && sleep 1 && '
+        f'{{ m="pm${{RANDOM}}${{RANDOM}}r$i"; {status} && sleep 1 && '
         f'wget -q -T {PROBE_REQUEST_TIMEOUT_S} -O - {back} 2>/dev/null | grep -q "$m"; }}'
     )
 
