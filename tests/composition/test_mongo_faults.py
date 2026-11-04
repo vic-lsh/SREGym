@@ -163,7 +163,8 @@ def test_draws_cover_every_verified_target_and_declare_the_whole_workload(key):
         draw = entry.sample("social_network", random.Random(seed))
         params = draw.param_dict()
         seen.add(params["target"])
-        assert [(f.kind, f.name, f.field) for f in draw.footprints] == [("Deployment", params["target"], None)]
+        fps = [(f.kind, f.name, f.field) for f in draw.footprints]
+        assert fps[0] == ("Deployment", params["target"], None) and all(f[2] is None for f in fps)
         assert "media-mongodb" not in params["target"]
     assert seen == expected
 

@@ -200,11 +200,14 @@ class IntegrityCheck:
     normalized bodies; after mitigation the same reads must return the same data. If any read
     comes back empty (``""``, ``[]``, ``{}``), ``seed`` runs once first, so the snapshot holds
     real data. ``volatile_keys`` are JSON object keys dropped before comparing.
+    ``depends_on``: workloads whose stored data the reads return and whose restart loses it; the
+    generator never composes a fault on one of them with a fault that relies on this check.
     """
 
     reads: tuple[str, ...]
     seed: tuple[Request, ...] = ()
     volatile_keys: tuple[str, ...] = ()
+    depends_on: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -382,6 +385,9 @@ SOCIAL_NETWORK = AppBinding(
             f"/wrk2-api/home-timeline/read?user_id={_SOCIAL_FOLLOWER}&start=0&stop=20",
         ),
         seed=_SOCIAL_SEED,
+        # user timelines: user-timeline-redis is a cache over user-timeline-mongodb; posts:
+        # post-storage-memcached over post-storage-mongodb; home timelines: only home-timeline-redis.
+        depends_on=("home-timeline-redis", "user-timeline-mongodb", "post-storage-mongodb"),
     ),
 )
 
