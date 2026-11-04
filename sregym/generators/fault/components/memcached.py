@@ -46,7 +46,7 @@ CHUNK = 100  # payloads per client pod: keeps the exec command line far below th
 def _run(kube: Kube, namespace: str, inst: MemcachedInstance, payloads: list[bytes]) -> list[bytes]:
     """Send each payload on its own connection; return each raw reply (in chunks of ``CHUNK`` per pod)."""
     replies: list[bytes] = []
-    for i in range(0, max(len(payloads), 1), CHUNK):
+    for i in range(0, len(payloads), CHUNK):
         replies += _run_chunk(kube, namespace, inst, payloads[i : i + CHUNK])
     return replies
 

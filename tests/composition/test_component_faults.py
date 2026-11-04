@@ -465,6 +465,13 @@ def test_broad_scope_poisons_live_keys_beyond_the_probe_paths(offline):
     assert p.fault_cleared()[0]
 
 
+def test_memcached_empty_key_lists_send_nothing(offline):
+    kube = _kube()
+    inst = app_bindings.SOCIAL_NETWORK.memcached[0]
+    assert memcached.get_many(kube, "ns", inst, ()) == {}
+    memcached.delete_many(kube, "ns", inst, ())
+
+
 def test_memcached_poison_refuses_when_nothing_is_cached(offline):
     kube = _kube()
     params = {"target": "post-storage-memcached", "corruption": "stale_value", "key_scope": "one_key", "poison_seed": 1}
