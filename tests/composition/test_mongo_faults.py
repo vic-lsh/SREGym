@@ -53,11 +53,22 @@ class FakeMongoKube(FakeKube):
         self.ids = ['ObjectId("a1")', 'ObjectId("a2")']
         self.poison: set[str] = set()
         self.missing: set[str] = set()
+        self.before: list[str] = []  # posts composed before the rename
+        self.during: list[str] = []  # posts composed while the collection was renamed away
 
     def _serve(self, path, post):
         if post is not None and path.endswith("/post/compose") and (self.locked or self.validator or self.index):
             return True, "Successfully upload post"  # one-way compose: the app says 200, the write is lost
-        return super()._serve(path, post)
+        before = self.next_post
+        served = super()._serve(path, post)
+        if post is not None and path.endswith("/post/compose") and self.next_post > before:
+            (self.during if self.old_exists else self.before).append(str(self.next_post))
+        return served
+
+    def _lose(self, ids):
+        """A lossy merge: these posts vanish from every timeline (the new or the old document is gone)."""
+        for tl in (*self.timelines.values(), *self.homes.values()):
+            tl[:] = [p for p in tl if p["post_id"] not in ids]
 
     def wipe(self):
         self.reset_data()
@@ -110,6 +121,8 @@ class FakeMongoKube(FakeKube):
             return out({"ok": True})
         if "var merged" in s:
             merged = self.old_exists
+            if merged and "insertOne" not in s:  # no fold: drop_target loses the writes made during the fault,
+                self._lose(set(self.before) if "replaceOne" in s else set(self.during))  # overwrite the old history
             self.old_exists = False
             return out({"merged": 0, "renamed": merged})
         if "old_exists:" in s:
