@@ -79,6 +79,19 @@ class MemcachedInstance:
 
 
 @dataclass(frozen=True)
+class WriteCheck:
+    """A write whose effect the entry points show: POST ``path`` with ``fields`` (the ``marker_field``
+    value is replaced by a fresh marker each time), then ``read`` must return a body containing the
+    marker. Needed where the app swallows a failed database write (social-network's compose is
+    one-way and answers 200 whatever the database did), so an HTTP status probe cannot see it."""
+
+    path: str
+    fields: tuple[tuple[str, str], ...]
+    marker_field: str
+    read: str
+
+
+@dataclass(frozen=True)
 class MongoCollection:
     """One collection of a Mongo instance and what the Mongo faults need to know about it.
 
@@ -90,6 +103,7 @@ class MongoCollection:
     ``unique_key``/``stamp_field``: an indexable field every document carries and a numeric
     timestamp field; together they let the unique-index write rejection reject every NEW document
     (a partial unique index over documents newer than now) while existing ones are unaffected.
+    ``write_check``: a write plus the read that must show it, used by faults that block writes.
     ``faults``: the Mongo fault kinds verified live on this collection (only those sample it).
     """
 
@@ -99,8 +113,18 @@ class MongoCollection:
     poison_fields: tuple[str, ...] = ()
     unique_key: str | None = None
     stamp_field: str | None = None
+    write_check: WriteCheck | None = None
     faults: tuple[str, ...] = ()
 
+
+# Compose as the traffic probe's user (9200) and read it back from that user's timeline. Compose is
+# one-way, so a database that refuses the write still answers 200; only the missing post shows it.
+_SOCIAL_COMPOSE_CHECK = WriteCheck(
+    "/wrk2-api/post/compose",
+    (("user_id", "9200"), ("username", "sregym_probe_9200"), ("post_type", "0"), ("text", "")),
+    "text",
+    "/wrk2-api/user-timeline/read?user_id=9200&start=0&stop=10",
+)
 
 MONGO_FAULTS = ("mongo_write_lock", "mongo_write_rejection", "mongo_collection_renamed", "mongo_poison_document")
 
@@ -241,7 +265,14 @@ SOCIAL_NETWORK = AppBinding(
         MongoInstance(
             "user-timeline-mongodb",
             "user-timeline",
-            (MongoCollection("user-timeline", cache="user-timeline-redis", faults=MONGO_FAULTS[:3]),),
+            (
+                MongoCollection(
+                    "user-timeline",
+                    cache="user-timeline-redis",
+                    write_check=_SOCIAL_COMPOSE_CHECK,
+                    faults=MONGO_FAULTS[:3],
+                ),
+            ),
             consumers=("user-timeline-service",),
         ),
         MongoInstance(
@@ -255,6 +286,7 @@ SOCIAL_NETWORK = AppBinding(
                     poison_fields=("text", "creator"),
                     unique_key="post_type",
                     stamp_field="timestamp",
+                    write_check=_SOCIAL_COMPOSE_CHECK,
                     faults=MONGO_FAULTS,
                 ),
             ),
@@ -263,13 +295,13 @@ SOCIAL_NETWORK = AppBinding(
         MongoInstance(
             "social-graph-mongodb",
             "social-graph",
-            (MongoCollection("social-graph", cache="social-graph-redis", faults=MONGO_FAULTS[:3]),),
+            (MongoCollection("social-graph", cache="social-graph-redis", faults=MONGO_FAULTS[:2]),),
             consumers=("social-graph-service",),
         ),
         MongoInstance(
             "user-mongodb",
             "user",
-            (MongoCollection("user", cache="user-memcached", faults=MONGO_FAULTS[:3]),),
+            (MongoCollection("user", cache="user-memcached", faults=("mongo_collection_renamed",)),),
             ("user-service",),
         ),
         # No service reads or writes these: not valid targets.

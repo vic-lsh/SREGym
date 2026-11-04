@@ -16,12 +16,19 @@ from types import SimpleNamespace
 import pytest
 from test_component_faults import FakeKube, offline  # noqa: F401  (offline is a fixture)
 
+from sregym.conductor.problems import mongo_component_faults
 from sregym.conductor.problems.composition import app_bindings, catalog
 from sregym.conductor.problems.composition.catalog import component_mongo
 from sregym.generators.fault.components import mongo
 from sregym.generators.fault.components.kube import ComponentError
 
-pytestmark = pytest.mark.usefixtures("offline")
+pytestmark = pytest.mark.usefixtures("offline", "no_write_wait")
+
+
+@pytest.fixture
+def no_write_wait(monkeypatch):
+    monkeypatch.setattr(mongo_component_faults, "WRITE_CHECK_WAIT_S", 0.0)
+
 
 B = app_bindings.SOCIAL_NETWORK
 
@@ -45,6 +52,11 @@ class FakeMongoKube(FakeKube):
         self.ids = ['ObjectId("a1")', 'ObjectId("a2")']
         self.poison: set[str] = set()
         self.missing: set[str] = set()
+
+    def _serve(self, path, post):
+        if post is not None and path.endswith("/post/compose") and (self.locked or self.validator or self.index):
+            return True, "Successfully upload post"  # one-way compose: the app says 200, the write is lost
+        return super()._serve(path, post)
 
     def wipe(self):
         self.reset_data()
@@ -301,3 +313,29 @@ def test_poison_refuses_when_no_seeded_document_matches():
     kube.missing = {"1001", "1002", "1003"}
     with pytest.raises(ComponentError, match="was poisoned"):
         p.inject_fault()
+
+
+@pytest.mark.parametrize(
+    "key,params",
+    [
+        ("mongo_write_lock", {"target": "post-storage-mongodb"}),
+        (
+            "mongo_write_rejection",
+            {"target": "user-timeline-mongodb", "collection": "user-timeline", "mode": "validator"},
+        ),
+    ],
+)
+def test_write_faults_are_visible_through_the_write_round_trip(key, params):
+    kube = FakeMongoKube()
+    p = _inject(key, params, kube)
+    v = p.verdict()
+    assert v["integrity_ok"] is False and "did not appear" in v["write_detail"]  # symptom visible, HTTP says 200
+    p.reference_mitigation()
+    v = p.verdict()
+    assert v["success"] and "marker post visible" in v["write_detail"]
+
+
+def test_non_write_faults_skip_the_round_trip():
+    kube = FakeMongoKube()
+    p = _inject("mongo_collection_renamed", {"target": "post-storage-mongodb", "collection": "post"}, kube)
+    assert "write_detail" not in p.verdict()

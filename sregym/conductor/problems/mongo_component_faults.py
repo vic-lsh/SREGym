@@ -17,15 +17,20 @@ and restarting the consuming service leaves the database state alone.
 
 from __future__ import annotations
 
+import secrets
+import time
 from typing import Any
 
 from sregym.conductor.problems.component_fault import ComponentFaultProblem, Mitigation
 from sregym.conductor.problems.composition.app_bindings import BINDINGS, MongoCollection, MongoInstance
+from sregym.conductor.problems.composition.grading import Request
 from sregym.generators.fault.components import http, memcached, mongo, redis
 from sregym.generators.fault.components.kube import ComponentError, delete_pods, rollout_restart
 
 WRITE_MODES = ("validator", "unique_index")
 POISON_SCOPES = ("one_doc", "all_seeded")
+WRITE_CHECK_ATTEMPTS = 4  # the write is one-way: give it a few seconds to land before reading it back
+WRITE_CHECK_WAIT_S = 3.0
 
 
 def resolve(app_name: str, target: str, collection: str | None) -> tuple[MongoInstance, MongoCollection]:
@@ -48,6 +53,7 @@ class MongoFaultProblem(ComponentFaultProblem):
     """Shared plumbing: target resolution, seeded data, cache flush, data-loss check, decoys."""
 
     fault_kind = ""
+    blocks_writes = False  # the fault stops writes, so the verdict also needs a write that lands
 
     def __init__(self, app_name: str, target: str, collection: str | None, description: str, namespace=None, kube=None):
         self.instance, self.coll = resolve(app_name, target, collection)
@@ -96,8 +102,30 @@ class MongoFaultProblem(ComponentFaultProblem):
                 return
         raise ComponentError(f"{self.namespace}: cache {name!r} of {self.coll.name} is not in the binding")
 
+    def write_roundtrip(self) -> tuple[bool, str]:
+        """Write through the entry point and read it back (``MongoCollection.write_check``)."""
+        check = self.coll.write_check
+        if check is None:
+            return True, "no write check for this collection"
+        marker = f"sregym-rt-{secrets.token_hex(4)}"
+        fields = tuple((k, marker if k == check.marker_field else v) for k, v in check.fields)
+        http.fetch(self.kube, self.binding, self.namespace, (Request(check.path, fields),))
+        for attempt in range(WRITE_CHECK_ATTEMPTS):
+            time.sleep(WRITE_CHECK_WAIT_S)
+            (read,) = http.fetch(self.kube, self.binding, self.namespace, (Request(check.read),))
+            if read.ok and marker in read.body:
+                return True, f"marker post visible after {attempt + 1} reads"
+        return False, f"a post written through {check.path} did not appear at {check.read}"
+
     def verdict(self) -> dict[str, Any]:
         result = super().verdict()
+        if self.blocks_writes and self.coll.write_check is not None:
+            written, detail = self.write_roundtrip()
+            result.update(
+                success=bool(result["success"]) and written,
+                integrity_ok=bool(result.get("integrity_ok")) and written,
+                write_detail=detail,
+            )
         if self.record is None:
             result.update(success=False, data_detail="no data record (fault not injected here)")
             return result
@@ -124,6 +152,7 @@ class MongoFaultProblem(ComponentFaultProblem):
 
 class MongoWriteLock(MongoFaultProblem):
     fault_kind = "mongo_write_lock"
+    blocks_writes = True
 
     def __init__(self, app_name: str, target: str, namespace=None, kube=None):
         super().__init__(
@@ -152,6 +181,7 @@ class MongoWriteLock(MongoFaultProblem):
 
 class MongoWriteRejection(MongoFaultProblem):
     fault_kind = "mongo_write_rejection"
+    blocks_writes = True
 
     def __init__(self, app_name: str, target: str, collection: str, mode: str, namespace=None, kube=None):
         if mode not in WRITE_MODES:
