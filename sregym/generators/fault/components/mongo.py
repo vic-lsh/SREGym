@@ -20,6 +20,7 @@ come in inject/repair/status triples:
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -33,6 +34,8 @@ RENAME_SUFFIX = "_old"
 POISON_SHAPES = ("wrong_type", "field_renamed")
 POISON_RENAME_SUFFIX = "_legacy"
 SAMPLE_IDS = 20
+CONNECT_ATTEMPTS = 8  # a restarted mongod accepts connections some seconds after its pod is Ready
+CONNECT_BACKOFF_S = 5.0
 
 _PRELUDE = (
     "function chk(r){ if(!r || r.ok !== 1){ throw new Error('command failed: ' + tojson(r)); } return r; }\n"
@@ -46,12 +49,16 @@ def _js(value: Any) -> str:
 
 def run_js(kube: Kube, namespace: str, inst: MongoInstance, script: str) -> dict[str, Any]:
     """Run ``script`` in the instance's shell and return the object it passed to ``out()``."""
-    pod = pod_for(kube, namespace, inst.kind, inst.workload)
     argv = [inst.shell, "--quiet", "--port", str(inst.port), "--eval", _PRELUDE + script]
-    try:
-        text = exec_in(kube, namespace, pod, argv, container=inst.container)
-    except ComponentError as e:
-        raise ComponentError(f"{inst.workload} in {namespace}: {inst.shell} script failed: {e}") from e
+    for attempt in range(CONNECT_ATTEMPTS):
+        try:
+            pod = pod_for(kube, namespace, inst.kind, inst.workload)
+            text = exec_in(kube, namespace, pod, argv, container=inst.container)
+            break
+        except ComponentError as e:
+            if attempt == CONNECT_ATTEMPTS - 1:
+                raise ComponentError(f"{inst.workload} in {namespace}: {inst.shell} script failed: {e}") from e
+            time.sleep(CONNECT_BACKOFF_S)
     for line in reversed(text.splitlines()):
         if line.startswith("@@JSON "):
             return json.loads(line[len("@@JSON ") :])
