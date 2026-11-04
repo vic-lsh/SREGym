@@ -157,7 +157,7 @@ mode) and `faults`, the Mongo fault kinds verified live on that collection; only
 (`mongo_targets`). Instances unreachable from any entry point (`media-mongodb`) or empty after the
 seed (`url-shorten-mongodb`) are `verified=False`.
 
-### Lane notes (read before validating)
+## Lane notes (read before validating)
 
 - nginx-thrift: the stock `worker_processes auto` forks one worker per host CPU (64 on a large
   host) into a 128Mi limit; workers grow as they load the Lua thrift clients and the pod is
