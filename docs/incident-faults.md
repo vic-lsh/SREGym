@@ -154,7 +154,15 @@ that fronts it, flushed after faults a warm cache would hide), `key_field` (a do
 also appears in the integrity snapshot, used to pick documents the entry points read),
 `poison_fields` (string field, object field), `unique_key`/`stamp_field` (enable the unique-index
 mode) and `faults`, the Mongo fault kinds verified live on that collection; only those sample it
-(`mongo_targets`). Instances unreachable from any entry point (`media-mongodb`) or empty after the
+(`mongo_targets`). `write_check` (a `WriteCheck`: POST, then a read that must show the marker) lets
+write-blocking faults be seen where the app swallows a failed database write: social-network's
+compose is one-way and answers 200 whatever mongod did, so a rejected post is invisible to the
+HTTP probe; the verdict of `mongo_write_lock`/`mongo_write_rejection` writes a marker post as the
+probe user and reads it back. Live findings (social-network): write lock is visible on
+user-timeline, post-storage (compose) and social-graph (follow); write rejection on user-timeline
+and post (not social-graph: the follow path hides the rejected write; the `user` collection is
+only written at registration, which no probe does); rename is visible on user-timeline and post
+with the cache flushed (not `user` or social-graph). Instances unreachable from any entry point (`media-mongodb`) or empty after the
 seed (`url-shorten-mongodb`) are `verified=False`.
 
 ## Lane notes (read before validating)

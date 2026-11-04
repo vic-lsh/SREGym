@@ -295,13 +295,13 @@ SOCIAL_NETWORK = AppBinding(
         MongoInstance(
             "social-graph-mongodb",
             "social-graph",
-            (MongoCollection("social-graph", cache="social-graph-redis", faults=MONGO_FAULTS[:2]),),
+            (MongoCollection("social-graph", cache="social-graph-redis", faults=MONGO_FAULTS[:1]),),
             consumers=("social-graph-service",),
         ),
         MongoInstance(
             "user-mongodb",
             "user",
-            (MongoCollection("user", cache="user-memcached", faults=("mongo_collection_renamed",)),),
+            (MongoCollection("user", cache="user-memcached", faults=()),),
             ("user-service",),
         ),
         # No service reads or writes these: not valid targets.
