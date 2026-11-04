@@ -225,6 +225,29 @@ def test_run_js_without_result_line_raises_with_context():
         mongo.run_js(Silent(), "ns", inst, "out({})")
 
 
+def test_every_mongo_read_and_write_runs_with_the_bindings_admin_credentials():
+    """Access-control class rule: the shell the verdict, witness and integrity reads use authenticates as
+    the binding's admin, never as an identity a fault could restrict (the app's own)."""
+    seen: list[list[str]] = []
+
+    class Recording(FakeMongoKube):
+        def _shell(self, s):
+            return "@@JSON {}\n"
+
+        def run(self, argv, stdin=None, *, timeout_s=None):
+            if argv[0] == "exec":
+                seen.append(argv)
+            return super().run(argv, stdin, timeout_s=timeout_s)
+
+    authed = [i for i in app_bindings.BINDINGS["hotel_reservation"].mongo if i.auth is not None]
+    assert authed
+    for inst in authed:
+        mongo.run_js(Recording(), "ns", inst, "out({})")
+        assert seen, inst.workload
+        argv = seen.pop()
+        assert argv[argv.index("-u") + 1 :][:3] == [inst.auth[0], "-p", inst.auth[1]], argv
+
+
 def test_poison_shape_is_validated():
     with pytest.raises(ValueError):
         mongo.poison_documents(FakeMongoKube(), "ns", B.mongo[0], "c", "k", ("1",), "bogus", "a", "b")

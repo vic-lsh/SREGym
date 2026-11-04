@@ -6,6 +6,7 @@ Every primitive takes a ``RedisInstance`` binding row; ``cli`` selects redis-cli
 from __future__ import annotations
 
 import re
+import secrets
 from dataclasses import dataclass
 
 from sregym.conductor.problems.composition.app_bindings import RedisInstance
@@ -83,7 +84,7 @@ def promote(kube: Kube, namespace: str, inst: RedisInstance) -> None:
 
 
 def dbsize(kube: Kube, namespace: str, inst: RedisInstance) -> int:
-    return int(cli(kube, namespace, inst, "DBSIZE").strip().split()[-1])
+    return int(_lines(check_exec(kube, namespace, inst, "DBSIZE"))[-1].split()[-1])
 
 
 SAMPLE_KEYS = 20
@@ -99,16 +100,16 @@ class KeySample:
 
 def key_sample(kube: Kube, namespace: str, inst: RedisInstance) -> KeySample:
     """``DBSIZE`` and up to ``SAMPLE_KEYS`` key names (one SCAN page)."""
-    lines = cli(kube, namespace, inst, "SCAN", "0", "COUNT", str(SAMPLE_KEYS * 5)).splitlines()
+    lines = check_exec(kube, namespace, inst, "SCAN", "0", "COUNT", str(SAMPLE_KEYS * 5)).splitlines()
     keys = tuple(k for k in (line.strip() for line in lines[1:]) if k)[:SAMPLE_KEYS]
     return KeySample(dbsize(kube, namespace, inst), keys)
 
 
 def keys_intact(kube: Kube, namespace: str, inst: RedisInstance, sample: KeySample) -> tuple[bool, str]:
-    """Every sampled key still exists."""
+    """Every sampled key still exists (read through the check channel, whatever the fault did to ``default``)."""
     if not sample.keys:
         return True, f"{inst.workload}: no keys sampled"
-    present = int(cli(kube, namespace, inst, "EXISTS", *sample.keys).strip().split()[-1])
+    present = int(_lines(check_exec(kube, namespace, inst, "EXISTS", *sample.keys))[-1].split()[-1])
     return present == len(sample.keys), (
         f"{inst.workload}: {present}/{len(sample.keys)} sampled keys present (dbsize was {sample.dbsize})"
     )
@@ -147,6 +148,71 @@ def _exec(
 
 def _lines(text: str) -> list[str]:
     return [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+
+# --- check channel -----------------------------------------------------------------------------
+# Every verdict, witness and integrity read of the framework goes through a dedicated read-only
+# ACL user, never through the identity a fault may restrict (``default``: an ACL fault revokes its
+# read category, and the oracle would then see NOPERM instead of the data). The user is created
+# lazily by ``default`` (ACL administration still works under -@read/-@write), with a random
+# password held only in this process (ACL LIST shows a hash), so nothing in the cluster, and no
+# agent, can use it to read around the fault; ``remove_check_user`` deletes it at recover.
+
+CHECK_USER = "sregym_check"
+_CHECK_RULES = ("reset", "on", "~*", "&*", "-@all", "+@read", "+ping")
+_check_passwords: dict[tuple[str, str], str] = {}
+
+
+def _auth_failed(text: str) -> bool:
+    return any(m in text for m in ("AUTH failed", "WRONGPASS", "NOAUTH", "invalid username-password"))
+
+
+def ensure_check_user(kube: Kube, namespace: str, inst: RedisInstance) -> None:
+    """(Re)create the check user with a fresh password (a pod restart wipes runtime ACLs)."""
+    password = secrets.token_urlsafe(24)
+    _exec(kube, namespace, inst, "ACL", "SETUSER", CHECK_USER, f">{password}", *_CHECK_RULES)
+    _check_passwords[(namespace, inst.workload)] = password
+
+
+def remove_check_user(kube: Kube, namespace: str, inst: RedisInstance) -> None:
+    """``ACL DELUSER``: the channel is gone (deleting a missing user is fine)."""
+    _check_passwords.pop((namespace, inst.workload), None)
+    _exec(kube, namespace, inst, "ACL", "DELUSER", CHECK_USER)
+
+
+def check_exec(kube: Kube, namespace: str, inst: RedisInstance, *args: str) -> str:
+    """One read-only command as the check user. Re-creates the user once if it is missing or its
+    password is unknown (restart, another process). Raises ComponentError on an error reply."""
+    key = (namespace, inst.workload)
+    if key not in _check_passwords:
+        ensure_check_user(kube, namespace, inst)
+    for attempt in (0, 1):
+        pod = pod_for(kube, namespace, inst.kind, inst.workload)
+        argv = [
+            "env",
+            f"REDISCLI_AUTH={_check_passwords[key]}",
+            inst.cli,
+            "--user",
+            CHECK_USER,
+            "-p",
+            str(inst.port),
+            *args,
+        ]
+        try:
+            out = exec_in(kube, namespace, pod, argv, container=inst.container)
+        except Exception as e:
+            if attempt == 0 and _auth_failed(str(e)):
+                ensure_check_user(kube, namespace, inst)
+                continue
+            raise
+        if attempt == 0 and _auth_failed(out):
+            ensure_check_user(kube, namespace, inst)
+            continue
+        err = error_reply(out)
+        if err:
+            raise ComponentError(f"{inst.workload} in {namespace}: check read {' '.join(args)}: {err[:300]}")
+        return out
+    raise ComponentError(f"{inst.workload} in {namespace}: check user authentication failed twice")
 
 
 # --- ACL ---------------------------------------------------------------------------------------
@@ -251,18 +317,18 @@ def zrem_member(kube: Kube, namespace: str, inst: RedisInstance, key: str, *memb
 
 
 def has_member(kube: Kube, namespace: str, inst: RedisInstance, key: str, member: str) -> bool:
-    out = _lines(_exec(kube, namespace, inst, "ZSCORE", key, member))
+    out = _lines(check_exec(kube, namespace, inst, "ZSCORE", key, member))
     return bool(out) and out[-1] not in ("(nil)", "")
 
 
 def zset_members(
     kube: Kube, namespace: str, inst: RedisInstance, key: str, start: int = 0, stop: int = -1
 ) -> list[str]:
-    return _lines(_exec(kube, namespace, inst, "ZREVRANGE", key, str(start), str(stop)))
+    return _lines(check_exec(kube, namespace, inst, "ZREVRANGE", key, str(start), str(stop)))
 
 
 def zcard(kube: Kube, namespace: str, inst: RedisInstance, key: str) -> int:
-    return int(_lines(_exec(kube, namespace, inst, "ZCARD", key))[-1].split()[-1])
+    return int(_lines(check_exec(kube, namespace, inst, "ZCARD", key))[-1].split()[-1])
 
 
 # --- key rename --------------------------------------------------------------------------------
@@ -281,7 +347,7 @@ def rename_key(kube: Kube, namespace: str, inst: RedisInstance, key: str, new_ke
 
 
 def key_exists(kube: Kube, namespace: str, inst: RedisInstance, key: str) -> bool:
-    return _lines(_exec(kube, namespace, inst, "EXISTS", key))[-1].split()[-1] == "1"
+    return _lines(check_exec(kube, namespace, inst, "EXISTS", key))[-1].split()[-1] == "1"
 
 
 def merge_back(kube: Kube, namespace: str, inst: RedisInstance, key: str, backup_key: str) -> None:
