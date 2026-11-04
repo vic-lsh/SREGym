@@ -93,6 +93,9 @@ class FaultDraw:
     # Its reference or an acceptable repair restarts its footprint workloads (data in them is lost).
     # Draws without `reads` (no data checks of their own) are assumed to.
     restarts: bool = False
+    # Its injection or oracle creates pods in the app namespace (a client pod for entry-point reads,
+    # writes and probes): it cannot compose with a draw that blocks pod creation (Tier.BLOCKS_ADMISSION).
+    needs_client_pods: bool = False
 
     @property
     def may_restart(self) -> bool:
@@ -118,13 +121,19 @@ class FaultDraw:
             "exclusive_tags": sorted(self.exclusive_tags),
             **({"reads": sorted(self.reads)} if self.reads else {}),
             **({"restarts": True} if self.restarts else {}),
+            **({"needs_client_pods": True} if self.needs_client_pods else {}),
         }
 
 
 def conflicts(a: FaultDraw, b: FaultDraw) -> bool:
-    """Any footprint overlap, a shared exclusive tag, or a draw that may restart a workload the
-    other's oracle reads stored data through."""
+    """Any footprint overlap, a shared exclusive tag, a draw that may restart a workload the
+    other's oracle reads stored data through, or a draw that needs client pods next to one that
+    blocks pod creation."""
     if a.exclusive_tags & b.exclusive_tags:
+        return True
+    if (a.needs_client_pods and b.tier == Tier.BLOCKS_ADMISSION) or (
+        b.needs_client_pods and a.tier == Tier.BLOCKS_ADMISSION
+    ):
         return True
     if a.may_restart and any(f.name in b.reads for f in a.footprints):
         return True

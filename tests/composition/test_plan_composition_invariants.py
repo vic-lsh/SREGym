@@ -63,3 +63,41 @@ def test_flushed_caches_belong_to_one_fault(n):
         names = [{f.name for f in d.footprints if f.name in _stores()} for d in plan.draws]
         for (i, a), (j, b) in itertools.combinations(enumerate(names), 2):
             assert not a & b, (seed, plan.draws[i].key, plan.draws[j].key, a & b)
+
+
+def _draw(key, tier, *, needs_client_pods=False):
+    from sregym.conductor.problems.composition.spec import FaultDraw, Footprint
+
+    return FaultDraw(
+        key, APP, (), (Footprint("Deployment", key),), tier=tier, needs_client_pods=needs_client_pods
+    )
+
+
+def test_component_fault_does_not_compose_with_an_admission_blocking_fault():
+    """Found live (plan mf__social_network__n2__s202__reliable__g2): a component fault's oracle and
+    injection create client pods; with a webhook or PSA fault live they cannot, so its liveness
+    is unproven and the composite is invalid."""
+    from sregym.conductor.problems.composition.spec import Tier, conflicts
+
+    component = _draw("redis", Tier.ORDINARY, needs_client_pods=True)
+    admission = _draw("webhook", Tier.BLOCKS_ADMISSION)
+    assert conflicts(component, admission) and conflicts(admission, component)
+    assert not conflicts(_draw("scale", Tier.ORDINARY), admission)  # old faults are unaffected
+    assert not conflicts(component, _draw("image", Tier.ORDINARY))
+
+
+def test_every_component_entry_declares_client_pods():
+    for e in catalog.entries_for(APP):
+        if e.generation(APP) == 2:
+            from random import Random
+
+            assert e.sample(APP, Random(1)).needs_client_pods, e.key
+
+
+@pytest.mark.parametrize("n", [2, 3])
+def test_plans_never_pair_component_with_admission_faults(n):
+    from sregym.conductor.problems.composition.spec import Tier
+
+    for seed, plan in _plans(n, False):
+        if any(d.needs_client_pods for d in plan.draws):
+            assert all(d.tier != Tier.BLOCKS_ADMISSION for d in plan.draws), (seed, [d.key for d in plan.draws])

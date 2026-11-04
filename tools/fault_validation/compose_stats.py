@@ -35,6 +35,8 @@ from sregym.conductor.problems.composition.spec import conflicts
 def rule_of(a, b) -> str:
     if a.exclusive_tags & b.exclusive_tags:
         return "exclusive_tag"
+    if (a.needs_client_pods and b.tier == 2) or (b.needs_client_pods and a.tier == 2):
+        return "client_pods_vs_admission"
     if a.may_restart and any(f.name in b.reads for f in a.footprints):
         return "restart_vs_reads"
     if b.may_restart and any(f.name in a.reads for f in b.footprints):
