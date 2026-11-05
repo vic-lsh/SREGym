@@ -41,6 +41,7 @@ class FakeKube:
         self.cache: dict[str, bytes] = {}
         self.role = "master"
         self.calls: list[list[str]] = []
+        self.pod_namespaces: list[str] = []  # namespace of every helper pod applied
         self.restarted: list[str] = []
         self._script = ""
         self.next_post = 1000
@@ -50,7 +51,11 @@ class FakeKube:
     def run(self, argv, stdin=None, *, timeout_s=None):
         self.calls.append(argv)
         if argv[:3] == ["apply", "-f", "-"]:
-            self._script = json.loads(stdin)["spec"]["containers"][0]["command"][2]
+            obj = json.loads(stdin)
+            if obj["kind"] == "Namespace":
+                return b""
+            self.pod_namespaces.append(obj["metadata"]["namespace"])
+            self._script = obj["spec"]["containers"][0]["command"][2]
             return b""
         if argv[0] == "get" and argv[1] == "pod":
             return b"Succeeded"

@@ -13,9 +13,9 @@ import json
 import time
 from typing import Any
 
-from sregym.generators.fault.components.kube import ComponentError, Kube
+from sregym.generators.fault.components.kube import CLIENT_NAMESPACE, ComponentError, Kube
 
-FOREIGN_NAMESPACE = "sregym-injector"
+FOREIGN_NAMESPACE = CLIENT_NAMESPACE
 LABEL = "sregym.io/injected-fault"
 
 

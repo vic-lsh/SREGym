@@ -23,7 +23,8 @@ that depends on business logic (a specific record shape, a specific token format
 
 - `kube.py`: the one Kubernetes seam (`Kube.run(argv)`; tests pass a fake). Pod lookup by the
   workload's selector, `exec_in`, `run_client_pod` (a busybox probe-labelled pod in the
-  namespace), and the generic repairs used as references or decoys: `rollout_restart`,
+  injector namespace `sregym-injector`, never the app's: SDO flags any live object in the app
+  namespace its source lacks, so a helper there opens spurious incidents), and the generic repairs used as references or decoys: `rollout_restart`,
   `delete_pods` (restart the stateful pod), `restore_source` (re-apply `SREGYM_ACCEPTED_RENDER`).
 - `http.py`: fetch entry-point requests from inside the namespace; `capture`/`compare` implement
   the binding's `IntegrityCheck`.

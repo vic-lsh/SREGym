@@ -114,29 +114,43 @@ def restore_source(kube: Kube, namespace: str, render: Path | None) -> None:
     kube.run(["rollout", "status", "deployment", "-n", namespace, "--timeout=300s"], timeout_s=330)
 
 
+# Helper pods live here, never in the app namespace: SDO flags any live object in the app namespace
+# that its accepted source lacks (``drift.unexplained``), and a helper pod is alive for seconds, so a
+# helper there looks like a real incident (and a responder could "fix" it by deleting it). The pods
+# reach the app by its cluster-DNS names, so the namespace they run in does not matter to them.
+CLIENT_NAMESPACE = "sregym-injector"
+APP_NAMESPACE_LABEL = "sregym.io/app-namespace"
+
+
 def run_client_pod(
     kube: Kube, namespace: str, script: str, deadline_s: int = 120, prefix: str = "sregym-client"
 ) -> str:
-    """Run ``script`` in a short-lived busybox probe pod in ``namespace`` and return its log.
+    """Run ``script`` in a short-lived busybox pod and return its log.
 
-    The pod carries the probe label, so the composite's collateral walk ignores it; it is deleted
-    on every exit path. Raises if it does not finish in ``deadline_s``.
+    ``namespace`` is the app namespace the script talks to (by FQDN); the pod itself runs in
+    ``CLIENT_NAMESPACE`` and is labelled with the app namespace. It is deleted on every exit path.
+    Raises if it does not finish in ``deadline_s``.
     """
     name = f"{prefix}-{secrets.token_hex(4)}"
-    manifest = grading.client_pod_manifest(name, namespace, script, deadline_s)
+    manifest = grading.client_pod_manifest(name, CLIENT_NAMESPACE, script, deadline_s)
+    manifest["metadata"]["labels"][APP_NAMESPACE_LABEL] = namespace
+    kube.run(
+        ["apply", "-f", "-"],
+        json.dumps({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": CLIENT_NAMESPACE}}).encode(),
+    )
     kube.run(["apply", "-f", "-"], json.dumps(manifest).encode())
     try:
         phase = "Pending"
         deadline = time.monotonic() + deadline_s + 30
         while time.monotonic() < deadline:
-            phase = kube.run(["get", "pod", name, "-n", namespace, "-o", "jsonpath={.status.phase}"]).decode()
+            phase = kube.run(["get", "pod", name, "-n", CLIENT_NAMESPACE, "-o", "jsonpath={.status.phase}"]).decode()
             if phase in ("Succeeded", "Failed"):
                 break
             time.sleep(1)
-        log = kube.run(["logs", name, "-n", namespace]).decode(errors="replace")
+        log = kube.run(["logs", name, "-n", CLIENT_NAMESPACE]).decode(errors="replace")
         if phase not in ("Succeeded", "Failed"):
-            raise ComponentError(f"client pod {name} in {namespace} did not finish (phase {phase})")
+            raise ComponentError(f"client pod {name} for {namespace} did not finish (phase {phase})")
         return log
     finally:
         with contextlib.suppress(ComponentError):
-            kube.run(["delete", "pod", name, "-n", namespace, "--grace-period=0", "--wait=false"])
+            kube.run(["delete", "pod", name, "-n", CLIENT_NAMESPACE, "--grace-period=0", "--wait=false"])
