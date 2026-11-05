@@ -372,14 +372,15 @@ class MongoPoisonDocument(MongoFaultProblem):
     def extra_repairs(self) -> dict[str, Repair]:
         repairs: dict[str, Repair] = {}
         if self.scoped:
-            first = self.poisoned[:1] or tuple(self.scoped_docs)[:1]
-            # one document repaired, the rest of the incident left
-            repairs["unpoison_first_document"] = Repair(
-                lambda: mongo.unpoison_documents(
+            # listed before the documents are chosen (prepare_injection): resolve when run
+            def unpoison_first() -> None:
+                first = self.poisoned[:1] or tuple(self.scoped_docs)[:1]
+                mongo.unpoison_documents(
                     *self._ns_args(), self.coll.key_field, first, self.shape, *self.coll.poison_fields
-                ),
-                Expect.FAULT_NOT_CLEARED,
-            )
+                )
+
+            # one document repaired, the rest of the incident left
+            repairs["unpoison_first_document"] = Repair(unpoison_first, Expect.FAULT_NOT_CLEARED)
         if self.coll.cache:  # flushing the cache re-reads the same malformed documents
             repairs["flush_cache"] = Repair(self.flush_cache, Expect.FAULT_NOT_CLEARED)
         return repairs

@@ -363,3 +363,32 @@ def test_unreliable_from_flags_apply_only_to_their_generation_and_later():
     assert entries
     assert {e.key for e in reliable_entries("social_network", entries, 2)} == {e.key for e in entries}
     assert reliable_entries("social_network", entries, 3) == ()
+
+
+@pytest.mark.usefixtures("offline")
+@pytest.mark.parametrize(
+    "key,target,extra,first",
+    [
+        (
+            "redis_poisoned_timeline_entry",
+            "home-timeline-redis",
+            {"poison": "non_numeric", "token": "ab12"},
+            "remove_member_first_key",
+        ),
+        ("redis_timeline_key_renamed", "home-timeline-redis", {"token": "a1b2c3"}, "merge_first_key"),
+        ("social_graph_stale_cache", "social-graph-redis", {"ghost": "9202"}, "readd_first_author"),
+    ],
+)
+def test_repairs_listed_before_the_keys_are_chosen_resolve_them_when_run(key, target, extra, first):
+    """The validation harness lists every repair before prepare_injection: a decoy that captured the (still empty)
+    selection at listing time ran on no keys (found live: 'a batch needs at least one key')."""
+    k = _social_graph_kube() if target == "social-graph-redis" else _kube()
+    p = _build(key, _wide("x", target, **extra), k)
+    repairs = p.repairs()  # before prepare_target, as validate.py does
+    p.prepare_target()
+    p.inject()
+    assert p.fault_cleared()[0] is False
+    repairs[first].run()
+    assert p.fault_cleared()[0] is False  # one record fixed, the incident remains
+    p.reference_mitigation()
+    assert p.fault_cleared()[0] is True

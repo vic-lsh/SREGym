@@ -581,19 +581,14 @@ class SocialGraphStaleCache(_ScopedKeys, _RedisFault):
 
     def extra_repairs(self) -> dict[str, Repair]:
         if self.scoped:
-            first = self.scoped_keys[:1]
+            # the repairs are listed before the keys are chosen (prepare_injection): resolve them when run
+            def readd(keys: tuple[str, ...]) -> None:
+                self._call(redis.eval_batch, redis.READD_ALL, keys, *self._drops(keys), self.ghost)
+
             return {
-                "readd_follower": Repair(
-                    lambda: self._call(
-                        redis.eval_batch, redis.READD_ALL, self.scoped_keys, *self._drops(self.scoped_keys), self.ghost
-                    ),
-                    Expect.PASSES,
-                ),
+                "readd_follower": Repair(lambda: readd(self.scoped_keys), Expect.PASSES),
                 # one author's set repaired, the rest of the incident left
-                "readd_first_author": Repair(
-                    lambda: self._call(redis.eval_batch, redis.READD_ALL, first, *self._drops(first), self.ghost),
-                    Expect.FAULT_NOT_CLEARED,
-                ),
+                "readd_first_author": Repair(lambda: readd(self.scoped_keys[:1]), Expect.FAULT_NOT_CLEARED),
             }
 
         def readd() -> None:

@@ -110,6 +110,7 @@ class MemcachedPoisonedEntries(ComponentFaultProblem):
             return ()
         users = sorted(set(self.scoped_keys.values()), key=int)
         return tuple(self.instance.read.format(uid=u) for u in scopes.spread(tuple(users), 3))
+
     def hot_keys(self) -> tuple[str, ...]:
         """Literal keys, then ``key_field`` values from the snapshot and from the traffic probe's own
         reads (so the poison is on data the probe sees too, not only on seeded data)."""
@@ -145,7 +146,9 @@ class MemcachedPoisonedEntries(ComponentFaultProblem):
             raise ComponentError(f"none of the hot keys {list(keys)} is cached in {inst.workload}")
         chosen = cached[:1] if self.key_scope == "one_key" else cached
         if self.key_scope == "broad":
-            others = [k for k in memcached.live_keys(self.kube, self.namespace, inst, BROAD_KEY_LIMIT) if k not in cached]
+            others = [
+                k for k in memcached.live_keys(self.kube, self.namespace, inst, BROAD_KEY_LIMIT) if k not in cached
+            ]
             chosen = (cached + others)[:BROAD_KEY_LIMIT]
             current = {**current, **memcached.get_many(self.kube, self.namespace, inst, tuple(others))}
         self.poisoned = {
@@ -167,10 +170,10 @@ class MemcachedPoisonedEntries(ComponentFaultProblem):
         inst = self.instance
         repairs = {"flush_all": Repair(lambda: memcached.flush_all(self.kube, self.namespace, inst), Expect.PASSES)}
         if self.scoped:
-            first = tuple(self.scoped_keys)[:1]
-            # one entry removed, the rest of the incident left
+            # one entry removed, the rest of the incident left (the keys are chosen after the repairs are listed)
             repairs["delete_first_key"] = Repair(
-                lambda: memcached.delete_many(self.kube, self.namespace, inst, first), Expect.FAULT_NOT_CLEARED
+                lambda: memcached.delete_many(self.kube, self.namespace, inst, tuple(self.scoped_keys)[:1]),
+                Expect.FAULT_NOT_CLEARED,
             )
         return repairs
 
