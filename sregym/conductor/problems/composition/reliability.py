@@ -62,7 +62,10 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
         "Not validated: VAL2 seed 1 reference VALID, flush_cache and restore_source VALID, killed at the time box before "
         "the restart decoys; earlier references were INVALID on seeds 1, 4, 6 (ids not found on a lane left by the lock run). 0 of 3 seeds complete."
     ),
-    ("redis_writes_paused", "social_network"): "1 of 3 seeds all VALID (seed 5, user-timeline-redis); VAL2 seed 1 (home-timeline-redis) VALID through the restart decoy, killed at the time box before the rollout_restart decoy.",
+    (
+        "redis_writes_paused",
+        "social_network",
+    ): "1 of 3 seeds all VALID (seed 5, user-timeline-redis); VAL2 seed 1 (home-timeline-redis) VALID through the restart decoy, killed at the time box before the rollout_restart decoy.",
     # hotel_reservation: only mongo_write_lock validated (3 seeds, 6 VALID trials each).
     ("memcached_poisoned_entries", "hotel_reservation"): (
         "Seeds 1 and 3 FAIL: a reference/acceptable repair reads data_lost (seeded /hotels read changed); seed 2 VALID."
@@ -89,12 +92,28 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
 # Flags that apply only to plans of catalog generation >= the given one: a generation that revises how an
 # existing kind draws (the scope of single-record data faults) must not make that kind unreliable for the
 # earlier generations' ids, which draw it as they always did.
-_SCOPE_NOT_VALIDATED = "Generation-3 wide and partial scope not yet validated on 3 seeds each with every trial VALID."
+# Generation-3 scope (validation/fs, FS handoff, 2026-11-05). A kind is reliable at g3 with 3 seeds where every trial is
+# VALID; none reached it (2 seeds each in the 3 h box), so every revised kind is flagged from generation 3.
 UNRELIABLE_FROM: Mapping[tuple[str, str], tuple[int, str]] = {
-    ("redis_poisoned_timeline_entry", "social_network"): (3, _SCOPE_NOT_VALIDATED),
-    ("redis_timeline_key_renamed", "social_network"): (3, _SCOPE_NOT_VALIDATED),
-    ("social_graph_stale_cache", "social_network"): (3, _SCOPE_NOT_VALIDATED),
-    ("memcached_poisoned_entries", "social_network"): (3, _SCOPE_NOT_VALIDATED),
+    ("redis_poisoned_timeline_entry", "social_network"): (
+        3,
+        "2 of 3 seeds, every trial VALID: home-timeline-redis wide (s2) and partial 0.5 (s5), 7/7 each incl. data_lost "
+        "restarts; the social-graph-redis follower-set variants (compose-and-read check) were not run.",
+    ),
+    ("redis_timeline_key_renamed", "social_network"): (
+        3,
+        "2 of 3 seeds, every trial VALID: partial 0.25 (s1) and wide (s4), 8/8 each incl. data_lost restarts.",
+    ),
+    ("social_graph_stale_cache", "social_network"): (
+        3,
+        "2 of 3 seeds, every trial VALID: wide (s4) and partial 0.5 (s2), 7/7 each (readd_first_author rerun alone after "
+        "a decoy-listing fix).",
+    ),
+    ("memcached_poisoned_entries", "social_network"): (
+        3,
+        "Scoped draw not validated: only prepare_target ran live (cold cache warmed by 40 seeded users' reads, 380 "
+        "seeded post entries chosen); no trial.",
+    ),
 }
 
 

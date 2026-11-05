@@ -387,17 +387,17 @@ Every kind: reference repair passes; decoys `restore_source` and `rollout_restar
 | Kind | App | Family | Parameters | Reference fix | Extra decoys / acceptable | Validation | Pilot |
 |---|---|---|---|---|---|---|---|
 | redis_replica_misconfig | social | Redis | target Redis, bogus master | `REPLICAOF NO ONE` | restart (data_lost on home-timeline-redis) | reliable (F1 seed 2) | P4 L1: SDO did not detect (replica serves reads) |
-| memcached_poisoned_entries | social, hotel | cache | target, corruption, key scope (probe, broad) | delete the poisoned keys | flush_all, restart (acceptable: a cache) | social reliable (seed 5, broad 3/12/15 VALID); hotel flagged: seeds 1,3 data_lost | P4 L2: not detected |
+| memcached_poisoned_entries | social, hotel | cache | target, corruption, key scope (g2: probe, broad; g3: wide, partial) | delete the poisoned keys | flush_all, restart (acceptable: a cache) | g2 social reliable (seed 5, broad 3/12/15 VALID); hotel flagged: seeds 1,3 data_lost; g3 scoped draw (social) flagged: only `prepare_target` ran live | P4 L2: not detected |
 | redis_acl_revoked | social | Redis | target, read or write | `ACL SETUSER default +@all` | restart (acceptable on caches; data_lost on home-timeline-redis) | reliable (home-timeline-redis seeds 1-3 reference/restore/consumer rollout VALID; VAL2 restart decoys seeds 1 write, 4 read, 8 VALID data_lost; user-timeline seed 7 all VALID) | P4 L4 not measured |
 | redis_out_of_memory | social | Redis | target | restore `maxmemory` | restart (as above) | reliable (seeds 9, VAL 1, VAL2 2 all VALID 8/8 incl. data_lost restarts) | no |
 | redis_writes_paused | social | Redis | target | `CLIENT UNPAUSE` | restart (as above) | flagged: 1 seed (5) VALID 6/6; VAL2 seed 1 VALID through the restart decoy, interrupted at the time box | no |
-| redis_poisoned_timeline_entry | social | Redis | target, key, shape | `ZREM` the poisoned member | delete_key, restart (acceptable on caches) | reliable (seeds 7, 1, VAL2 2 all VALID; seed 5 FAIL was on the pre-fix harness, not rerun) | no |
-| redis_timeline_key_renamed | social | Redis | target | merge back with `ZUNIONSTORE` | delete_backup_key, restart (data_lost) | reliable (seed 1 8/8, VAL2 seeds 2, 3 VALID 8/8 each incl. data_lost restarts) | no |
-| social_graph_stale_cache | social | Redis | ghost ids | restore the follower set (`readd_follower`) | restart (acceptable) | reliable (VAL: seeds 1-3 VALID 8/8 each, after the stale-follower and write-retry fixes) | no |
+| redis_poisoned_timeline_entry | social | Redis | target, shape, scope (g3: wide, partial; g2: key) | `ZREM` the poisoned member | delete_key, restart (acceptable on caches) | g2 (single key) reliable (seeds 7, 1, VAL2 2 all VALID; seed 5 FAIL was on the pre-fix harness, not rerun); g3 flagged: wide s2 and partial s5 on home-timeline-redis VALID 7/7 each, 2 of 3 seeds, social-graph-redis variants not run | no |
+| redis_timeline_key_renamed | social | Redis | target, scope (g3: wide, partial; g2: key) | merge back with `ZUNIONSTORE` | delete_backup_key, restart (data_lost) | g2 (single key) reliable (seed 1 8/8, VAL2 seeds 2, 3 VALID 8/8 each incl. data_lost restarts); g3 flagged: partial 0.25 s1 and wide s4 VALID 8/8 each, 2 of 3 seeds | no |
+| social_graph_stale_cache | social | Redis | ghost ids, scope (g3: wide, partial; g2: key) | restore the follower set (`readd_follower`) | restart (acceptable) | g2 (single key) reliable (VAL: seeds 1-3 VALID 8/8 each, after the stale-follower and write-retry fixes); g3 flagged: wide s4 and partial 0.5 s2 VALID 7/7 each, 2 of 3 seeds | no |
 | mongo_write_rejection | social, hotel | Mongo | collection, mode (validator, ...) | clear validator / drop blocking index | restart (data_lost) | social reliable (3 seeds VALID); hotel flagged: decoys INVALID | P5 (write path) blocked by deployer, see P5.md |
 | mongo_collection_renamed | social, hotel | Mongo | collection | `merge_back` then rename with `dropTarget` | restart (data_lost) | social reliable; hotel seeds 1,3 VALID, seed 2 FAIL | P5 queued |
 | mongo_write_lock | social, hotel | Mongo | target | `fsyncUnlock` | restart (data_lost) | hotel reliable (3 seeds, 6/6 each); social flagged: VAL2 seeds 1, 2 all VALID 6/6; 5 and 7 INVALID earlier; seed 3 not run | no |
-| mongo_poison_document | social, hotel | Mongo | collection, shape, scope | `unpoison_documents` | flush_cache (not cleared), restart (data_lost) | flagged: social VAL2 seed 1 reference/flush/restore VALID, interrupted before restarts (earlier references INVALID); hotel decoys FAIL (no symptom) | no |
+| mongo_poison_document | social, hotel | Mongo | collection, shape, scope (g3 social: wide, partial) | `unpoison_documents` | flush_cache (not cleared), restart (data_lost) | flagged: social VAL2 seed 1 reference/flush/restore VALID, interrupted before restarts (earlier references INVALID); hotel decoys FAIL (no symptom) ; g3 scoped draw (social) not run live | no |
 | process_frozen | social | process | target service/store | `kill -CONT 1` | restart (acceptable on stateless) | reliable (VAL: seeds 1 post-storage-mongodb 9/9, 2 user-timeline-redis 7/7, 3 compose-post-service 6/6; also a frozen Redis now verdicts without exec into it) | P4 L3/R3/S3: learned stall playbook, reused deterministically |
 | pod_network_impairment | social | process | target, delay 3000/6000 ms or loss 90/95% | delete qdisc | restart (acceptable) | reliable (VAL: seeds 1 post-storage-mongodb 9/9, 2 user-timeline-redis 7/7, 3 compose-post-service 6/6) | P5 B2: folded into the stall/restart playbook |
 | connection_exhaustion | social | load | compose-post-service, ~12000 sockets | stop the hog | restart is a decoy | reliable (VAL: seeds 1-3 VALID 6/6 with `--symptom-samples 3`: the OOM/restart waves can leave one probe reading in a healthy gap) | no |
@@ -412,6 +412,23 @@ VAL2 round (2 lanes, 3 h): promoted `redis_out_of_memory`, `redis_poisoned_timel
 `redis_timeline_key_renamed`, `redis_acl_revoked` (restart decoys). Still flagged: social `mongo_write_lock` (2 of 3
 seeds), `redis_writes_paused` (1 of 3 plus one partial), social `mongo_poison_document` (partial seed 1), hotel
 `mongo_collection_renamed` and the direct `process_frozen --set target=home-timeline-redis` run (not reached).
+FS round (generation 3 scope, 2 lanes, 2026-11-05, `validate.py --generation 3`): every row VALID with its declared reason,
+2 seeds per kind (3 needed to promote, not reached, so no g3 promotion and the kinds stay flagged from generation 3 in
+`reliability.UNRELIABLE_FROM`; g2 flags are untouched).
+
+| Kind (home of the damage) | Scope, seed | Trials (all VALID) |
+|---|---|---|
+| `redis_poisoned_timeline_entry` (home-timeline-redis) | wide s2 (non_numeric), partial 0.5 s5 (dangling_id) | reference, `remove_member_first_key`, restore_source, rollout_restart of the consumer, `delete_keys` (data_lost), restart_stateful_pod and rollout_restart (data_lost): 7/7 each |
+| `redis_timeline_key_renamed` (home-timeline-redis) | partial 0.25 s1, wide s4 | reference, `merge_first_key`, `rename_back` (passes), restore_source, consumer rollout, `delete_backup_keys` (data_lost), both restarts (data_lost): 8/8 each |
+| `social_graph_stale_cache` (social-graph-redis) | wide s4, partial 0.5 s2 | reference, `readd_follower`, restarts (acceptable on a cache), restore_source, consumer rollout, `readd_first_author`: 7/7 each |
+
+Not run live: the social-graph-redis follower-set variant of the poisoned entry (compose-and-read check; `s12` wide and `s1` partial
+were queued), scoped `mongo_poison_document` and `memcached_poisoned_entries` (unit-tested; memcached `prepare_target` ran live and chose
+380 seeded entries after warming), and the third seed of every kind. Trials take 3 to 6 minutes on the Redis timeline kinds and 10 on
+the stale cache (two compose-and-read checks that fail slowly while the fault is live), so a 3-hour two-lane box covers about 6 seed runs.
+The stale-cache `readd_first_author` decoy first ran INVALID on both seeds (it captured its keys before `prepare_injection` chose them; fixed
+and rerun alone: VALID).
+
 Harness and fault fixes behind the promotions:
 
 - The harness waits (polled, bounded by `--ready-deadline-s`, default 900 s) for rollouts and a passing baseline probe
