@@ -92,8 +92,12 @@ def test_generation_two_keeps_drawing_the_original_single_record_faults():
 def test_generation_three_ids_differ_from_generation_two_for_the_revised_kinds():
     changed = 0
     for seed in range(40):
-        g2 = plan_for(parse_plan_id(plan_id("social_network", 3, seed, generation=2)), catalog.entries_for("social_network"))
-        g3 = plan_for(parse_plan_id(plan_id("social_network", 3, seed, generation=3)), catalog.entries_for("social_network"))
+        g2 = plan_for(
+            parse_plan_id(plan_id("social_network", 3, seed, generation=2)), catalog.entries_for("social_network")
+        )
+        g3 = plan_for(
+            parse_plan_id(plan_id("social_network", 3, seed, generation=3)), catalog.entries_for("social_network")
+        )
         scoped = [d for d in g3.draws if d.key in SCOPED_KEYS]
         assert all("scope" in d.param_dict() for d in scoped)
         assert not any("scope" in d.param_dict() for d in g2.draws if d.key in SCOPED_KEYS)
@@ -110,11 +114,13 @@ class ScriptKube(FakeRedisKube):
     def _cmd(self, a, timed=False, user="default"):
         op = a[0].upper()
         if op == "SCAN":
-            return "0\n" + "".join(k + "\n" for k in sorted(self.zsets) if fnmatch.fnmatchcase(k, a[a.index("MATCH") + 1]))
+            return "0\n" + "".join(
+                k + "\n" for k in sorted(self.zsets) if fnmatch.fnmatchcase(k, a[a.index("MATCH") + 1])
+            )
         if op != "EVAL":
             return super()._cmd(a, timed, user)
         script, n = a[1], int(a[2])
-        keys, args = list(a[3:3 + n]), list(a[3 + n:])
+        keys, args = list(a[3 : 3 + n]), list(a[3 + n :])
         z = self.zsets
         if script == redis.POISON_ALL:
             for k in keys:
@@ -195,7 +201,9 @@ def _wide(key, target, **extra):
 @pytest.mark.usefixtures("offline")
 def test_wide_poison_hits_every_seeded_key_and_never_a_probe_user():
     k = _kube()
-    p = _build("redis_poisoned_timeline_entry", _wide("x", "home-timeline-redis", poison="non_numeric", token="ab12"), k)
+    p = _build(
+        "redis_poisoned_timeline_entry", _wide("x", "home-timeline-redis", poison="non_numeric", token="ab12"), k
+    )
     p.prepare_target()
     assert set(p.scoped_keys) == {str(u) for u in range(20)} and "9101" not in p.scoped_keys
     p.inject()
@@ -213,8 +221,14 @@ def test_wide_poison_hits_every_seeded_key_and_never_a_probe_user():
 @pytest.mark.usefixtures("offline")
 def test_partial_poison_hits_a_fraction_and_the_same_keys_for_the_same_seed():
     k = _kube()
-    params = {"target": "home-timeline-redis", "scope": "partial", "fraction": 0.5, "pick_seed": 11,
-              "poison": "dangling_id", "token": "9000000001"}
+    params = {
+        "target": "home-timeline-redis",
+        "scope": "partial",
+        "fraction": 0.5,
+        "pick_seed": 11,
+        "poison": "dangling_id",
+        "token": "9000000001",
+    }
     p = _build("redis_poisoned_timeline_entry", params, k)
     p.prepare_target()
     assert len(p.scoped_keys) == 10
@@ -291,10 +305,17 @@ def test_a_scope_needs_a_keyspace_and_a_cold_cache_is_an_error_not_a_tiny_scope(
     with pytest.raises(ValueError, match="no wide scope"):
         _build("redis_poisoned_timeline_entry", _wide("x", "user-timeline-redis", poison="non_numeric", token="ab"), k)
     with pytest.raises(ValueError, match="do not pass key"):
-        _build("redis_poisoned_timeline_entry",
-               {**_wide("x", "home-timeline-redis", poison="non_numeric", token="ab"), "key": "9101"}, k)
+        _build(
+            "redis_poisoned_timeline_entry",
+            {**_wide("x", "home-timeline-redis", poison="non_numeric", token="ab"), "key": "9101"},
+            k,
+        )
     with pytest.raises(ValueError, match="single scope needs the key"):
-        _build("redis_poisoned_timeline_entry", {"target": "home-timeline-redis", "poison": "non_numeric", "token": "ab"}, k)
+        _build(
+            "redis_poisoned_timeline_entry",
+            {"target": "home-timeline-redis", "poison": "non_numeric", "token": "ab"},
+            k,
+        )
     cold = ScriptKube()
     cold.zsets = {"9101": {"1": 1.0}, "3": {"1": 1.0}}
     p = _build("redis_timeline_key_renamed", _wide("x", "home-timeline-redis", token="a1b2c3"), cold)
@@ -318,10 +339,20 @@ def test_generation_three_never_draws_single_scope_for_mongo_or_memcached_withou
                 p = entry.sample(app, random.Random(seed)).param_dict()
                 assert p.get("scope", p.get("key_scope")) not in ("single", "one_doc", "one_key"), (key, app, p)
     social = {e.key: e for e in catalog.entries_for("social_network")}
-    mongo = {social["mongo_poison_document"].at_generation(3).sample("social_network", random.Random(s)).param_dict()["scope"]
-             for s in range(80)}
-    cache = {social["memcached_poisoned_entries"].at_generation(3).sample("social_network", random.Random(s)).param_dict()["key_scope"]
-             for s in range(80)}
+    mongo = {
+        social["mongo_poison_document"]
+        .at_generation(3)
+        .sample("social_network", random.Random(s))
+        .param_dict()["scope"]
+        for s in range(80)
+    }
+    cache = {
+        social["memcached_poisoned_entries"]
+        .at_generation(3)
+        .sample("social_network", random.Random(s))
+        .param_dict()["key_scope"]
+        for s in range(80)
+    }
     assert mongo == cache == {"partial", "wide"}
 
 

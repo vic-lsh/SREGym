@@ -565,7 +565,9 @@ class SocialGraphStaleCache(_ScopedKeys, _RedisFault):
             return False, "nothing injected (fault not injected here)"
         if self.scoped:
             keys = self.scoped_keys
-            stale = self._call(redis.eval_batch, redis.COUNT_STALE, keys, *self._drops(keys), self.ghost, read_only=True)
+            stale = self._call(
+                redis.eval_batch, redis.COUNT_STALE, keys, *self._drops(keys), self.ghost, read_only=True
+            )
             return stale == 0, f"{stale}/{len(keys)} cached follower sets still stale ({self.scope})"
         members = self._call(redis.zset_members, self.key)
         stale = self.ghost in members or (bool(members) and self.member not in members)

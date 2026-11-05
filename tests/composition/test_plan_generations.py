@@ -18,7 +18,6 @@ from sregym.conductor.problems.composition import catalog
 from sregym.conductor.problems.composition.generator import PlanRef, parse_plan_id, plan_for, plan_id
 from sregym.conductor.problems.composition.spec import FROZEN_GENERATION, LATEST_GENERATION
 
-
 FIXTURES = Path(__file__).parent / "fixtures"
 SOCIAL = json.loads((FIXTURES / "social_network_g1_plans.json").read_text())
 MIXED10 = json.loads((FIXTURES / "mixed10_s42_plans.json").read_text())

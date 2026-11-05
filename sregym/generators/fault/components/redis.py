@@ -428,7 +428,9 @@ COUNT_SUFFIXED_EXISTING = (
     "local n=0 for _,k in ipairs(KEYS) do if redis.call('EXISTS',k..ARGV[1])==1 then n=n+1 end end return n"
 )
 DELETE_ALL = "local n=0 for _,k in ipairs(KEYS) do n=n+redis.call('DEL',k) end return n"
-STALE_ALL = "for i,k in ipairs(KEYS) do redis.call('ZREM',k,ARGV[i]) redis.call('ZADD',k,0,ARGV[#ARGV]) end return #KEYS"
+STALE_ALL = (
+    "for i,k in ipairs(KEYS) do redis.call('ZREM',k,ARGV[i]) redis.call('ZADD',k,0,ARGV[#ARGV]) end return #KEYS"
+)
 COUNT_STALE = (
     "local n=0 local g=ARGV[#ARGV] for i,k in ipairs(KEYS) do "
     "if redis.call('EXISTS',k)==1 and (redis.call('ZSCORE',k,g) or not redis.call('ZSCORE',k,ARGV[i])) then n=n+1 end "
@@ -439,7 +441,9 @@ MEMBERS_OF = (
     "local out={} for _,k in ipairs(KEYS) do out[#out+1]=k..' '..table.concat(redis.call('ZREVRANGE',k,0,-1),',') end "
     "return out"
 )
-READD_ALL = "for i,k in ipairs(KEYS) do redis.call('ZREM',k,ARGV[#ARGV]) redis.call('ZADD',k,0,ARGV[i]) end return #KEYS"
+READD_ALL = (
+    "for i,k in ipairs(KEYS) do redis.call('ZREM',k,ARGV[#ARGV]) redis.call('ZADD',k,0,ARGV[i]) end return #KEYS"
+)
 
 
 def scan_keys(kube: Kube, namespace: str, inst: RedisInstance, glob: str) -> list[str]:

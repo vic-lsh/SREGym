@@ -408,8 +408,14 @@ class _DocsKube(FakeMongoKube):
 @pytest.mark.parametrize("scope,expected", [("wide", 60), ("partial", 30)])
 def test_scoped_poison_hits_seeded_documents_never_probe_users_and_a_first_document_repair_is_a_decoy(scope, expected):
     kube = _DocsKube()
-    params = {"target": "post-storage-mongodb", "collection": "post", "shape": "wrong_type", "scope": scope,
-              "pick_seed": 5, **({"fraction": 0.5} if scope == "partial" else {})}
+    params = {
+        "target": "post-storage-mongodb",
+        "collection": "post",
+        "shape": "wrong_type",
+        "scope": scope,
+        "pick_seed": 5,
+        **({"fraction": 0.5} if scope == "partial" else {}),
+    }
     p = _build("mongo_poison_document", params, kube)
     p.prepare_target()
     assert len(p.scoped_docs) == expected and not {"7000", "7001"} & set(p.scoped_docs)
@@ -425,5 +431,14 @@ def test_scoped_poison_hits_seeded_documents_never_probe_users_and_a_first_docum
 
 def test_a_collection_without_a_per_user_read_has_no_poison_target():
     with pytest.raises(ValueError, match="no key_field"):
-        _build("mongo_poison_document", {"target": "user-timeline-mongodb", "collection": "user-timeline",
-                                         "shape": "wrong_type", "scope": "wide", "pick_seed": 1}, FakeMongoKube())
+        _build(
+            "mongo_poison_document",
+            {
+                "target": "user-timeline-mongodb",
+                "collection": "user-timeline",
+                "shape": "wrong_type",
+                "scope": "wide",
+                "pick_seed": 1,
+            },
+            FakeMongoKube(),
+        )

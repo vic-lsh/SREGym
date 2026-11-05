@@ -311,7 +311,9 @@ class ComponentFaultProblem(Problem):
         values = tuple(http.normalize(r.body, volatile, unordered) for r in responses)
         bad = [p for p, r, v in zip(reads, responses, values, strict=True) if not r.ok or http._empty(v)]
         if bad:
-            raise ComponentError(f"{type(self).__name__}: records the fault damages read empty or fail while healthy: {bad}")
+            raise ComponentError(
+                f"{type(self).__name__}: records the fault damages read empty or fail while healthy: {bad}"
+            )
         return http.Snapshot(reads, values)
 
     @mark_fault_injected

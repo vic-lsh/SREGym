@@ -442,7 +442,10 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--key", required=True)
     ap.add_argument(
-        "--generation", type=int, default=2, help="catalog generation whose sampler draws each seed (default 2; 3 = scoped)"
+        "--generation",
+        type=int,
+        default=2,
+        help="catalog generation whose sampler draws each seed (default 2; 3 = scoped)",
     )
     ap.add_argument("--app", default="social_network")
     ap.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3])

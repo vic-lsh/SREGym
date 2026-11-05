@@ -145,9 +145,7 @@ def _choose_stale_g3(binding: AppBinding, rng: random.Random) -> Target:
 
 _MODULE = "sregym.conductor.problems.redis_incident_faults"
 ENTRIES: tuple[CatalogEntry, ...] = tuple(
-    component_entry(
-        key, ENABLED_APPS[key], f"{_MODULE}:{cls}", choose, revisions={3: g3} if g3 is not None else None
-    )
+    component_entry(key, ENABLED_APPS[key], f"{_MODULE}:{cls}", choose, revisions={3: g3} if g3 is not None else None)
     for key, cls, choose, g3 in (
         ("redis_acl_revoked", "RedisAclRevoked", _choose_acl, None),
         ("redis_out_of_memory", "RedisOutOfMemory", _choose_oom, None),

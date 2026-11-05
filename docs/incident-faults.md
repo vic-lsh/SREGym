@@ -154,8 +154,13 @@ what an existing id draws (pinned: `fixtures/vanilla_s42_n100_plan.json`,
 `fixtures/social_network_g1_plans.json`, `fixtures/mixed10_s42_plans.json`,
 `fixtures/catalog_generation1_keys.json`). Component kinds are generation 2: opt in with
 `mf__<app>__n<N>__s<seed>[__k<K>][__reliable]__g2__v_` (or `--catalog-generation 2` for a planned
-sequence). Generation 2 is open while no experiment has used `__g2` ids; once one has, freeze it
-(`spec.FROZEN_GENERATION = 2`, pin its key set) and add `LATEST_GENERATION = 3` for new families.
+sequence). Generation 2 is frozen (`spec.FROZEN_GENERATION = 2`, key sets pinned in `fixtures/catalog_generation2_keys.json`):
+the detection experiments used `__g2` ids. Generation 3 (`__g3`, `--catalog-generation 3`) is open. A generation may also
+change how an existing kind draws: `CatalogEntry.revisions` maps a generation to a replacement sampler
+(`entry.at_generation(g)`; `plan_for` applies it), so g1/g2 ids keep their draws (`fixtures/g2_scoped_kinds_plans.json`
+pins every g2 plan that draws a revised kind). Generation 3 uses this for the scope of the single-record data faults
+(next section above); `reliability.UNRELIABLE_FROM` flags a kind only for ids of a generation and later, so a g3
+revision does not make the kind unreliable for `__reliable__g2` ids. `validate.py --generation 3` samples a seed with the g3 draw.
 
 ## Enable an existing kind on another app
 
@@ -274,6 +279,44 @@ Mongo), data loss on `home-timeline-redis` (the only copy of home timelines). Dr
 
 The reference of the rename kind is idempotent (recovery runs it after any repair). Error replies come
 back without a `(error)` prefix and exit 0 through `kubectl exec`, so `redis.cli` checks the reply prefix.
+
+## Scope of single-record data faults (generation 3)
+
+Five kinds corrupted ONE record, chosen among SREGym's own probe users (DX: `redis_poisoned_timeline_entry` on
+`9200:followers`, `redis_timeline_key_renamed` on `9101`, `social_graph_stale_cache` on `9200:followers`), so SDO's probes
+over probe-owned identities could not see them, and no real incident looks like that. Generation 3 gives them a
+`scope` (`problems/scope.py`, pure and seeded):
+
+| scope | meaning | drawn in g3 |
+| --- | --- | --- |
+| `wide` | every eligible record (a whole keyspace: a bad deploy, a botched key migration, broken cache invalidation) | yes |
+| `partial` | a seeded random fraction (25% or 50%, at least 2 records) | yes |
+| `single` | the original fixed record (`key`, the probe user) | only on an explicit opt-in: `SREGYM_ALLOW_SINGLE_SCOPE=1` (`component_redis.single_scope_allowed`) |
+
+Records are chosen from what the app really holds, at `prepare_injection` while healthy, never from SREGym's own users
+(`uid_below=9000` excludes 9100/9101/9200/9201/9210): Redis rows list a `KeySpace` (`RedisInstance.keyspace`: SCAN glob,
+regex, entry-point read) and the kinds verified with scope (`scoped_faults`); Mongo collections and memcached rows name a
+`reader_field` (the user a document or cached value belongs to) and the per-user `read`. A cold cache (a restarted
+`social-graph-redis`, an empty post cache) is warmed by composing or reading as seeded users, never by shrinking the scope; fewer
+than `min_keys` eligible records is a `ComponentError`.
+
+| Kind | wide | partial | Reference | Scoped decoys (declared) |
+| --- | --- | --- | --- | --- |
+| `redis_poisoned_timeline_entry` (home-timeline-redis, social-graph-redis) | the member in every user's sorted set | in a fraction | `ZREM` of that member from every damaged key (one `EVAL` batch) | `remove_member_first_key` (not cleared), `delete_keys` (data_lost on home-timeline-redis, passes on the cache), restarts as before |
+| `redis_timeline_key_renamed` (home-timeline-redis) | every timeline key renamed `<uid>:bak-<tok>` | a fraction | merge every backup back (`ZUNIONSTORE` max, then `DEL`) | `merge_first_key` (not cleared), `delete_backup_keys` (data_lost), `rename_back` (passes) |
+| `social_graph_stale_cache` (social-graph-redis) | one follower dropped (and a ghost added) in every author's cached set | in a fraction | `DEL` of every damaged set (refills from Mongo) | `readd_first_author` (not cleared), `readd_follower` (passes) |
+| `mongo_poison_document` (post) | every seeded post malformed | a fraction | `unpoison_documents` for all | `unpoison_first_document` (not cleared), `flush_cache` (not cleared) |
+| `memcached_poisoned_entries` (post-storage-memcached) | every cached seeded post poisoned | a fraction | delete the poisoned keys | `delete_first_key` (not cleared), `flush_all` (passes) |
+
+The other Mongo and Redis kinds act on a whole server or collection (write lock, write rejection, renamed collection, ACL,
+maxmemory, pause, replica) and need no scope. Hotel's `mongo_poison_document` and `memcached_poisoned_entries` have no per-user
+read, so their g3 draw keeps the g2 scopes without the single ones (`all_seeded`, `broad`/`all_hot_keys`).
+
+The verdict checks the whole incident, not a sample: `fault_cleared` counts the damaged records (one `EVAL` batch through the
+read-only check user, which may run scripts but not write), so fixing one record is `fault_not_cleared`. Visibility comes from
+`extra_reads()`: a spread sample of up to 3 damaged users' reads, snapshotted while healthy and compared after the repair
+(component `data`), and, for follower sets, `write_checks()`: compose as two damaged authors and read a follower's home timeline
+(component `write`). Both are the fault's own records, so a partial scope is visible even when it misses the fixed integrity users.
 
 ## Lane notes (read before validating)
 
