@@ -23,6 +23,7 @@ from __future__ import annotations
 import random
 
 from sregym.conductor.problems.composition.app_bindings import AppBinding, mongo_targets
+from sregym.conductor.problems.composition.catalog import component_redis
 from sregym.conductor.problems.composition.catalog._component import Target, component_entry, pick_one
 from sregym.conductor.problems.composition.spec import CatalogEntry
 
@@ -76,6 +77,28 @@ def _poison(b: AppBinding, rng: random.Random) -> Target:
     return Target(params, touches=_caches(coll))
 
 
+def _poison_g3(b: AppBinding, rng: random.Random) -> Target:
+    """Generation 3: wide (every eligible document) or partial (a seeded fraction); a collection without a
+    ``reader_field`` cannot show a partial scope and keeps the generation-2 draw. Single scope on opt-in."""
+    inst, coll = _pick(b, "mongo_poison_document", rng)
+    if not coll.reader_field:  # hotel: no per-user read to show a partial scope; all seeded documents, never one
+        t = _poison(b, rng)
+        if t.params["scope"] == "one_doc" and not component_redis.single_scope_allowed():
+            t.params["scope"] = "all_seeded"
+        return t
+    scope = rng.choice(component_redis.SCOPES if component_redis.single_scope_allowed() else component_redis.SCOPED)
+    params = {
+        "target": inst.workload,
+        "collection": coll.name,
+        "shape": rng.choice(POISON_SHAPES),
+        "scope": scope,
+        "pick_seed": rng.randrange(10**6),
+    }
+    if scope == "partial":
+        params["fraction"] = rng.choice(component_redis.PARTIAL_FRACTIONS)
+    return Target(params, touches=_caches(coll))
+
+
 ENTRIES: tuple[CatalogEntry, ...] = (
     component_entry("mongo_write_lock", ENABLED_APPS["mongo_write_lock"], f"{_PROBLEMS}:MongoWriteLock", _write_lock),
     component_entry(
@@ -91,6 +114,10 @@ ENTRIES: tuple[CatalogEntry, ...] = (
         _renamed,
     ),
     component_entry(
-        "mongo_poison_document", ENABLED_APPS["mongo_poison_document"], f"{_PROBLEMS}:MongoPoisonDocument", _poison
+        "mongo_poison_document",
+        ENABLED_APPS["mongo_poison_document"],
+        f"{_PROBLEMS}:MongoPoisonDocument",
+        _poison,
+        revisions={3: _poison_g3},
     ),
 )

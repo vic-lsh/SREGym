@@ -581,3 +581,39 @@ def test_a_blocked_write_is_retried_with_fresh_markers_and_a_persistent_block_st
     p._marker_visible = lambda check, marker: (False, f"no {marker}")
     landed, detail = p._write_lands(object())
     assert not landed and len(written) == WRITE_TRIES and f"{WRITE_TRIES} writes" in detail
+
+
+def _seeded_cache_kube(n_users=20):
+    kube = _kube()
+    for u in range(n_users):  # seeded users with a post each; the probe's user 9200 too
+        kube.homes[str(u)] = []
+        kube.timelines[str(u)] = [{"post_id": str(900 + u), "text": f"t{u}", "creator": {"user_id": u}}]
+    kube.homes["9200"] = []
+    kube.timelines["9200"] = [{"post_id": "990", "text": "probe", "creator": {"user_id": 9200}}]
+    return kube
+
+
+@pytest.mark.parametrize("scope,expected", [("wide", 20), ("partial", 10)])
+def test_scoped_memcached_poison_chooses_seeded_users_entries_and_a_first_key_delete_is_a_decoy(offline, scope, expected):
+    kube = _seeded_cache_kube()
+    params = {"target": "post-storage-memcached", "corruption": "stale_value", "key_scope": scope, "poison_seed": 1,
+              "pick_seed": 4, **({"fraction": 0.5} if scope == "partial" else {})}
+    p = _build("memcached_poisoned_entries", params, kube)
+    p.prepare_target()  # a cold cache is filled by reading as seeded users
+    assert len(p.scoped_keys) == expected and "990" not in p.scoped_keys
+    reads = p.extra_reads()
+    assert 1 <= len(reads) <= 3 and all("user-timeline/read?user_id=" in r for r in reads)
+    p.inject()
+    assert set(p.poisoned) == set(p.scoped_keys) and not p.fault_cleared()[0]
+    assert p.repairs()["delete_first_key"].expect is Expect.FAULT_NOT_CLEARED
+    p.repairs()["delete_first_key"].run()
+    assert not p.fault_cleared()[0]  # one repaired entry is not a repair of the incident
+    p.reference_mitigation()
+    assert p.fault_cleared()[0]
+
+
+def test_scoped_memcached_needs_a_per_user_read(offline):
+    params = {"target": "user-memcached", "corruption": "stale_value", "key_scope": "wide", "poison_seed": 1,
+              "pick_seed": 1}
+    with pytest.raises(ValueError, match="no wide scope"):
+        _build("memcached_poisoned_entries", params, _kube())

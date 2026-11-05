@@ -307,3 +307,28 @@ def test_batch_scripts_stay_within_one_batch():
         redis.eval_batch(None, "ns", None, redis.DELETE_ALL, tuple(str(i) for i in range(redis.MAX_SCOPED_KEYS + 1)))
     assert re.fullmatch(r".*", redis.backup_suffix("ab"))
     assert redis.backup_suffix("ab") == ":bak-ab"
+
+
+def test_generation_three_never_draws_single_scope_for_mongo_or_memcached_without_the_opt_in(monkeypatch):
+    monkeypatch.delenv(component_redis.SINGLE_SCOPE_ENV, raising=False)
+    for key in ("mongo_poison_document", "memcached_poisoned_entries"):
+        for app in ("social_network", "hotel_reservation"):
+            entry = {e.key: e for e in catalog.entries_for(app)}[key].at_generation(3)
+            for seed in range(80):
+                p = entry.sample(app, random.Random(seed)).param_dict()
+                assert p.get("scope", p.get("key_scope")) not in ("single", "one_doc", "one_key"), (key, app, p)
+    social = {e.key: e for e in catalog.entries_for("social_network")}
+    mongo = {social["mongo_poison_document"].at_generation(3).sample("social_network", random.Random(s)).param_dict()["scope"]
+             for s in range(80)}
+    cache = {social["memcached_poisoned_entries"].at_generation(3).sample("social_network", random.Random(s)).param_dict()["key_scope"]
+             for s in range(80)}
+    assert mongo == cache == {"partial", "wide"}
+
+
+def test_unreliable_from_flags_apply_only_to_their_generation_and_later():
+    from sregym.conductor.problems.composition.reliability import UNRELIABLE_FROM, reliable_entries
+
+    entries = [e for e in catalog.entries_for("social_network") if (e.key, "social_network") in UNRELIABLE_FROM]
+    assert entries
+    assert {e.key for e in reliable_entries("social_network", entries, 2)} == {e.key for e in entries}
+    assert reliable_entries("social_network", entries, 3) == ()

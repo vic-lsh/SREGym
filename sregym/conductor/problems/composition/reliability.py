@@ -89,7 +89,13 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
 # Flags that apply only to plans of catalog generation >= the given one: a generation that revises how an
 # existing kind draws (the scope of single-record data faults) must not make that kind unreliable for the
 # earlier generations' ids, which draw it as they always did.
-UNRELIABLE_FROM: Mapping[tuple[str, str], tuple[int, str]] = {}
+_SCOPE_NOT_VALIDATED = "Generation-3 wide and partial scope not yet validated on 3 seeds each with every trial VALID."
+UNRELIABLE_FROM: Mapping[tuple[str, str], tuple[int, str]] = {
+    ("redis_poisoned_timeline_entry", "social_network"): (3, _SCOPE_NOT_VALIDATED),
+    ("redis_timeline_key_renamed", "social_network"): (3, _SCOPE_NOT_VALIDATED),
+    ("social_graph_stale_cache", "social_network"): (3, _SCOPE_NOT_VALIDATED),
+    ("memcached_poisoned_entries", "social_network"): (3, _SCOPE_NOT_VALIDATED),
+}
 
 
 def reliable_entries(app: str, entries: Sequence[CatalogEntry], generation: int = 1) -> tuple[CatalogEntry, ...]:

@@ -408,6 +408,27 @@ def poison_state(
     )
 
 
+MAX_LISTED_DOCS = 5000
+
+
+def list_documents(
+    kube: Kube, namespace: str, inst: MongoInstance, collection: str, key_field: str, user_field: str, limit: int
+) -> list[tuple[str, str]]:
+    """Up to ``limit`` ``(key, user)`` pairs: ``key_field`` and the dotted ``user_field`` (the user the document
+    belongs to) of documents that have both, as exact decimal strings (a 64-bit id loses digits as a JS number)."""
+    r = run_js(
+        kube,
+        namespace,
+        inst,
+        _coll(inst, collection) + "function s(v){ var m = String(v).match(/-?[0-9]+/); return m ? m[0] : String(v); }"
+        f" var rows = []; c.find({{{_js(key_field)}: {{$exists: true}}, {_js(user_field)}: {{$exists: true}}}},"
+        f" {{{_js(key_field)}: 1, {_js(user_field)}: 1}}).limit({int(limit)}).forEach(function(d){{"
+        f" var u = d; {_js(user_field)}.split('.').forEach(function(p){{ u = u[p]; }});"
+        f" rows.push([s(d[{_js(key_field)}]), s(u)]); }}); out({{rows: rows}});",
+    )
+    return [(str(k), str(u)) for k, u in r["rows"]]
+
+
 # --- data checks -------------------------------------------------------------------------------------
 
 

@@ -46,6 +46,27 @@ def _redis_replica(b: AppBinding, rng: random.Random) -> Target:
     return Target({"target": inst.workload, "master": rng.choice(PHANTOM_MASTERS)})
 
 
+def _memcached_poison_g3(b: AppBinding, rng: random.Random) -> Target:
+    """Generation 3: a row with a per-user read (social post-storage-memcached) draws a wide or partial scope over
+    the entries seeded users' reads put in the cache; any other row keeps the generation-2 scopes without
+    ``one_key``. Single scope (``one_key``) only on an explicit opt-in."""
+    from sregym.conductor.problems.composition.catalog import component_redis as scopes
+
+    rows = [m for m in instances(b.memcached) if m.has_hot_keys]
+    scoped = [m for m in rows if m.reader_field]
+    inst = pick_one(scoped or rows, "memcached row", b.app, rng)
+    params = {"target": inst.workload, "corruption": rng.choice(CORRUPTIONS), "poison_seed": rng.randrange(2**31)}
+    if inst.reader_field:
+        scope = rng.choice(scopes.SCOPES if scopes.single_scope_allowed() else scopes.SCOPED)
+        params.update(key_scope=scope, pick_seed=rng.randrange(10**6))
+        if scope == "partial":
+            params["fraction"] = rng.choice(scopes.PARTIAL_FRACTIONS)
+    else:
+        allowed = KEY_SCOPES if scopes.single_scope_allowed() else tuple(k for k in KEY_SCOPES if k != "one_key")
+        params["key_scope"] = rng.choice(allowed)
+    return Target(params)
+
+
 def _memcached_poison(b: AppBinding, rng: random.Random) -> Target:
     inst = pick_one([m for m in instances(b.memcached) if m.has_hot_keys], "memcached row", b.app, rng)
     return Target(
@@ -70,5 +91,6 @@ ENTRIES: tuple[CatalogEntry, ...] = (
         ENABLED_APPS["memcached_poisoned_entries"],
         "sregym.conductor.problems.memcached_poisoned_entries:MemcachedPoisonedEntries",
         _memcached_poison,
+        revisions={3: _memcached_poison_g3},
     ),
 )

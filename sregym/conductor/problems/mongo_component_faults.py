@@ -17,8 +17,11 @@ and restarting the consuming service leaves the database state alone.
 
 from __future__ import annotations
 
+import random
+import re
 from typing import Any
 
+from sregym.conductor.problems import scope as scopes
 from sregym.conductor.problems.component_fault import ComponentFaultProblem, Expect, Repair, classify
 from sregym.conductor.problems.composition.app_bindings import (
     BINDINGS,
@@ -32,6 +35,10 @@ from sregym.generators.fault.components.kube import ComponentError
 
 WRITE_MODES = ("validator", "unique_index")
 POISON_SCOPES = ("one_doc", "all_seeded")
+# Catalog generation 3 (problems/scope.py): ``single`` is ``one_doc``; ``wide`` poisons every eligible document of the
+# collection and ``partial`` a seeded fraction, chosen from the documents the collection really holds.
+POISON_SCOPES_G3 = ("single", "partial", "wide")
+MAX_SCOPED_DOCS = 1500
 PRE_MARKER_ATTEMPTS = 2
 
 
@@ -265,12 +272,27 @@ class MongoPoisonDocument(MongoFaultProblem):
     state_in_data = True
     STATE_ATTRS = ("poisoned",)
 
-    def __init__(self, app_name: str, target: str, collection: str, shape: str, scope: str, namespace=None, kube=None):
+    def __init__(
+        self,
+        app_name: str,
+        target: str,
+        collection: str,
+        shape: str,
+        scope: str,
+        fraction: float | None = None,
+        pick_seed: int = 0,
+        namespace=None,
+        kube=None,
+    ):
         if shape not in mongo.POISON_SHAPES:
             raise ValueError(f"unknown shape {shape!r}")
-        if scope not in POISON_SCOPES:
+        if scope not in (*POISON_SCOPES, *POISON_SCOPES_G3):
             raise ValueError(f"unknown scope {scope!r}")
-        self.shape, self.scope = shape, scope
+        scopes.validate("single" if scope in POISON_SCOPES else scope, fraction)
+        self.shape, self.fraction, self.pick_seed = shape, fraction, pick_seed
+        self.scope = "one_doc" if scope == "single" else scope
+        self.scoped = self.scope in ("partial", "wide")
+        self.scoped_docs: dict[str, str] = {}  # document key -> its user, chosen while healthy
         self.poisoned: tuple[str, ...] = ()
         super().__init__(
             app_name,
@@ -284,16 +306,50 @@ class MongoPoisonDocument(MongoFaultProblem):
         )
         if not (self.coll.key_field and len(self.coll.poison_fields) == 2):
             raise ValueError(f"{target}.{collection} has no key_field/poison_fields in its binding")
+        if self.scoped and not (self.coll.reader_field and self.coll.read):
+            raise ValueError(f"{target}.{collection} has no reader_field/read in its binding: no {self.scope} scope")
+
+    def prepare_target(self) -> None:
+        super().prepare_target()
+        if not self.scoped:
+            return
+        coll = self.coll
+        assert coll.key_field and coll.reader_field
+        docs = mongo.list_documents(*self._ns_args(), coll.key_field, coll.reader_field, mongo.MAX_LISTED_DOCS)
+        eligible = {k: u for k, u in docs if re.fullmatch(r"\d+", u) and int(u) < coll.uid_below}
+        if len(eligible) < coll.min_docs:
+            raise ComponentError(
+                f"{self.instance.workload}.{coll.name}: {len(eligible)} seeded documents, need {coll.min_docs} for a "
+                f"{self.scope} scope"
+            )
+        pool = sorted(eligible)
+        if len(pool) > MAX_SCOPED_DOCS:
+            pool = sorted(random.Random(self.pick_seed).sample(pool, MAX_SCOPED_DOCS))
+        chosen = scopes.select(pool, self.scope, self.fraction, self.pick_seed)
+        self.scoped_docs = {k: eligible[k] for k in chosen}
+
+    def extra_reads(self) -> tuple[str, ...]:
+        """Timelines of a spread sample of the damaged documents' users (a fraction of documents may miss the
+        binding's fixed reads)."""
+        if not self.scoped or not self.coll.read:
+            return ()
+        users = sorted({u for u in self.scoped_docs.values()}, key=int)
+        return tuple(self.coll.read.format(uid=u) for u in scopes.spread(tuple(users), 3))
 
     def _doc_args(self) -> tuple[Any, ...]:
         return (*self._ns_args(), self.coll.key_field, self.poisoned, self.shape, *self.coll.poison_fields)
 
     def inject(self) -> None:
         assert self.snapshot is not None and self.coll.key_field
-        keys = self.snapshot.json_field_values(self.coll.key_field)
-        if not keys:
-            raise ComponentError(f"no {self.coll.key_field} values in the seeded-data snapshot")
-        self.poisoned = tuple(keys[:1] if self.scope == "one_doc" else keys)
+        if self.scoped:
+            if not self.scoped_docs:
+                raise ComponentError("scoped documents were not chosen (prepare_injection did not run)")
+            self.poisoned = tuple(self.scoped_docs)
+        else:
+            keys = self.snapshot.json_field_values(self.coll.key_field)
+            if not keys:
+                raise ComponentError(f"no {self.coll.key_field} values in the seeded-data snapshot")
+            self.poisoned = tuple(keys[:1] if self.scope == "one_doc" else keys)
         self.poisoned = tuple(
             mongo.poison_documents(
                 *self._ns_args(), self.coll.key_field, self.poisoned, self.shape, *self.coll.poison_fields
@@ -314,7 +370,16 @@ class MongoPoisonDocument(MongoFaultProblem):
             mongo.unpoison_documents(*self._doc_args())
 
     def extra_repairs(self) -> dict[str, Repair]:
-        if not self.coll.cache:
-            return {}
-        # flushing the cache re-reads the same malformed documents
-        return {"flush_cache": Repair(self.flush_cache, Expect.FAULT_NOT_CLEARED)}
+        repairs: dict[str, Repair] = {}
+        if self.scoped:
+            first = self.poisoned[:1] or tuple(self.scoped_docs)[:1]
+            # one document repaired, the rest of the incident left
+            repairs["unpoison_first_document"] = Repair(
+                lambda: mongo.unpoison_documents(
+                    *self._ns_args(), self.coll.key_field, first, self.shape, *self.coll.poison_fields
+                ),
+                Expect.FAULT_NOT_CLEARED,
+            )
+        if self.coll.cache:  # flushing the cache re-reads the same malformed documents
+            repairs["flush_cache"] = Repair(self.flush_cache, Expect.FAULT_NOT_CLEARED)
+        return repairs

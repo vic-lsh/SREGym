@@ -139,6 +139,15 @@ class MemcachedInstance:
     port: int = 11211
     kind: str = "Deployment"
     verified: bool = True
+    # For wide and partial scope: the (dotted) JSON field of a cached value naming the user it belongs to, the
+    # entry-point read of that user's data (``{uid}``) that fills and shows the cache, and the Redis row whose keys
+    # are user ids (to warm a cold cache by reading as seeded users). Ids at or above ``uid_below`` (SREGym's own
+    # probe and fault users) are never chosen; fewer than ``min_keys`` eligible entries is a cold cache.
+    reader_field: str | None = None
+    read: str | None = None
+    warm_from: str | None = None
+    uid_below: int = 9000
+    min_keys: int = 8
 
     @property
     def has_hot_keys(self) -> bool:
@@ -180,6 +189,13 @@ class MongoCollection:
     faults: tuple[str, ...] = ()
     merge: str = "append_only"
     merge_key: str = "_id"
+    # For wide and partial scope: the (dotted) field naming the user a document belongs to, the entry-point read
+    # that shows that user's documents (``{uid}``), and ids at or above ``uid_below`` (SREGym's own probe and
+    # fault users) that are never chosen. ``min_docs``: fewer eligible documents than this is an empty collection.
+    reader_field: str | None = None
+    read: str | None = None
+    uid_below: int = 9000
+    min_docs: int = 8
 
     def __post_init__(self) -> None:
         if self.merge not in ("append_only", "union_arrays"):
@@ -474,7 +490,14 @@ SOCIAL_NETWORK = AppBinding(
             warm=(*ENTRY_POINTS["Social Network"].setup, _SOCIAL_PROBE_LOGIN),
         ),
         # post-storage-service caches each post's JSON under its decimal post id on read.
-        MemcachedInstance("post-storage-memcached", consumers=("post-storage-service",), key_field="post_id"),
+        MemcachedInstance(
+            "post-storage-memcached",
+            consumers=("post-storage-service",),
+            key_field="post_id",
+            reader_field="creator.user_id",
+            read="/wrk2-api/user-timeline/read?user_id={uid}&start=0&stop=20",
+            warm_from="home-timeline-redis",
+        ),
         # Only GetExtendedUrls and media reads would use these; no entry point reaches them.
         MemcachedInstance("url-shorten-memcached", consumers=("url-shorten-service",), verified=False),
         MemcachedInstance("media-memcached", consumers=("media-service",), verified=False),
@@ -505,6 +528,8 @@ SOCIAL_NETWORK = AppBinding(
                     cache="post-storage-memcached",
                     key_field="post_id",
                     poison_fields=("text", "creator"),
+                    reader_field="creator.user_id",
+                    read="/wrk2-api/user-timeline/read?user_id={uid}&start=0&stop=20",
                     merge_key="post_id",
                     unique_key="post_type",
                     stamp_field="timestamp",

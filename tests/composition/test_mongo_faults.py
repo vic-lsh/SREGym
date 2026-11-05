@@ -390,3 +390,40 @@ def test_non_write_faults_skip_the_round_trip():
     kube = FakeMongoKube()
     p = _inject("mongo_collection_renamed", {"target": "post-storage-mongodb", "collection": "post"}, kube)
     assert "write_detail" not in p.verdict()
+
+
+class _DocsKube(FakeMongoKube):
+    """A post collection whose documents belong to seeded users 0..19 and to SREGym's own probe user 9200."""
+
+    def __init__(self):
+        super().__init__()
+        self.docs = [[str(5000 + i), str(i % 20)] for i in range(60)] + [["7000", "9200"], ["7001", "9200"]]
+
+    def _shell(self, s):
+        if "var rows = []" in s:
+            return "@@JSON " + json.dumps({"rows": self.docs}) + "\n"
+        return super()._shell(s)
+
+
+@pytest.mark.parametrize("scope,expected", [("wide", 60), ("partial", 30)])
+def test_scoped_poison_hits_seeded_documents_never_probe_users_and_a_first_document_repair_is_a_decoy(scope, expected):
+    kube = _DocsKube()
+    params = {"target": "post-storage-mongodb", "collection": "post", "shape": "wrong_type", "scope": scope,
+              "pick_seed": 5, **({"fraction": 0.5} if scope == "partial" else {})}
+    p = _build("mongo_poison_document", params, kube)
+    p.prepare_target()
+    assert len(p.scoped_docs) == expected and not {"7000", "7001"} & set(p.scoped_docs)
+    reads = p.extra_reads()
+    assert 1 <= len(reads) <= 3 and all("user-timeline/read?user_id=" in r for r in reads)
+    p.snapshot = SimpleNamespace(json_field_values=lambda name: ())  # the seeded snapshot is not used by a scope
+    p.inject()
+    assert set(p.poisoned) == set(p.scoped_docs) and kube.poison == set(p.scoped_docs)
+    assert p.repairs()["unpoison_first_document"].expect is Expect.FAULT_NOT_CLEARED
+    p.reference_mitigation()
+    assert not kube.poison
+
+
+def test_a_collection_without_a_per_user_read_has_no_poison_target():
+    with pytest.raises(ValueError, match="no key_field"):
+        _build("mongo_poison_document", {"target": "user-timeline-mongodb", "collection": "user-timeline",
+                                         "shape": "wrong_type", "scope": "wide", "pick_seed": 1}, FakeMongoKube())
