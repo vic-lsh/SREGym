@@ -61,6 +61,7 @@ class Harness:
         ready_deadline_s: float = READY_DEADLINE_S,
         ready_poll_s: float = READY_POLL_S,
         symptom_samples: int = 1,
+        generation: int = 2,
         symptom_gap_s: float = 10.0,
         clock=time.monotonic,
         sleep=time.sleep,
@@ -68,6 +69,7 @@ class Harness:
         self.cluster = cluster
         self.ready_deadline_s, self.ready_poll_s = ready_deadline_s, ready_poll_s
         self.symptom_samples, self.symptom_gap_s = symptom_samples, symptom_gap_s
+        self.generation = generation  # the catalog generation whose draw a seed names (3: scoped data faults)
         self._clock, self._sleep = clock, sleep
         self.persist_s = persist_s
         self.probe_rounds = probe_rounds
@@ -238,7 +240,7 @@ class Harness:
         """Yield each row as soon as it finishes; the last row is the seed summary."""
         t0 = time.monotonic()
         entry = {e.key: e for e in catalog.entries_for(app)}[key]
-        draw = entry.sample(app, random.Random(seed))
+        draw = entry.at_generation(self.generation).sample(app, random.Random(seed))
         params = {**draw.param_dict(), **(overrides or {})}  # --set pins a target or severity over the seed's draw
         problem = _build(key, app, params, namespace)
         base = {"key": key, "app": app, "seed": seed, "params": params}
@@ -439,6 +441,9 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--key", required=True)
+    ap.add_argument(
+        "--generation", type=int, default=2, help="catalog generation whose sampler draws each seed (default 2; 3 = scoped)"
+    )
     ap.add_argument("--app", default="social_network")
     ap.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3])
     ap.add_argument("--namespace", default=None, help="default: the app binding's namespace")
@@ -497,6 +502,7 @@ def main(argv: list[str] | None = None) -> int:
         reset_cmd=args.reset_cmd,
         ready_deadline_s=args.ready_deadline_s,
         symptom_samples=args.symptom_samples,
+        generation=args.generation,
     )
     all_ok = True
 

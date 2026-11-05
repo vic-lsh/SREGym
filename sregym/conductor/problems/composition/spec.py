@@ -24,7 +24,7 @@ from __future__ import annotations
 import enum
 import random
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 # Catalog generations. Generation 1 is the catalog every plan id without a `__g<G>` segment draws
@@ -34,7 +34,10 @@ from typing import Any
 # (FROZEN_GENERATION) and new entries go to the next one. tests/composition/test_plan_generations.py
 # pins the key set of every frozen generation, so a change that would re-draw a used id fails.
 FROZEN_GENERATION = 1
-LATEST_GENERATION = 2
+LATEST_GENERATION = 3
+# A generation may also change how an existing entry draws (CatalogEntry.revisions): ids of earlier
+# generations keep the sampler they always had. Generation 3 revises the single-record data faults to
+# draw a wide or partial scope (single scope is drawn only on an explicit opt-in).
 
 
 def _is_dotted_prefix(prefix: str, path: str) -> bool:
@@ -156,6 +159,9 @@ class CatalogEntry:
     build: Callable[[FaultDraw], Any]
     # Per-app catalog generation (default 1 for every app). See LATEST_GENERATION.
     generations: Mapping[str, int] = field(default_factory=dict)
+    # Samplers that replace `sample` from a later generation on: {generation: sample}. `at_generation(g)` uses
+    # the one with the highest generation <= g, else `sample`, so ids of earlier generations draw as they did.
+    revisions: Mapping[int, Callable[[str, random.Random], FaultDraw]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for app, gen in self.generations.items():
@@ -163,6 +169,14 @@ class CatalogEntry:
                 raise ValueError(f"{self.key}: generation given for unsupported app {app!r}")
             if not isinstance(gen, int) or not 1 <= gen <= LATEST_GENERATION:
                 raise ValueError(f"{self.key}: generation {gen!r} for {app} not in 1..{LATEST_GENERATION}")
+        for gen in self.revisions:
+            if not isinstance(gen, int) or not 2 <= gen <= LATEST_GENERATION:
+                raise ValueError(f"{self.key}: revision generation {gen!r} not in 2..{LATEST_GENERATION}")
+
+    def at_generation(self, generation: int) -> CatalogEntry:
+        """This entry as plans of catalog generation `generation` draw it."""
+        usable = [g for g in self.revisions if g <= generation]
+        return replace(self, sample=self.revisions[max(usable)]) if usable else self
 
     def generation(self, app: str) -> int:
         """The catalog generation in which this entry entered `app`'s plans."""

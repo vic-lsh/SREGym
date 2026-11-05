@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import importlib
 import random
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -61,12 +61,16 @@ def component_entry(
     *,
     restarts: bool = False,
     generation: int = INCIDENT_GENERATION,
+    revisions: Mapping[int, Choose] | None = None,
 ) -> CatalogEntry:
     """``needs_client_pods`` is always set: every component oracle reads through client pods.
     ``restarts``: the reference or an acceptable repair restarts the target (a frozen process)."""
     module_name, _, class_name = problem.partition(":")
 
-    def pick(app: str, rng: random.Random) -> Pick:
+    def picker(choose: Choose) -> Callable[[str, random.Random], Pick]:
+        return lambda app, rng: pick(choose, app, rng)
+
+    def pick(choose: Choose, app: str, rng: random.Random) -> Pick:
         binding = BINDINGS[app]
         t = choose(binding, rng)
         names = [t.params["target"], *(w for w in t.touches if w != t.params["target"])]
@@ -77,7 +81,14 @@ def component_entry(
         cls = getattr(importlib.import_module(module_name), class_name)
         return cls(app_name=app, **params)
 
-    return entry(key, apps, pick, build, generation=generation)
+    return entry(
+        key,
+        apps,
+        picker(choose),
+        build,
+        generation=generation,
+        revisions={g: picker(c) for g, c in (revisions or {}).items()},
+    )
 
 
 def pick_one(rows: tuple, what: str, app: str, rng: random.Random):

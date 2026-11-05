@@ -1,0 +1,3007 @@
+{
+ "mf__hotel_reservation__n1__s2__g2__v_": [
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "hotels",
+    "scope": "one_doc",
+    "shape": "wrong_type",
+    "target": "mongodb-profile"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n2__s13__g2__v_": [
+  {
+   "key": "hpa_missing_effective_cpu_request",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "stale_value",
+    "key_scope": "all_hot_keys",
+    "poison_seed": 122645568,
+    "target": "memcached-reserve"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n2__s19__g2__v_": [
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "stale_value",
+    "key_scope": "broad",
+    "poison_seed": 2045244875,
+    "target": "memcached-rate"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_write_lock",
+   "params": {
+    "target": "mongodb-reservation"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n2__s21__g2__v_": [
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "stale_value",
+    "key_scope": "broad",
+    "poison_seed": 2071123986,
+    "target": "memcached-rate"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "hotels",
+    "scope": "one_doc",
+    "shape": "wrong_type",
+    "target": "mongodb-profile"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n2__s22__g2__v_": [
+  {
+   "key": "liveness_probe_misconfiguration",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "search",
+    "probe_error_mode": "wrong_path",
+    "replica_count": 3
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "hotels",
+    "scope": "all_seeded",
+    "shape": "wrong_type",
+    "target": "mongodb-profile"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n2__s25__g2__v_": [
+  {
+   "key": "resource_request_too_large",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "rate",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "hotels",
+    "scope": "one_doc",
+    "shape": "wrong_type",
+    "target": "mongodb-profile"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n2__s33__g2__v_": [
+  {
+   "key": "service_port_conflict",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "profile"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "hotels",
+    "scope": "one_doc",
+    "shape": "wrong_type",
+    "target": "mongodb-profile"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n2__s6__g2__v_": [
+  {
+   "key": "resource_request_too_small",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "rate",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "hotels",
+    "scope": "all_seeded",
+    "shape": "field_renamed",
+    "target": "mongodb-profile"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n3__s31__g2__v_": [
+  {
+   "key": "resource_request_too_small",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "frontend",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "init_container_dependency_hang",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "recommendation",
+    "init_hang_mechanism": "http_ready_check"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "garbage_bytes",
+    "key_scope": "broad",
+    "poison_seed": 1574933345,
+    "target": "memcached-profile"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n3__s39__g2__v_": [
+  {
+   "key": "configmap_drift",
+   "params": {
+    "faulty_service": "geo"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "revoke_auth_mongodb",
+   "params": {
+    "faulty_service": "mongodb-rate"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "hotels",
+    "scope": "one_doc",
+    "shape": "field_renamed",
+    "target": "mongodb-profile"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n3__s53__g2__v_": [
+  {
+   "key": "resource_request_too_small",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "rate",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "stale_value",
+    "key_scope": "broad",
+    "poison_seed": 27887240,
+    "target": "memcached-profile"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "expired_tls_hotel_reservation",
+   "params": {},
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n3__s56__g2__v_": [
+  {
+   "key": "pvc_claim_mismatch",
+   "params": {
+    "pvc_failure_scope": "all"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "wrong_dns_policy",
+   "params": {
+    "app_name": "hotel_reservation",
+    "dns_misconfiguration_type": "default_policy",
+    "faulty_service": "user"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "wrong_type",
+    "key_scope": "broad",
+    "poison_seed": 1331870734,
+    "target": "memcached-reserve"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n5__s12__g2__v_": [
+  {
+   "key": "init_container_dependency_hang",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "reservation",
+    "init_hang_mechanism": "dns_lookup_loop"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "k8s_target_port_misconfig",
+   "params": {
+    "app_name": "hotel_reservation",
+    "bad_port": 9999,
+    "faulty_service": "search"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "hotels",
+    "scope": "all_seeded",
+    "shape": "field_renamed",
+    "target": "mongodb-profile"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_write_lock",
+   "params": {
+    "target": "mongodb-reservation"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "service_dns_resolution_failure_netpol",
+   "params": {
+    "app_name": "hotel_reservation",
+    "dns_failure_layer": "network_policy_block_dns",
+    "dns_response_code": "NXDOMAIN",
+    "faulty_service": "recommendation"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n5__s15__g2__v_": [
+  {
+   "key": "duplicate_pvc_mounts",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "recommendation"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "liveness_probe_misconfiguration",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "search",
+    "probe_error_mode": "wrong_path",
+    "replica_count": 3
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "ephemeral_port_range_hotel_reservation",
+   "params": {
+    "port_range_severity": "critical",
+    "sysctl_scope": "frontend_only"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "hotels",
+    "scope": "all_seeded",
+    "shape": "field_renamed",
+    "target": "mongodb-profile"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "misconfig_app_hotel_res",
+   "params": {},
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n5__s21__g2__v_": [
+  {
+   "key": "hpa_missing_effective_cpu_request",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "configmap_drift",
+   "params": {
+    "faulty_service": "geo"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "expired_tls_hotel_reservation",
+   "params": {},
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "k8s_target_port_misconfig",
+   "params": {
+    "app_name": "hotel_reservation",
+    "bad_port": 9999,
+    "faulty_service": "recommendation"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "stale_value",
+    "key_scope": "all_hot_keys",
+    "poison_seed": 2138521284,
+    "target": "memcached-reserve"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n5__s25__g2__v_": [
+  {
+   "key": "duplicate_pvc_mounts",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "reservation"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "revoke_auth_mongodb",
+   "params": {
+    "faulty_service": "mongodb-rate"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "ephemeral_port_range_hotel_reservation",
+   "params": {
+    "port_range_severity": "degraded",
+    "sysctl_scope": "frontend_only"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "hotels",
+    "scope": "all_seeded",
+    "shape": "wrong_type",
+    "target": "mongodb-profile"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "storage_user_unregistered",
+   "params": {
+    "faulty_service": "mongodb-geo"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n5__s27__g2__v_": [
+  {
+   "key": "liveness_probe_misconfiguration",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "reservation",
+    "probe_error_mode": "wrong_protocol",
+    "replica_count": 1
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "resource_request_too_large",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "user",
+    "resource_type": "cpu"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "hotels",
+    "scope": "one_doc",
+    "shape": "field_renamed",
+    "target": "mongodb-profile"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "ingress_misroute",
+   "params": {},
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_collection_renamed",
+   "params": {
+    "collection": "geo",
+    "target": "mongodb-geo"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n5__s28__g2__v_": [
+  {
+   "key": "rolling_update_misconfigured",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "user",
+    "init_hang_mode": "crash_loop",
+    "strategy_profile": "stuck_canary"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "pvc_claim_mismatch",
+   "params": {
+    "pvc_failure_scope": "all"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "ingress_misroute",
+   "params": {},
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "stale_value",
+    "key_scope": "all_hot_keys",
+    "poison_seed": 522952049,
+    "target": "memcached-rate"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "network_policy_block",
+   "params": {
+    "faulty_service": "rate",
+    "policy_direction": "egress_only",
+    "policy_name_style": "misleading"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n5__s29__g2__v_": [
+  {
+   "key": "liveness_probe_misconfiguration",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "geo",
+    "probe_error_mode": "wrong_path",
+    "replica_count": 1
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "readiness_probe_misconfiguration",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "rate",
+    "probe_error_mode": "exec_false",
+    "replica_count": 1
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "missing_configmap",
+   "params": {
+    "app_name": "hotel_reservation",
+    "configmap_fault_mode": "delete",
+    "faulty_service": "mongodb-geo"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "hotels",
+    "scope": "all_seeded",
+    "shape": "wrong_type",
+    "target": "mongodb-profile"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_write_lock",
+   "params": {
+    "target": "mongodb-reservation"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n5__s2__g2__v_": [
+  {
+   "key": "resource_request_too_large",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "rate",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "rolling_update_misconfigured",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "geo",
+    "init_hang_mode": "crash_loop",
+    "strategy_profile": "stuck_canary"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "wrong_bin_usage",
+   "params": {
+    "faulty_service": "profile"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_write_lock",
+   "params": {
+    "target": "mongodb-reservation"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "stale_value",
+    "key_scope": "all_hot_keys",
+    "poison_seed": 455562321,
+    "target": "memcached-rate"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n5__s36__g2__v_": [
+  {
+   "key": "readiness_probe_misconfiguration",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "frontend",
+    "probe_error_mode": "wrong_port",
+    "replica_count": 3
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_collection_renamed",
+   "params": {
+    "collection": "inventory",
+    "target": "mongodb-rate"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "incorrect_image",
+   "params": {
+    "bad_image_kind": "nonexistent_tag",
+    "faulty_service": "profile"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "k8s_target_port_misconfig",
+   "params": {
+    "app_name": "hotel_reservation",
+    "bad_port": 9999,
+    "faulty_service": "frontend"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "hotels",
+    "scope": "all_seeded",
+    "shape": "wrong_type",
+    "target": "mongodb-profile"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n5__s42__g2__v_": [
+  {
+   "key": "resource_request_too_large",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "frontend",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "pvc_claim_mismatch",
+   "params": {
+    "pvc_failure_scope": "single"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "hotels",
+    "scope": "all_seeded",
+    "shape": "field_renamed",
+    "target": "mongodb-profile"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "misconfig_app_hotel_res",
+   "params": {},
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_write_lock",
+   "params": {
+    "target": "mongodb-reservation"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n5__s43__g2__v_": [
+  {
+   "key": "configmap_drift",
+   "params": {
+    "faulty_service": "geo"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "liveness_probe_too_aggressive",
+   "params": {
+    "aggression_profile": "slow_churn",
+    "app_name": "hotel_reservation",
+    "faulty_service": "profile",
+    "startup_probe_guard": "none"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "wrong_dns_policy",
+   "params": {
+    "app_name": "hotel_reservation",
+    "dns_misconfiguration_type": "default_policy",
+    "faulty_service": "user"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "cronjob_sidecar_blocks_completion_hotel_reservation",
+   "params": {},
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "hotels",
+    "scope": "all_seeded",
+    "shape": "field_renamed",
+    "target": "mongodb-profile"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n5__s46__g2__v_": [
+  {
+   "key": "resource_request_too_large",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "rate",
+    "resource_type": "cpu"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "liveness_probe_misconfiguration",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "reservation",
+    "probe_error_mode": "wrong_protocol",
+    "replica_count": 1
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "configmap_drift",
+   "params": {
+    "faulty_service": "geo"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "service_wrong_pod_selection_hotel_reservation",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "hotels",
+    "scope": "one_doc",
+    "shape": "field_renamed",
+    "target": "mongodb-profile"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n5__s51__g2__v_": [
+  {
+   "key": "wrong_dns_policy",
+   "params": {
+    "app_name": "hotel_reservation",
+    "dns_misconfiguration_type": "external_resolver",
+    "faulty_service": "recommendation"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "hotels",
+    "scope": "one_doc",
+    "shape": "wrong_type",
+    "target": "mongodb-profile"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "wrong_bin_usage",
+   "params": {
+    "faulty_service": "profile"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "expired_tls_hotel_reservation",
+   "params": {},
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "cronjob_sidecar_blocks_completion_hotel_reservation",
+   "params": {},
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n5__s56__g2__v_": [
+  {
+   "key": "liveness_probe_misconfiguration",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "profile",
+    "probe_error_mode": "wrong_protocol",
+    "replica_count": 1
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "resource_request_too_large",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "reservation",
+    "resource_type": "cpu"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_write_lock",
+   "params": {
+    "target": "mongodb-reservation"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "expired_tls_hotel_reservation",
+   "params": {},
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "hotels",
+    "scope": "all_seeded",
+    "shape": "wrong_type",
+    "target": "mongodb-profile"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__hotel_reservation__n5__s58__g2__v_": [
+  {
+   "key": "duplicate_pvc_mounts",
+   "params": {
+    "app_name": "hotel_reservation",
+    "faulty_service": "search"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "storage_user_unregistered",
+   "params": {
+    "faulty_service": "mongodb-geo"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "hotels",
+    "scope": "all_seeded",
+    "shape": "field_renamed",
+    "target": "mongodb-profile"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_write_rejection",
+   "params": {
+    "collection": "reservation",
+    "mode": "validator",
+    "target": "mongodb-reservation"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "file_descriptor_exhaustion",
+   "params": {
+    "faulty_service": "rate",
+    "ulimit_severity": "moderate"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n1__s14__g2__v_": [
+  {
+   "key": "redis_timeline_key_renamed",
+   "params": {
+    "key": "9101",
+    "target": "home-timeline-redis",
+    "token": "512475"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n1__s15__g2__v_": [
+  {
+   "key": "redis_timeline_key_renamed",
+   "params": {
+    "key": "9101",
+    "target": "home-timeline-redis",
+    "token": "008b34"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n1__s22__g2__v_": [
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "wrong_type",
+    "key_scope": "broad",
+    "poison_seed": 194711447,
+    "target": "post-storage-memcached"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n1__s28__g2__v_": [
+  {
+   "key": "redis_timeline_key_renamed",
+   "params": {
+    "key": "9101",
+    "target": "home-timeline-redis",
+    "token": "6ec72e"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n1__s37__g2__v_": [
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "stale_value",
+    "key_scope": "broad",
+    "poison_seed": 1575466984,
+    "target": "user-memcached"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n1__s40__g2__v_": [
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "stale_value",
+    "key_scope": "all_hot_keys",
+    "poison_seed": 414074238,
+    "target": "post-storage-memcached"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n1__s46__g2__v_": [
+  {
+   "key": "redis_timeline_key_renamed",
+   "params": {
+    "key": "9101",
+    "target": "home-timeline-redis",
+    "token": "2a1e87"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n1__s51__g2__v_": [
+  {
+   "key": "redis_timeline_key_renamed",
+   "params": {
+    "key": "9101",
+    "target": "home-timeline-redis",
+    "token": "ada57e"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n1__s58__g2__v_": [
+  {
+   "key": "social_graph_stale_cache",
+   "params": {
+    "ghost": "9204",
+    "key": "9200:followers",
+    "target": "social-graph-redis"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n1__s7__g2__v_": [
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "wrong_type",
+    "key_scope": "broad",
+    "poison_seed": 1061286133,
+    "target": "post-storage-memcached"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n2__s17__g2__v_": [
+  {
+   "key": "resource_request_too_large",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "social-graph-service",
+    "resource_type": "cpu"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "post",
+    "scope": "all_seeded",
+    "shape": "wrong_type",
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n2__s18__g2__v_": [
+  {
+   "key": "redis_writes_paused",
+   "params": {
+    "duration_ms": 7200000,
+    "target": "user-timeline-redis"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "social_graph_stale_cache",
+   "params": {
+    "ghost": "9205",
+    "key": "9200:followers",
+    "target": "social-graph-redis"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n2__s1__g2__v_": [
+  {
+   "key": "mongo_collection_renamed",
+   "params": {
+    "collection": "user-timeline",
+    "target": "user-timeline-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_poisoned_timeline_entry",
+   "params": {
+    "key": "9200:followers",
+    "poison": "non_numeric",
+    "target": "social-graph-redis",
+    "token": "4ebfe5a2"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n2__s20__g2__v_": [
+  {
+   "key": "scale_pod_zero_social_net",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "social_graph_stale_cache",
+   "params": {
+    "ghost": "9202",
+    "key": "9200:followers",
+    "target": "social-graph-redis"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n2__s23__g2__v_": [
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "post",
+    "scope": "one_doc",
+    "shape": "field_renamed",
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_write_lock",
+   "params": {
+    "target": "social-graph-mongodb"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n2__s26__g2__v_": [
+  {
+   "key": "resource_request_too_small",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "nginx-thrift",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "garbage_bytes",
+    "key_scope": "all_hot_keys",
+    "poison_seed": 1725756170,
+    "target": "user-memcached"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n2__s39__g2__v_": [
+  {
+   "key": "redis_acl_revoked",
+   "params": {
+    "mode": "write",
+    "target": "user-timeline-redis"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "wrong_type",
+    "key_scope": "one_key",
+    "poison_seed": 1422697941,
+    "target": "user-memcached"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n2__s3__g2__v_": [
+  {
+   "key": "social_graph_stale_cache",
+   "params": {
+    "ghost": "9208",
+    "key": "9200:followers",
+    "target": "social-graph-redis"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "connection_exhaustion",
+   "params": {
+    "connections": 12000,
+    "target": "compose-post-service"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n2__s45__g2__v_": [
+  {
+   "key": "scale_pod_zero_social_net",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "redis_timeline_key_renamed",
+   "params": {
+    "key": "9101",
+    "target": "home-timeline-redis",
+    "token": "e4d4da"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n2__s47__g2__v_": [
+  {
+   "key": "redis_timeline_key_renamed",
+   "params": {
+    "key": "9101",
+    "target": "home-timeline-redis",
+    "token": "01dcc4"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_writes_paused",
+   "params": {
+    "duration_ms": 7200000,
+    "target": "user-timeline-redis"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n2__s48__g2__v_": [
+  {
+   "key": "scale_pod_zero_social_net",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "social_graph_stale_cache",
+   "params": {
+    "ghost": "9208",
+    "key": "9200:followers",
+    "target": "social-graph-redis"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n2__s4__g2__v_": [
+  {
+   "key": "service_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "redis_poisoned_timeline_entry",
+   "params": {
+    "key": "9200:followers",
+    "poison": "dangling_id",
+    "target": "social-graph-redis",
+    "token": "9839888353"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n2__s51__g2__v_": [
+  {
+   "key": "liveness_probe_misconfiguration",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "nginx-thrift",
+    "probe_error_mode": "wrong_path",
+    "replica_count": 1
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "stale_value",
+    "key_scope": "one_key",
+    "poison_seed": 438813075,
+    "target": "user-memcached"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n2__s53__g2__v_": [
+  {
+   "key": "social_graph_stale_cache",
+   "params": {
+    "ghost": "9209",
+    "key": "9200:followers",
+    "target": "social-graph-redis"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "service_dns_resolution_failure_netpol",
+   "params": {
+    "app_name": "social_network",
+    "dns_failure_layer": "network_policy_block_dns",
+    "dns_response_code": "NXDOMAIN",
+    "faulty_service": "post-storage-service"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n2__s56__g2__v_": [
+  {
+   "key": "incorrect_image",
+   "params": {
+    "bad_image_kind": "wrong_base_image",
+    "faulty_service": "post-storage-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "wrong_type",
+    "key_scope": "one_key",
+    "poison_seed": 1468032401,
+    "target": "user-memcached"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n2__s57__g2__v_": [
+  {
+   "key": "resource_request_too_large",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "compose-post-service",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "garbage_bytes",
+    "key_scope": "one_key",
+    "poison_seed": 1651345950,
+    "target": "user-memcached"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n2__s6__g2__v_": [
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "post",
+    "scope": "all_seeded",
+    "shape": "field_renamed",
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_replica_misconfig",
+   "params": {
+    "master": "10.255.255.1:6379",
+    "target": "social-graph-redis"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n3__s0__g2__v_": [
+  {
+   "key": "init_container_dependency_hang",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "nginx-thrift",
+    "init_hang_mechanism": "http_ready_check"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "redis_poisoned_timeline_entry",
+   "params": {
+    "key": "9100",
+    "poison": "non_numeric",
+    "target": "user-timeline-redis",
+    "token": "7d35f569"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "stale_value",
+    "key_scope": "all_hot_keys",
+    "poison_seed": 1557370802,
+    "target": "post-storage-memcached"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n3__s14__g2__v_": [
+  {
+   "key": "assign_to_non_existent_node",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "redis_writes_paused",
+   "params": {
+    "duration_ms": 7200000,
+    "target": "user-timeline-redis"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "social_graph_stale_cache",
+   "params": {
+    "ghost": "9207",
+    "key": "9200:followers",
+    "target": "social-graph-redis"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n3__s16__g2__v_": [
+  {
+   "key": "wrong_dns_policy",
+   "params": {
+    "app_name": "social_network",
+    "dns_misconfiguration_type": "external_resolver",
+    "faulty_service": "user-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "stale_value",
+    "key_scope": "all_hot_keys",
+    "poison_seed": 1072235403,
+    "target": "post-storage-memcached"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_out_of_memory",
+   "params": {
+    "fraction": 0.1,
+    "target": "home-timeline-redis"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n3__s1__g2__v_": [
+  {
+   "key": "rolling_update_misconfigured",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "home-timeline-service",
+    "init_hang_mode": "sleep_infinity",
+    "strategy_profile": "drain_all"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "redis_out_of_memory",
+   "params": {
+    "fraction": 0.5,
+    "target": "user-timeline-redis"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_timeline_key_renamed",
+   "params": {
+    "key": "9101",
+    "target": "home-timeline-redis",
+    "token": "157c55"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n3__s22__g2__v_": [
+  {
+   "key": "wrong_dns_policy",
+   "params": {
+    "app_name": "social_network",
+    "dns_misconfiguration_type": "external_resolver",
+    "faulty_service": "nginx-thrift"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "incorrect_image",
+   "params": {
+    "bad_image_kind": "wrong_base_image",
+    "faulty_service": "media-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "stale_value",
+    "key_scope": "broad",
+    "poison_seed": 1450595126,
+    "target": "user-memcached"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n3__s26__g2__v_": [
+  {
+   "key": "pod_anti_affinity_deadlock",
+   "params": {
+    "anti_affinity_topology": "hostname",
+    "faulty_service": "post-storage-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "post",
+    "scope": "all_seeded",
+    "shape": "field_renamed",
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_writes_paused",
+   "params": {
+    "duration_ms": 3600000,
+    "target": "user-timeline-redis"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n3__s29__g2__v_": [
+  {
+   "key": "wrong_dns_policy",
+   "params": {
+    "app_name": "social_network",
+    "dns_misconfiguration_type": "default_policy",
+    "faulty_service": "home-timeline-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "redis_poisoned_timeline_entry",
+   "params": {
+    "key": "9100",
+    "poison": "dangling_id",
+    "target": "user-timeline-redis",
+    "token": "2361378463"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "process_frozen",
+   "params": {
+    "target": "post-storage-service"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n3__s32__g2__v_": [
+  {
+   "key": "duplicate_pvc_mounts",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "compose-post-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "rolling_update_misconfigured",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "nginx-thrift",
+    "init_hang_mode": "crash_loop",
+    "strategy_profile": "stuck_canary"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "post",
+    "scope": "all_seeded",
+    "shape": "field_renamed",
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n3__s37__g2__v_": [
+  {
+   "key": "sidecar_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "compose-post-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_write_lock",
+   "params": {
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_poisoned_timeline_entry",
+   "params": {
+    "key": "9200:followers",
+    "poison": "non_numeric",
+    "target": "social-graph-redis",
+    "token": "1ae7fd6d"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n3__s39__g2__v_": [
+  {
+   "key": "redis_timeline_key_renamed",
+   "params": {
+    "key": "9101",
+    "target": "home-timeline-redis",
+    "token": "19c9fd"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "post",
+    "scope": "all_seeded",
+    "shape": "field_renamed",
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_acl_revoked",
+   "params": {
+    "mode": "write",
+    "target": "user-timeline-redis"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n3__s42__g2__v_": [
+  {
+   "key": "readiness_probe_misconfiguration",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "url-shorten-service",
+    "probe_error_mode": "exec_false",
+    "replica_count": 1
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "pod_network_impairment",
+   "params": {
+    "mode": "delay",
+    "severity": 6000,
+    "target": "post-storage-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "post",
+    "scope": "one_doc",
+    "shape": "wrong_type",
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n3__s44__g2__v_": [
+  {
+   "key": "redis_timeline_key_renamed",
+   "params": {
+    "key": "9101",
+    "target": "home-timeline-redis",
+    "token": "5bc5f8"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_collection_renamed",
+   "params": {
+    "collection": "user-timeline",
+    "target": "user-timeline-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "k8s_target_port_misconfig",
+   "params": {
+    "app_name": "social_network",
+    "bad_port": 8888,
+    "faulty_service": "home-timeline-service"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n3__s45__g2__v_": [
+  {
+   "key": "redis_timeline_key_renamed",
+   "params": {
+    "key": "9101",
+    "target": "home-timeline-redis",
+    "token": "5dcc7a"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_write_lock",
+   "params": {
+    "target": "social-graph-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "traffic_surge",
+   "params": {
+    "target": "nginx-thrift",
+    "workers": 100
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n3__s47__g2__v_": [
+  {
+   "key": "assign_to_non_existent_node",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "pod_anti_affinity_deadlock",
+   "params": {
+    "anti_affinity_topology": "hostname",
+    "faulty_service": "text-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "post",
+    "scope": "one_doc",
+    "shape": "wrong_type",
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n3__s49__g2__v_": [
+  {
+   "key": "readiness_probe_misconfiguration",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "home-timeline-service",
+    "probe_error_mode": "wrong_port",
+    "replica_count": 3
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "social_graph_stale_cache",
+   "params": {
+    "ghost": "9208",
+    "key": "9200:followers",
+    "target": "social-graph-redis"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "traffic_surge",
+   "params": {
+    "target": "nginx-thrift",
+    "workers": 150
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n3__s50__g2__v_": [
+  {
+   "key": "sidecar_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "url-shorten-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "redis_poisoned_timeline_entry",
+   "params": {
+    "key": "9100",
+    "poison": "dangling_id",
+    "target": "user-timeline-redis",
+    "token": "4574687337"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "social_graph_stale_cache",
+   "params": {
+    "ghost": "9207",
+    "key": "9200:followers",
+    "target": "social-graph-redis"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n3__s51__g2__v_": [
+  {
+   "key": "sidecar_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "home-timeline-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_collection_renamed",
+   "params": {
+    "collection": "post",
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_poisoned_timeline_entry",
+   "params": {
+    "key": "9100",
+    "poison": "non_numeric",
+    "target": "user-timeline-redis",
+    "token": "2e564f87"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n3__s52__g2__v_": [
+  {
+   "key": "resource_request_too_large",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "text-service",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "post",
+    "scope": "one_doc",
+    "shape": "field_renamed",
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_poisoned_timeline_entry",
+   "params": {
+    "key": "9100",
+    "poison": "non_numeric",
+    "target": "user-timeline-redis",
+    "token": "d8b06381"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n3__s54__g2__v_": [
+  {
+   "key": "resource_request_too_small",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "social-graph-service",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "readiness_probe_misconfiguration",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "media-service",
+    "probe_error_mode": "exec_false",
+    "replica_count": 1
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "post",
+    "scope": "one_doc",
+    "shape": "field_renamed",
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n3__s57__g2__v_": [
+  {
+   "key": "service_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "home-timeline-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "social_graph_stale_cache",
+   "params": {
+    "ghost": "9209",
+    "key": "9200:followers",
+    "target": "social-graph-redis"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "traffic_surge",
+   "params": {
+    "target": "nginx-thrift",
+    "workers": 150
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s0__g2__v_": [
+  {
+   "key": "liveness_probe_misconfiguration",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "url-shorten-service",
+    "probe_error_mode": "wrong_port",
+    "replica_count": 3
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "duplicate_pvc_mounts",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "social-graph-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "redis_poisoned_timeline_entry",
+   "params": {
+    "key": "9101",
+    "poison": "non_numeric",
+    "target": "home-timeline-redis",
+    "token": "c6d88e48"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_write_rejection",
+   "params": {
+    "collection": "user-timeline",
+    "mode": "validator",
+    "target": "user-timeline-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "post",
+    "scope": "all_seeded",
+    "shape": "wrong_type",
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s10__g2__v_": [
+  {
+   "key": "assign_to_non_existent_node",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "pod_anti_affinity_deadlock",
+   "params": {
+    "anti_affinity_topology": "hostname",
+    "faulty_service": "post-storage-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "liveness_probe_misconfiguration",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "text-service",
+    "probe_error_mode": "wrong_path",
+    "replica_count": 3
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "wrong_dns_policy",
+   "params": {
+    "app_name": "social_network",
+    "dns_misconfiguration_type": "external_resolver",
+    "faulty_service": "media-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "post",
+    "scope": "one_doc",
+    "shape": "field_renamed",
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s11__g2__v_": [
+  {
+   "key": "connection_exhaustion",
+   "params": {
+    "connections": 12000,
+    "target": "compose-post-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "garbage_bytes",
+    "key_scope": "broad",
+    "poison_seed": 1981776694,
+    "target": "post-storage-memcached"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_replica_misconfig",
+   "params": {
+    "master": "127.0.0.1:1",
+    "target": "home-timeline-redis"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_write_lock",
+   "params": {
+    "target": "social-graph-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "process_frozen",
+   "params": {
+    "target": "user-service"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s18__g2__v_": [
+  {
+   "key": "resource_request_too_small",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "nginx-thrift",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "rolling_update_misconfigured",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "url-shorten-service",
+    "init_hang_mode": "crash_loop",
+    "strategy_profile": "stuck_canary"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "connection_exhaustion",
+   "params": {
+    "connections": 12000,
+    "target": "compose-post-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "stale_value",
+    "key_scope": "one_key",
+    "poison_seed": 526070420,
+    "target": "post-storage-memcached"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_poisoned_timeline_entry",
+   "params": {
+    "key": "9200:followers",
+    "poison": "non_numeric",
+    "target": "social-graph-redis",
+    "token": "fd4faa4b"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s20__g2__v_": [
+  {
+   "key": "liveness_probe_misconfiguration",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "social-graph-service",
+    "probe_error_mode": "wrong_port",
+    "replica_count": 3
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "missing_configmap",
+   "params": {
+    "app_name": "social_network",
+    "configmap_fault_mode": "delete",
+    "faulty_service": "media-mongodb"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "traffic_surge",
+   "params": {
+    "target": "nginx-thrift",
+    "workers": 150
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "post",
+    "scope": "all_seeded",
+    "shape": "field_renamed",
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "pod_network_impairment",
+   "params": {
+    "mode": "delay",
+    "severity": 3000,
+    "target": "compose-post-service"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s21__g2__v_": [
+  {
+   "key": "assign_to_non_existent_node",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "social_graph_stale_cache",
+   "params": {
+    "ghost": "9202",
+    "key": "9200:followers",
+    "target": "social-graph-redis"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_timeline_key_renamed",
+   "params": {
+    "key": "9101",
+    "target": "home-timeline-redis",
+    "token": "f2f761"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "pod_network_impairment",
+   "params": {
+    "mode": "delay",
+    "severity": 3000,
+    "target": "social-graph-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_collection_renamed",
+   "params": {
+    "collection": "user-timeline",
+    "target": "user-timeline-mongodb"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s23__g2__v_": [
+  {
+   "key": "missing_service",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "compose-post-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "rolling_update_misconfigured",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "media-service",
+    "init_hang_mode": "sleep_infinity",
+    "strategy_profile": "drain_all"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "incorrect_image",
+   "params": {
+    "bad_image_kind": "wrong_base_image",
+    "faulty_service": "text-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "garbage_bytes",
+    "key_scope": "one_key",
+    "poison_seed": 1911632479,
+    "target": "post-storage-memcached"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_timeline_key_renamed",
+   "params": {
+    "key": "9101",
+    "target": "home-timeline-redis",
+    "token": "c94309"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s24__g2__v_": [
+  {
+   "key": "missing_service",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "user-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "rolling_update_misconfigured",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "text-service",
+    "init_hang_mode": "slow_timeout",
+    "strategy_profile": "drain_all"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "assign_to_non_existent_node",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_collection_renamed",
+   "params": {
+    "collection": "user-timeline",
+    "target": "user-timeline-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "post",
+    "scope": "one_doc",
+    "shape": "field_renamed",
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s26__g2__v_": [
+  {
+   "key": "wrong_dns_policy",
+   "params": {
+    "app_name": "social_network",
+    "dns_misconfiguration_type": "default_policy",
+    "faulty_service": "media-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "pod_network_impairment",
+   "params": {
+    "mode": "loss",
+    "severity": 90,
+    "target": "post-storage-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "post",
+    "scope": "all_seeded",
+    "shape": "wrong_type",
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "traffic_surge",
+   "params": {
+    "target": "nginx-thrift",
+    "workers": 150
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_replica_misconfig",
+   "params": {
+    "master": "127.0.0.1:1",
+    "target": "social-graph-redis"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s27__g2__v_": [
+  {
+   "key": "assign_to_non_existent_node",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "pod_anti_affinity_deadlock",
+   "params": {
+    "anti_affinity_topology": "hostname",
+    "faulty_service": "compose-post-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "redis_acl_revoked",
+   "params": {
+    "mode": "read",
+    "target": "social-graph-redis"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_poisoned_timeline_entry",
+   "params": {
+    "key": "9101",
+    "poison": "non_numeric",
+    "target": "home-timeline-redis",
+    "token": "16d66612"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_collection_renamed",
+   "params": {
+    "collection": "post",
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s2__g2__v_": [
+  {
+   "key": "sidecar_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "text-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "service_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "missing_service",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "compose-post-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "post",
+    "scope": "all_seeded",
+    "shape": "field_renamed",
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "wrong_service_selector",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "nginx-thrift",
+    "replica_count": 1
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s30__g2__v_": [
+  {
+   "key": "resource_request_too_small",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "liveness_probe_misconfiguration",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "text-service",
+    "probe_error_mode": "exec_false",
+    "replica_count": 1
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "post",
+    "scope": "all_seeded",
+    "shape": "field_renamed",
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "wrong_service_selector",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "social-graph-service",
+    "replica_count": 3
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "process_frozen",
+   "params": {
+    "target": "user-mongodb"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s37__g2__v_": [
+  {
+   "key": "resource_request_too_small",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "url-shorten-service",
+    "resource_type": "memory"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "missing_configmap",
+   "params": {
+    "app_name": "social_network",
+    "configmap_fault_mode": "delete",
+    "faulty_service": "media-mongodb"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "social_graph_stale_cache",
+   "params": {
+    "ghost": "9206",
+    "key": "9200:followers",
+    "target": "social-graph-redis"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "traffic_surge",
+   "params": {
+    "target": "nginx-thrift",
+    "workers": 150
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_collection_renamed",
+   "params": {
+    "collection": "post",
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s3__g2__v_": [
+  {
+   "key": "service_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "text-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "redis_acl_revoked",
+   "params": {
+    "mode": "write",
+    "target": "user-timeline-redis"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "garbage_bytes",
+    "key_scope": "one_key",
+    "poison_seed": 655791710,
+    "target": "post-storage-memcached"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "process_frozen",
+   "params": {
+    "target": "social-graph-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_poisoned_timeline_entry",
+   "params": {
+    "key": "9200:followers",
+    "poison": "dangling_id",
+    "target": "social-graph-redis",
+    "token": "1349275132"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s40__g2__v_": [
+  {
+   "key": "missing_service",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "missing_service",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "user-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "stale_value",
+    "key_scope": "broad",
+    "poison_seed": 676597554,
+    "target": "post-storage-memcached"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "social_graph_stale_cache",
+   "params": {
+    "ghost": "9208",
+    "key": "9200:followers",
+    "target": "social-graph-redis"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_acl_revoked",
+   "params": {
+    "mode": "read",
+    "target": "home-timeline-redis"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s43__g2__v_": [
+  {
+   "key": "resource_request_too_large",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "text-service",
+    "resource_type": "cpu"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "wrong_dns_policy",
+   "params": {
+    "app_name": "social_network",
+    "dns_misconfiguration_type": "default_policy",
+    "faulty_service": "social-graph-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "assign_to_non_existent_node",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "post",
+    "scope": "all_seeded",
+    "shape": "wrong_type",
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_poisoned_timeline_entry",
+   "params": {
+    "key": "9200:followers",
+    "poison": "non_numeric",
+    "target": "social-graph-redis",
+    "token": "c142c358"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s44__g2__v_": [
+  {
+   "key": "scale_pod_zero_social_net",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "pod_anti_affinity_deadlock",
+   "params": {
+    "anti_affinity_topology": "hostname",
+    "faulty_service": "social-graph-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "liveness_probe_too_aggressive",
+   "params": {
+    "aggression_profile": "aggressive",
+    "app_name": "social_network",
+    "faulty_service": "url-shorten-service",
+    "startup_probe_guard": "short_startup"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_write_rejection",
+   "params": {
+    "collection": "user-timeline",
+    "mode": "validator",
+    "target": "user-timeline-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "social_graph_stale_cache",
+   "params": {
+    "ghost": "9206",
+    "key": "9200:followers",
+    "target": "social-graph-redis"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s45__g2__v_": [
+  {
+   "key": "rolling_update_misconfigured",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service",
+    "init_hang_mode": "slow_timeout",
+    "strategy_profile": "drain_all"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_collection_renamed",
+   "params": {
+    "collection": "user-timeline",
+    "target": "user-timeline-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "wrong_service_selector",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "compose-post-service",
+    "replica_count": 1
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_replica_misconfig",
+   "params": {
+    "master": "10.255.255.1:6379",
+    "target": "social-graph-redis"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_poison_document",
+   "params": {
+    "collection": "post",
+    "scope": "one_doc",
+    "shape": "field_renamed",
+    "target": "post-storage-mongodb"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s47__g2__v_": [
+  {
+   "key": "readiness_probe_misconfiguration",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "nginx-thrift",
+    "probe_error_mode": "exec_false",
+    "replica_count": 1
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "mongo_collection_renamed",
+   "params": {
+    "collection": "user-timeline",
+    "target": "user-timeline-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "incorrect_image",
+   "params": {
+    "bad_image_kind": "nonexistent_registry",
+    "faulty_service": "social-graph-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_timeline_key_renamed",
+   "params": {
+    "key": "9101",
+    "target": "home-timeline-redis",
+    "token": "86cef2"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "process_frozen",
+   "params": {
+    "target": "social-graph-mongodb"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s52__g2__v_": [
+  {
+   "key": "init_container_dependency_hang",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "post-storage-service",
+    "init_hang_mechanism": "http_ready_check"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "social_graph_stale_cache",
+   "params": {
+    "ghost": "9209",
+    "key": "9200:followers",
+    "target": "social-graph-redis"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_collection_renamed",
+   "params": {
+    "collection": "user-timeline",
+    "target": "user-timeline-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "k8s_target_port_misconfig",
+   "params": {
+    "app_name": "social_network",
+    "bad_port": 8888,
+    "faulty_service": "home-timeline-service"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "traffic_surge",
+   "params": {
+    "target": "nginx-thrift",
+    "workers": 150
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s53__g2__v_": [
+  {
+   "key": "assign_to_non_existent_node",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "wrong_service_selector",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "home-timeline-service",
+    "replica_count": 3
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "memcached_poisoned_entries",
+   "params": {
+    "corruption": "wrong_type",
+    "key_scope": "all_hot_keys",
+    "poison_seed": 1422009859,
+    "target": "user-memcached"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "mongo_write_rejection",
+   "params": {
+    "collection": "user-timeline",
+    "mode": "validator",
+    "target": "user-timeline-mongodb"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "wrong_service_selector",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "social-graph-service",
+    "replica_count": 3
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s55__g2__v_": [
+  {
+   "key": "scale_pod_zero_social_net",
+   "params": {},
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "readiness_probe_misconfiguration",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "text-service",
+    "probe_error_mode": "exec_false",
+    "replica_count": 3
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "redis_replica_misconfig",
+   "params": {
+    "master": "127.0.0.1:1",
+    "target": "social-graph-redis"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "wrong_service_selector",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "nginx-thrift",
+    "replica_count": 3
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_poisoned_timeline_entry",
+   "params": {
+    "key": "9101",
+    "poison": "non_numeric",
+    "target": "home-timeline-redis",
+    "token": "4ad0e4ea"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s59__g2__v_": [
+  {
+   "key": "init_container_dependency_hang",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "user-service",
+    "init_hang_mechanism": "http_ready_check"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "missing_configmap",
+   "params": {
+    "app_name": "social_network",
+    "configmap_fault_mode": "delete",
+    "faulty_service": "media-mongodb"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "duplicate_pvc_mounts",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "url-shorten-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "social_graph_stale_cache",
+   "params": {
+    "ghost": "9204",
+    "key": "9200:followers",
+    "target": "social-graph-redis"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_poisoned_timeline_entry",
+   "params": {
+    "key": "9101",
+    "poison": "non_numeric",
+    "target": "home-timeline-redis",
+    "token": "261762c9"
+   },
+   "tier": "ORDINARY"
+  }
+ ],
+ "mf__social_network__n5__s6__g2__v_": [
+  {
+   "key": "service_port_conflict",
+   "params": {
+    "app_name": "social_network",
+    "faulty_service": "compose-post-service"
+   },
+   "tier": "RESTARTS_PODS"
+  },
+  {
+   "key": "traffic_surge",
+   "params": {
+    "target": "nginx-thrift",
+    "workers": 100
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "process_frozen",
+   "params": {
+    "target": "social-graph-redis"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "k8s_target_port_misconfig",
+   "params": {
+    "app_name": "social_network",
+    "bad_port": 7777,
+    "faulty_service": "nginx-thrift"
+   },
+   "tier": "ORDINARY"
+  },
+  {
+   "key": "redis_timeline_key_renamed",
+   "params": {
+    "key": "9101",
+    "target": "home-timeline-redis",
+    "token": "b60188"
+   },
+   "tier": "ORDINARY"
+  }
+ ]
+}

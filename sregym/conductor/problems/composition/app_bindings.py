@@ -55,6 +55,29 @@ class WriteCheck:
 
 
 @dataclass(frozen=True)
+class KeySpace:
+    """The keys of a Redis row that hold one record per seeded user, for faults of wide or partial scope.
+
+    ``glob``/``regex``: SCAN pattern and the full-match pattern (group ``uid``) of those keys. ``uid_below``: ids
+    at or above it are SREGym's own probe and fault users, never chosen: a scope is drawn from the app's real
+    seeded data. ``read``: the entry-point read that shows a key's data (``{uid}``), for keys whose damage a read
+    shows (timelines). ``compose``/``follower_read``/``username``: for follower sets, where the damage shows as a post
+    by user ``{uid}`` missing from a follower's home timeline (``follower_read`` of the follower). ``warm_from``: a
+    row whose keys are user ids, to compose as when the cache is cold (restarted); ``min_keys``: fewer than this
+    is a cold or empty row.
+    """
+
+    glob: str
+    regex: str
+    uid_below: int = 9000
+    read: str | None = None
+    follower_read: str | None = None
+    username: str = "username_{}"
+    warm_from: str | None = None
+    min_keys: int = 8
+
+
+@dataclass(frozen=True)
 class RedisInstance:
     """A Redis-protocol server (Redis or Valkey) run by one workload.
 
@@ -87,6 +110,9 @@ class RedisInstance:
     # follower and edge (idempotent), ``stale_write_check`` reads that follower's timeline.
     stale_setup: tuple[Request, ...] = ()
     stale_write_check: WriteCheck | None = None
+    # The per-user keys wide and partial scope draw from, and the fault kinds verified with those scopes here.
+    keyspace: KeySpace | None = None
+    scoped_faults: tuple[str, ...] = ()
 
     @property
     def restart_loses_data(self) -> bool:
@@ -392,6 +418,9 @@ SOCIAL_NETWORK = AppBinding(
             faults=REDIS_FAULTS[:5],
             poison_keys=(str(_SOCIAL_FOLLOWER),),
             rename_keys=(str(_SOCIAL_FOLLOWER),),
+            # one sorted set per user with a home timeline (the key is the user id)
+            keyspace=KeySpace("[0-9]*", r"(?P<uid>\d+)", read="/wrk2-api/home-timeline/read?user_id={uid}&start=0&stop=20"),
+            scoped_faults=("redis_poisoned_timeline_entry", "redis_timeline_key_renamed"),
         ),
         # caches over user-timeline-mongodb and social-graph-mongodb (a key lost from either refills from Mongo)
         RedisInstance(
@@ -426,6 +455,14 @@ SOCIAL_NETWORK = AppBinding(
                 ),
             ),
             stale_write_check=_SOCIAL_STALE_CHECK,
+            # "<author id>:followers": the follower set a compose by the author fans out to
+            keyspace=KeySpace(
+                "*:followers",
+                r"(?P<uid>\d+):followers",
+                follower_read="/wrk2-api/home-timeline/read?user_id={uid}&start=0&stop=100",
+                warm_from="home-timeline-redis",
+            ),
+            scoped_faults=("redis_poisoned_timeline_entry", "social_graph_stale_cache"),
         ),
     ),
     memcached=(

@@ -180,6 +180,7 @@ class ComponentFaultProblem(Problem):
         self.kube = kube or Kube()
         self.kubectl = KubeCtl()
         self.snapshot: http.Snapshot | None = None
+        self.extra_snapshot: http.Snapshot | None = None  # reads of a scoped fault's own records (extra_reads)
         self.witnesses: list[tuple[Any, str, Any]] = []  # (row, collection or "", record)
         self.marker: tuple[WriteCheck, str] | None = None
         self.marker_detail = ""
@@ -217,6 +218,17 @@ class ComponentFaultProblem(Problem):
     def write_check(self) -> WriteCheck | None:
         """The entry-point write that lands in the target (the target row's, by default)."""
         return getattr(self.target, "write_check", None)
+
+    def extra_reads(self) -> tuple[str, ...]:
+        """Entry-point reads of the records this fault damages (a scoped fault: a spread sample of its
+        records), taken while healthy and compared after the repair like the binding's integrity reads. They
+        make a wide or partial fault visible where the binding's fixed reads (one seeded user) are not hit."""
+        return ()
+
+    def write_checks(self) -> tuple[WriteCheck, ...]:
+        """Every write check the verdict runs (default: ``write_check``)."""
+        check = self.write_check()
+        return () if check is None else (check,)
 
     def data_stores(self) -> tuple[Any, ...]:
         """Store rows this fault or its repairs can touch whose restart loses data: each gets a
@@ -285,8 +297,22 @@ class ComponentFaultProblem(Problem):
         self.snapshot = (
             http.capture(self.kube, self.binding, self.namespace) if self.binding.integrity is not None else None
         )
+        self.extra_snapshot = self._capture_extra()
         self.witnesses = [w for row in self.data_stores() for w in _take_witness(self.kube, self.namespace, row)]
         self._prepared = True
+
+    def _capture_extra(self) -> http.Snapshot | None:
+        reads = self.extra_reads()
+        if not reads:
+            return None
+        responses = http.fetch(self.kube, self.binding, self.namespace, tuple(Request(p) for p in reads))
+        check = self.binding.integrity
+        volatile, unordered = (check.volatile_keys, check.unordered_keys) if check else ((), ())
+        values = tuple(http.normalize(r.body, volatile, unordered) for r in responses)
+        bad = [p for p, r, v in zip(reads, responses, values, strict=True) if not r.ok or http._empty(v)]
+        if bad:
+            raise ComponentError(f"{type(self).__name__}: records the fault damages read empty or fail while healthy: {bad}")
+        return http.Snapshot(reads, values)
 
     @mark_fault_injected
     def inject_fault(self):
@@ -309,7 +335,8 @@ class ComponentFaultProblem(Problem):
         try:
             self.reference_mitigation()
         finally:  # even if the repair raised: the next injection must take a fresh snapshot
-            self.snapshot, self.witnesses, self.marker, self._prepared = None, [], None, False
+            self.snapshot, self.extra_snapshot = None, None
+            self.witnesses, self.marker, self._prepared = [], None, False
             self._close_check_channels(rows)
 
     def _close_check_channels(self, rows: list[Any]) -> None:
@@ -365,6 +392,16 @@ class ComponentFaultProblem(Problem):
                 time.sleep(INTEGRITY_WAIT_S)
         return False, detail
 
+    def _extra_settled(self) -> tuple[bool, str]:
+        assert self.extra_snapshot is not None
+        for attempt in range(INTEGRITY_ATTEMPTS):
+            intact, detail = http.compare(self.kube, self.binding, self.namespace, self.extra_snapshot)
+            if intact:
+                return True, detail
+            if attempt + 1 < INTEGRITY_ATTEMPTS:
+                time.sleep(INTEGRITY_WAIT_S)
+        return False, detail
+
     def verdict(self) -> dict[str, Any]:
         """The per-fault verdict; raises ComponentError when a check could not run."""
         failed: list[str] = []
@@ -372,11 +409,15 @@ class ComponentFaultProblem(Problem):
         result: dict[str, Any] = {"fault_cleared": cleared, "fault_detail": detail}
         if not cleared:
             failed.append("fault")
-        check = self.write_check()
-        if self.blocks_writes and check is not None:
-            written, result["write_detail"] = self._write_lands(check)
-            if not written:
-                failed.append("write")
+        if self.blocks_writes:
+            details = []
+            for check in self.write_checks():
+                written, detail = self._write_lands(check)
+                details.append(detail)
+                if not written and "write" not in failed:
+                    failed.append("write")
+            if details:
+                result["write_detail"] = "; ".join(details)
         blind = self.disables_target and not cleared  # the target cannot answer reads while the fault is live
         if self.binding.integrity is None:
             result["integrity_detail"] = "no integrity check in the binding"
@@ -388,6 +429,11 @@ class ComponentFaultProblem(Problem):
             intact, result["integrity_detail"] = self._integrity_settled()
             result["integrity_ok"] = intact
             if not intact:
+                failed.append("data")
+        if self.extra_snapshot is not None and not blind:
+            extra_ok, extra_detail = self._extra_settled()
+            result.update(extra_ok=extra_ok, extra_detail=extra_detail)
+            if not extra_ok and "data" not in failed:
                 failed.append("data")
         details = []
         witness_ok = True

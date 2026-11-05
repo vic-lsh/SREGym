@@ -21,6 +21,7 @@ its data), so every draw declares the whole workload (field None).
 
 from __future__ import annotations
 
+import os
 import random
 
 from sregym.conductor.problems.composition.app_bindings import AppBinding, instances
@@ -41,6 +42,18 @@ _OOM_FRACTIONS = (0.1, 0.5)  # of used memory; above 0.5 writes only fail interm
 _PAUSE_MS = (3_600_000, 7_200_000)  # outlasts any episode
 _POISON_KINDS = ("non_numeric", "dangling_id")  # mirrors components.redis.POISON_KINDS
 _GHOSTS = tuple(str(9202 + i) for i in range(8))  # user ids no seeded or probe user has
+
+# Generation 3: the single-record kinds (poisoned entry, renamed key, stale cache) draw a wide or partial scope
+# over the row's per-user keyspace. The original single-record draw (one fixed key, SREGym's own probe user) stays
+# in generations 1-2 and is drawn in generation 3 only on an explicit opt-in: this environment variable set to 1.
+SINGLE_SCOPE_ENV = "SREGYM_ALLOW_SINGLE_SCOPE"
+SCOPED = ("partial", "wide")  # problems.scope.SCOPED
+SCOPES = ("single", "partial", "wide")  # problems.scope.SCOPES
+PARTIAL_FRACTIONS = (0.25, 0.5)  # problems.scope.PARTIAL_FRACTIONS
+
+
+def single_scope_allowed() -> bool:
+    return os.environ.get(SINGLE_SCOPE_ENV) == "1"
 
 
 def _row(binding: AppBinding, kind: str, rng: random.Random):
@@ -82,15 +95,65 @@ def _choose_stale(binding: AppBinding, rng: random.Random) -> Target:
     return Target({"target": inst.workload, "key": key, "ghost": rng.choice(_GHOSTS)})
 
 
+def _scoped_row(binding: AppBinding, kind: str, rng: random.Random):
+    rows = tuple(r for r in instances(binding.redis) if kind in r.scoped_faults)
+    return pick_one(rows, f"scoped redis target for {kind}", binding.app, rng)
+
+
+def _scope_params(rng: random.Random) -> dict:
+    scope = rng.choice(SCOPES if single_scope_allowed() else SCOPED)
+    params: dict = {"scope": scope, "pick_seed": rng.randrange(10**6)}
+    if scope == "partial":
+        params["fraction"] = rng.choice(PARTIAL_FRACTIONS)
+    return params
+
+
+def _choose_poison_g3(binding: AppBinding, rng: random.Random) -> Target:
+    poison = rng.choice(_POISON_KINDS)
+    token = f"{rng.randrange(10**9, 10**10)}" if poison == "dangling_id" else f"{rng.randrange(16**8):08x}"
+    # the scope is drawn first so the single draw (a fixed key on a verified row) is the original one
+    scoped = _scope_params(rng)
+    if scoped["scope"] == "single":
+        inst = _row(binding, "redis_poisoned_timeline_entry", rng)
+        return Target(
+            {"target": inst.workload, "key": rng.choice(inst.poison_keys), "poison": poison, "token": token, **scoped}
+        )
+    inst = _scoped_row(binding, "redis_poisoned_timeline_entry", rng)
+    return Target({"target": inst.workload, "poison": poison, "token": token, **scoped})
+
+
+def _choose_renamed_g3(binding: AppBinding, rng: random.Random) -> Target:
+    token = f"{rng.randrange(16**6):06x}"
+    scoped = _scope_params(rng)
+    if scoped["scope"] == "single":
+        inst = _row(binding, "redis_timeline_key_renamed", rng)
+        return Target({"target": inst.workload, "key": rng.choice(inst.rename_keys), "token": token, **scoped})
+    inst = _scoped_row(binding, "redis_timeline_key_renamed", rng)
+    return Target({"target": inst.workload, "token": token, **scoped})
+
+
+def _choose_stale_g3(binding: AppBinding, rng: random.Random) -> Target:
+    ghost = rng.choice(_GHOSTS)
+    scoped = _scope_params(rng)
+    if scoped["scope"] == "single":
+        inst = _row(binding, "social_graph_stale_cache", rng)
+        key, _ = rng.choice(inst.stale_sets)
+        return Target({"target": inst.workload, "key": key, "ghost": ghost, **scoped})
+    inst = _scoped_row(binding, "social_graph_stale_cache", rng)
+    return Target({"target": inst.workload, "ghost": ghost, **scoped})
+
+
 _MODULE = "sregym.conductor.problems.redis_incident_faults"
 ENTRIES: tuple[CatalogEntry, ...] = tuple(
-    component_entry(key, ENABLED_APPS[key], f"{_MODULE}:{cls}", choose)
-    for key, cls, choose in (
-        ("redis_acl_revoked", "RedisAclRevoked", _choose_acl),
-        ("redis_out_of_memory", "RedisOutOfMemory", _choose_oom),
-        ("redis_writes_paused", "RedisWritesPaused", _choose_paused),
-        ("redis_poisoned_timeline_entry", "RedisPoisonedTimelineEntry", _choose_poison),
-        ("redis_timeline_key_renamed", "RedisTimelineKeyRenamed", _choose_renamed),
-        ("social_graph_stale_cache", "SocialGraphStaleCache", _choose_stale),
+    component_entry(
+        key, ENABLED_APPS[key], f"{_MODULE}:{cls}", choose, revisions={3: g3} if g3 is not None else None
+    )
+    for key, cls, choose, g3 in (
+        ("redis_acl_revoked", "RedisAclRevoked", _choose_acl, None),
+        ("redis_out_of_memory", "RedisOutOfMemory", _choose_oom, None),
+        ("redis_writes_paused", "RedisWritesPaused", _choose_paused, None),
+        ("redis_poisoned_timeline_entry", "RedisPoisonedTimelineEntry", _choose_poison, _choose_poison_g3),
+        ("redis_timeline_key_renamed", "RedisTimelineKeyRenamed", _choose_renamed, _choose_renamed_g3),
+        ("social_graph_stale_cache", "SocialGraphStaleCache", _choose_stale, _choose_stale_g3),
     )
 )

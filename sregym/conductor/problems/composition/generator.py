@@ -166,9 +166,9 @@ def take_plan(plan: CompositionPlan, k: int) -> CompositionPlan:
 def plan_for(ref: PlanRef, entries: Sequence[CatalogEntry]) -> CompositionPlan:
     """Draw the plan a PlanRef names: `draw_plan` over the entries of generations <= `ref.generation`
     (and only the reliable ones when `ref.reliable`), then `take_plan` when it has a take-K."""
-    entries = [e for e in entries if ref.app in e.apps and e.generation(ref.app) <= ref.generation]
+    entries = [e.at_generation(ref.generation) for e in entries if ref.app in e.apps and e.generation(ref.app) <= ref.generation]
     if ref.reliable:
-        entries = reliable_entries(ref.app, entries)
+        entries = reliable_entries(ref.app, entries, ref.generation)
     plan = draw_plan(ref.app, ref.n, ref.seed, entries)
     return plan if ref.take is None else take_plan(plan, ref.take)
 

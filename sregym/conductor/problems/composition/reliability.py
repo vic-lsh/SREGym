@@ -86,6 +86,18 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
 }
 
 
-def reliable_entries(app: str, entries: Sequence[CatalogEntry]) -> tuple[CatalogEntry, ...]:
-    """*entries* without those flagged unreliable for *app* (others' flags do not matter)."""
-    return tuple(e for e in entries if (e.key, app) not in UNRELIABLE)
+# Flags that apply only to plans of catalog generation >= the given one: a generation that revises how an
+# existing kind draws (the scope of single-record data faults) must not make that kind unreliable for the
+# earlier generations' ids, which draw it as they always did.
+UNRELIABLE_FROM: Mapping[tuple[str, str], tuple[int, str]] = {}
+
+
+def reliable_entries(app: str, entries: Sequence[CatalogEntry], generation: int = 1) -> tuple[CatalogEntry, ...]:
+    """*entries* without those flagged unreliable for *app* (others' flags do not matter). `generation` is the
+    catalog generation of the plan: flags in ``UNRELIABLE_FROM`` apply from their generation on."""
+
+    def flagged(e: CatalogEntry) -> bool:
+        later = UNRELIABLE_FROM.get((e.key, app))
+        return (e.key, app) in UNRELIABLE or (later is not None and generation >= later[0])
+
+    return tuple(e for e in entries if not flagged(e))

@@ -159,7 +159,9 @@ def _lines(text: str) -> list[str]:
 # agent, can use it to read around the fault; ``remove_check_user`` deletes it at recover.
 
 CHECK_USER = "sregym_check"
-_CHECK_RULES = ("on", "~*", "&*", "-@all", "+@read", "+ping")
+# eval: the scripted batch reads (counting members over many keys). A script runs with the caller's ACL, so the
+# check user's scripts cannot write.
+_CHECK_RULES = ("on", "~*", "&*", "-@all", "+@read", "+ping", "+eval")
 _check_passwords: dict[tuple[str, str], str] = {}
 
 
@@ -399,3 +401,95 @@ def probe_write(kube: Kube, namespace: str, inst: RedisInstance, timeout_s: int 
         return err.split(" ", 1)[0]
     _exec(kube, namespace, inst, "DEL", _WRITE_PROBE_KEY, check=False)
     return None
+
+
+# --- many-key batches (scoped faults) ----------------------------------------------------------
+# A fault that corrupts a fraction or all of a keyspace touches hundreds of keys: one ``EVAL`` per batch
+# instead of one command per key. ``EVAL`` is not a read, but the check user's rules allow it and a script
+# runs with the caller's ACL, so the counting scripts below can only read through the check channel.
+
+SCAN_PAGE = 1000
+MAX_SCOPED_KEYS = 1000  # a scoped fault touches at most this many keys (one batch's argument list)
+
+POISON_ALL = "for _,k in ipairs(KEYS) do redis.call('ZADD',k,ARGV[2],ARGV[1]) end return #KEYS"
+REMOVE_MEMBER_ALL = "local n=0 for _,k in ipairs(KEYS) do n=n+redis.call('ZREM',k,ARGV[1]) end return n"
+COUNT_MEMBER = "local n=0 for _,k in ipairs(KEYS) do if redis.call('ZSCORE',k,ARGV[1]) then n=n+1 end end return n"
+RENAME_ALL = (
+    "for _,k in ipairs(KEYS) do if redis.call('EXISTS',k..ARGV[1])==1 then "
+    "return redis.error_reply('ERR backup key exists: '..k..ARGV[1]) end end "
+    "for _,k in ipairs(KEYS) do redis.call('RENAME',k,k..ARGV[1]) end return #KEYS"
+)
+MERGE_BACK_ALL = (
+    "local n=0 for _,k in ipairs(KEYS) do local b=k..ARGV[1] if redis.call('EXISTS',b)==1 then "
+    "redis.call('ZUNIONSTORE',k,2,k,b,'AGGREGATE','MAX') redis.call('DEL',b) n=n+1 end end return n"
+)
+DELETE_SUFFIXED_ALL = "local n=0 for _,k in ipairs(KEYS) do n=n+redis.call('DEL',k..ARGV[1]) end return n"
+COUNT_SUFFIXED_EXISTING = (
+    "local n=0 for _,k in ipairs(KEYS) do if redis.call('EXISTS',k..ARGV[1])==1 then n=n+1 end end return n"
+)
+DELETE_ALL = "local n=0 for _,k in ipairs(KEYS) do n=n+redis.call('DEL',k) end return n"
+STALE_ALL = "for i,k in ipairs(KEYS) do redis.call('ZREM',k,ARGV[i]) redis.call('ZADD',k,0,ARGV[#ARGV]) end return #KEYS"
+COUNT_STALE = (
+    "local n=0 local g=ARGV[#ARGV] for i,k in ipairs(KEYS) do "
+    "if redis.call('EXISTS',k)==1 and (redis.call('ZSCORE',k,g) or not redis.call('ZSCORE',k,ARGV[i])) then n=n+1 end "
+    "end return n"
+)
+RENAME_BACK_ALL = "for _,k in ipairs(KEYS) do redis.call('RENAME',k..ARGV[1],k) end return #KEYS"
+MEMBERS_OF = (
+    "local out={} for _,k in ipairs(KEYS) do out[#out+1]=k..' '..table.concat(redis.call('ZREVRANGE',k,0,-1),',') end "
+    "return out"
+)
+READD_ALL = "for i,k in ipairs(KEYS) do redis.call('ZREM',k,ARGV[#ARGV]) redis.call('ZADD',k,0,ARGV[i]) end return #KEYS"
+
+
+def scan_keys(kube: Kube, namespace: str, inst: RedisInstance, glob: str) -> list[str]:
+    """Every key matching ``glob`` (sorted), read through the check channel."""
+    cursor, found = "0", set()
+    while True:
+        lines = _lines(check_exec(kube, namespace, inst, "SCAN", cursor, "MATCH", glob, "COUNT", str(SCAN_PAGE)))
+        if not lines:
+            raise ComponentError(f"{inst.workload} in {namespace}: empty SCAN reply")
+        cursor = lines[0]
+        found.update(lines[1:])
+        if cursor == "0":
+            return sorted(found)
+
+
+def _count(out: str) -> int:
+    lines = _lines(out)
+    if not lines:
+        raise ComponentError("empty reply to a scripted batch")
+    return int(lines[-1].split()[-1].strip('"'))
+
+
+def eval_batch(
+    kube: Kube,
+    namespace: str,
+    inst: RedisInstance,
+    script: str,
+    keys: tuple[str, ...],
+    *args: str,
+    read_only: bool = False,
+) -> int:
+    """Run ``script`` over ``keys`` and return its integer reply. ``read_only``: through the check channel."""
+    if not keys:
+        raise ValueError("a batch needs at least one key")
+    if len(keys) > MAX_SCOPED_KEYS:
+        raise ValueError(f"a batch is at most {MAX_SCOPED_KEYS} keys, got {len(keys)}")
+    argv = ("EVAL", script, str(len(keys)), *keys, *args)
+    return _count(check_exec(kube, namespace, inst, *argv) if read_only else _exec(kube, namespace, inst, *argv))
+
+
+def backup_suffix(token: str) -> str:
+    """The suffix a scoped rename appends: ``renamed_key(key, token) == key + backup_suffix(token)``."""
+    return renamed_key("", token)
+
+
+def members_of(kube: Kube, namespace: str, inst: RedisInstance, keys: tuple[str, ...]) -> dict[str, tuple[str, ...]]:
+    """The members of each sorted set (one batch, read through the check channel)."""
+    out = check_exec(kube, namespace, inst, "EVAL", MEMBERS_OF, str(len(keys)), *keys)
+    found: dict[str, tuple[str, ...]] = {}
+    for line in _lines(out):
+        key, _, members = line.partition(" ")
+        found[key] = tuple(m for m in members.split(",") if m)
+    return found

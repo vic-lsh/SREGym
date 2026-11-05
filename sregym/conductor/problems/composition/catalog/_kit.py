@@ -27,7 +27,7 @@ Deployment conflicts with it.
 from __future__ import annotations
 
 import random
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -123,11 +123,21 @@ Choose = Callable[[str, random.Random], Pick]
 Build = Callable[[str, dict[str, Any]], Any]
 
 
-def entry(key: str, apps: Iterable[str], choose: Choose, build: Build, generation: int = 1) -> CatalogEntry:
+def entry(
+    key: str,
+    apps: Iterable[str],
+    choose: Choose,
+    build: Build,
+    generation: int = 1,
+    revisions: Mapping[int, Choose] | None = None,
+) -> CatalogEntry:
     """Wrap a pure `choose(app, rng)` and a lazy `build(app, params)` into a CatalogEntry.
 
     `generation` is the catalog generation of every app in `apps` (spec.LATEST_GENERATION): new
     families use the newest open generation so existing plan ids keep their draws.
+
+    `revisions` maps a later generation to a `choose` that replaces `choose` for plans of that generation
+    and after (CatalogEntry.revisions): earlier ids keep drawing what they drew.
 
     `sample` raises ValueError for an app outside `apps`, and for a pick without footprints.
     """
@@ -136,30 +146,35 @@ def entry(key: str, apps: Iterable[str], choose: Choose, build: Build, generatio
     if unknown:
         raise ValueError(f"{key}: unknown apps {sorted(unknown)}")
 
-    def sample(app: str, rng: random.Random) -> FaultDraw:
-        if app not in supported:
-            raise ValueError(f"{key} does not support app {app!r}; supported: {sorted(supported)}")
-        pick = choose(app, rng)
-        if not pick.footprints:
-            raise ValueError(f"{key}: a draw must declare at least one footprint")
-        return FaultDraw(
-            key=key,
-            app=app,
-            params=tuple(sorted(pick.params.items())),
-            footprints=pick.footprints,
-            tier=pick.tier,
-            exclusive_tags=pick.tags,
-            reads=pick.reads,
-            restarts=pick.restarts,
-            needs_client_pods=pick.needs_client_pods,
-        )
+    def sampler(pick_for: Choose) -> Callable[[str, random.Random], FaultDraw]:
+        def sample(app: str, rng: random.Random) -> FaultDraw:
+            if app not in supported:
+                raise ValueError(f"{key} does not support app {app!r}; supported: {sorted(supported)}")
+            pick = pick_for(app, rng)
+            if not pick.footprints:
+                raise ValueError(f"{key}: a draw must declare at least one footprint")
+            return FaultDraw(
+                key=key,
+                app=app,
+                params=tuple(sorted(pick.params.items())),
+                footprints=pick.footprints,
+                tier=pick.tier,
+                exclusive_tags=pick.tags,
+                reads=pick.reads,
+                restarts=pick.restarts,
+                needs_client_pods=pick.needs_client_pods,
+            )
 
+        return sample
+
+    sample = sampler(choose)
     return CatalogEntry(
         key=key,
         apps=supported,
         sample=sample,
         build=lambda draw: build(draw.app, draw.param_dict()),
         generations={app: generation for app in supported} if generation != 1 else {},
+        revisions={g: sampler(c) for g, c in (revisions or {}).items()},
     )
 
 
