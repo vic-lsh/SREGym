@@ -55,30 +55,14 @@ UNRELIABLE: Mapping[tuple[str, str], str] = {
     # Generation-2 kinds that have not validated on 3 seeds with every trial VALID. Evidence: validation/
     # {process,redis,mongo3,hotel} (FIN handoff, 2026-11-04); the reason names what is missing.
     ("mongo_write_lock", "social_network"): (
-        "Seed 1 all VALID; seed 5 restart decoys INVALID (social-graph-mongodb empty after reseed, no witness) and "
-        "seed 7 baseline INVALID; the rerun (mongo_write_lock3) did not finish valid. 1 of 3 seeds. VAL rerun (seed 1): "
-        "reference, restore_source and rollout_restart VALID, killed at the time box before the restart decoys."
+        "VAL2 seeds 1 and 2 all VALID (6/6 incl. data_lost restarts); seed 5 restart decoys INVALID (social-graph-mongodb "
+        "empty after reseed, no witness) and seed 7 baseline INVALID in earlier runs. 2 of 3 seeds; seed 3 not run (time box)."
     ),
     ("mongo_poison_document", "social_network"): (
-        "Not validated: the reference is INVALID on seeds 1, 4, 6 (the poisoned post ids were not found in "
-        "post-storage-mongodb on the lane left by the lock run), so no decoy trial ran. 0 of 3 seeds."
+        "Not validated: VAL2 seed 1 reference VALID, flush_cache and restore_source VALID, killed at the time box before "
+        "the restart decoys; earlier references were INVALID on seeds 1, 4, 6 (ids not found on a lane left by the lock run). 0 of 3 seeds complete."
     ),
-    ("redis_acl_revoked", "social_network"): (
-        "Validated except restart decoys: home-timeline-redis read and write modes, seeds 1-3 all VALID "
-        "(reference, restore_source, consumer rollout) and user-timeline-redis seed 7 all VALID incl. restarts; "
-        "the restart decoys on home-timeline-redis were skipped (reseeding 962x10 takes ~20 min)."
-    ),
-    ("redis_out_of_memory", "social_network"): (
-        "2 of 3 seeds all VALID (seed 9 user-timeline-redis; VAL seed 1 home-timeline-redis incl. data_lost restarts); "
-        "seeds 2, 3 not finished (time box, host load 100+: one trial took 5-10 min)."
-    ),
-    ("redis_writes_paused", "social_network"): "1 of 3 seeds run (seed 5, user-timeline-redis, all 6 trials VALID).",
-    ("redis_poisoned_timeline_entry", "social_network"): (
-        "Seeds 7 and 1 all VALID; seed 5 (social-graph-redis) FAIL on its decoy trials, not diagnosed. 2 of 3 seeds."
-    ),
-    ("redis_timeline_key_renamed", "social_network"): (
-        "1 of 3 seeds run (seed 1, all 8 VALID, incl. data-losing decoys); the other seeds hit the same target."
-    ),
+    ("redis_writes_paused", "social_network"): "1 of 3 seeds all VALID (seed 5, user-timeline-redis); VAL2 seed 1 (home-timeline-redis) VALID through the restart decoy, killed at the time box before the rollout_restart decoy.",
     # hotel_reservation: only mongo_write_lock validated (3 seeds, 6 VALID trials each).
     ("memcached_poisoned_entries", "hotel_reservation"): (
         "Seeds 1 and 3 FAIL: a reference/acceptable repair reads data_lost (seeded /hotels read changed); seed 2 VALID."
