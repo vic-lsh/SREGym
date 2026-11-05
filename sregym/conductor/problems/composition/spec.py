@@ -33,7 +33,7 @@ from typing import Any
 # newest OPEN generation; once a generation's ids are used by an experiment it is frozen
 # (FROZEN_GENERATION) and new entries go to the next one. tests/composition/test_plan_generations.py
 # pins the key set of every frozen generation, so a change that would re-draw a used id fails.
-FROZEN_GENERATION = 1
+FROZEN_GENERATION = 2  # the detection experiments used __g2 ids: its key sets are pinned (fixtures/catalog_generation2_keys.json)
 LATEST_GENERATION = 3
 # A generation may also change how an existing entry draws (CatalogEntry.revisions): ids of earlier
 # generations keep the sampler they always had. Generation 3 revises the single-record data faults to

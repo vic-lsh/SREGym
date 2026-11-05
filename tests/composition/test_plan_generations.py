@@ -18,6 +18,7 @@ from sregym.conductor.problems.composition import catalog
 from sregym.conductor.problems.composition.generator import PlanRef, parse_plan_id, plan_for, plan_id
 from sregym.conductor.problems.composition.spec import FROZEN_GENERATION, LATEST_GENERATION
 
+
 FIXTURES = Path(__file__).parent / "fixtures"
 SOCIAL = json.loads((FIXTURES / "social_network_g1_plans.json").read_text())
 MIXED10 = json.loads((FIXTURES / "mixed10_s42_plans.json").read_text())
@@ -58,12 +59,13 @@ def test_mixed10_ids_draw_what_the_experiment_drew(pid):
     assert _draws(pid) == MIXED10[pid]
 
 
-def test_generation_one_key_sets_are_frozen():
+@pytest.mark.parametrize("generation", range(1, FROZEN_GENERATION + 1))
+def test_frozen_generation_key_sets_are_pinned(generation):
     by_app = {
-        app: sorted(e.key for e in catalog.entries_for(app) if e.generation(app) <= FROZEN_GENERATION)
+        app: sorted(e.key for e in catalog.entries_for(app) if e.generation(app) <= generation)
         for app in sorted(catalog.apps())
     }
-    pinned = json.loads((FIXTURES / "catalog_generation1_keys.json").read_text())
+    pinned = json.loads((FIXTURES / f"catalog_generation{generation}_keys.json").read_text())
     assert by_app == pinned
 
 
