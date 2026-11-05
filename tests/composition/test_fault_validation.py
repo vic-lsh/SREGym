@@ -169,6 +169,9 @@ def test_destructive_repairs_run_last_and_are_followed_by_a_reset(monkeypatch):
 class _FakeEntry:
     key = "k"
 
+    def at_generation(self, generation):
+        return self
+
     def sample(self, app, rng):
         return SimpleNamespace(param_dict=lambda: {})
 
