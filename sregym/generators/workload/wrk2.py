@@ -93,6 +93,8 @@ class Wrk2:
         job_template["spec"]["suspend"] = suspended
         container = job_template["spec"]["template"]["spec"]["containers"][0]
         container["args"] = ["/bin/bash", "/scripts/wrk2-workload.sh"]
+        # The load generator keeps no state: retiring the previous Job must not wait for the default 30 s Pod grace.
+        job_template["spec"]["template"]["spec"]["terminationGracePeriodSeconds"] = 1
 
         job_template["spec"]["template"]["spec"]["volumes"] = [
             {
