@@ -33,6 +33,7 @@ import ssl
 import subprocess
 import tempfile
 import threading
+import time
 from collections.abc import Collection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -227,6 +228,85 @@ def write_refusal(method: str, path: str, namespaces: Collection[str]) -> str | 
     return f"writes are allowed only in namespace(s) {', '.join(sorted(namespaces))}"
 
 
+class _UpstreamToken:
+    """Bearer token from a kubeconfig user: ``token``, ``tokenFile`` or an ``exec`` credential plugin.
+
+    Exec tokens (EKS: ``aws eks get-token``, 15 minutes) are cached and re-fetched a minute
+    before ``expirationTimestamp``, or every 10 minutes when the plugin gives none.
+    """
+
+    _REFRESH_MARGIN_S = 60.0
+    _DEFAULT_TTL_S = 600.0
+
+    def __init__(
+        self,
+        *,
+        token: str | None = None,
+        token_file: str | None = None,
+        exec_config: dict | None = None,
+        base_dir: str = ".",
+    ):
+        if sum(value is not None for value in (token, token_file, exec_config)) != 1:
+            raise ValueError("exactly one of token, token_file, exec_config is required")
+        self._token = token
+        self._token_file = token_file
+        self._exec_config = exec_config
+        self._base_dir = base_dir
+        self._cached: str | None = None
+        self._expires_at = 0.0
+        self._lock = threading.Lock()
+
+    @classmethod
+    def from_kubeconfig(cls, kubeconfig_path: str) -> "_UpstreamToken | None":
+        if not os.path.isfile(kubeconfig_path):
+            return None
+        with open(kubeconfig_path) as stream:
+            document = yaml.safe_load(stream) or {}
+        context_name = document.get("current-context")
+        contexts = {item.get("name"): item.get("context") or {} for item in document.get("contexts") or []}
+        user_name = contexts.get(context_name, {}).get("user")
+        users = {item.get("name"): item.get("user") or {} for item in document.get("users") or []}
+        user = users.get(user_name) or {}
+        base_dir = os.path.dirname(os.path.abspath(kubeconfig_path))
+        if user.get("token"):
+            return cls(token=str(user["token"]))
+        if user.get("tokenFile"):
+            path = str(user["tokenFile"])
+            return cls(token_file=path if os.path.isabs(path) else os.path.join(base_dir, path))
+        if isinstance(user.get("exec"), dict):
+            return cls(exec_config=user["exec"], base_dir=base_dir)
+        return None
+
+    def get(self) -> str | None:
+        if self._token is not None:
+            return self._token
+        if self._token_file is not None:
+            with open(self._token_file) as stream:
+                return stream.read().strip() or None
+        with self._lock:
+            if self._cached is None or time.time() >= self._expires_at - self._REFRESH_MARGIN_S:
+                self._refresh(time.time())
+            return self._cached
+
+    def _refresh(self, now: float) -> None:
+        from datetime import datetime
+
+        from kubernetes.config.exec_provider import ExecProvider
+        from kubernetes.config.kube_config import ConfigNode
+
+        status = ExecProvider(ConfigNode("exec", self._exec_config), self._base_dir).run()
+        token = status.get("token")
+        if not token:
+            raise RuntimeError("kubeconfig exec plugin returned no token (client certificates are not supported)")
+        expires_at = now + self._DEFAULT_TTL_S
+        stamp = status.get("expirationTimestamp")
+        if stamp:
+            with contextlib.suppress(ValueError):
+                expires_at = datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp()
+        self._cached = token
+        self._expires_at = expires_at
+
+
 class KubernetesAPIProxy:
     """Manages the Kubernetes API filtering proxy."""
 
@@ -264,6 +344,7 @@ class KubernetesAPIProxy:
         self.server_thread: threading.Thread | None = None
         self._temp_files: list = []
         self._bearer_token: str | None = None
+        self._token_source: _UpstreamToken | None = None
 
         if os.path.exists(self._INCLUSTER_TOKEN_PATH):
             # Running inside a Kubernetes pod — use ServiceAccount credentials
@@ -287,6 +368,17 @@ class KubernetesAPIProxy:
             self.api_host, self.api_port, self.ca_cert, self.client_cert, self.client_key = self._load_cluster_config(
                 kubeconfig_path=default_kubeconfig
             )
+            # Remote clusters (EKS) authenticate with a bearer token, not a client certificate:
+            # a static ``token``/``tokenFile`` or an ``exec`` plugin (``aws eks get-token``).
+            self._token_source = _UpstreamToken.from_kubeconfig(default_kubeconfig)
+
+    def upstream_bearer_token(self) -> str | None:
+        """The bearer token for upstream requests, refreshed when it comes from an exec plugin."""
+        if self._bearer_token:
+            return self._bearer_token
+        if self._token_source is not None:
+            return self._token_source.get()
+        return None
 
     def _load_cluster_config(self, kubeconfig_path: str | None = None):
         """Extract API server connection details from kubeconfig."""
@@ -383,7 +475,6 @@ class KubernetesAPIProxy:
         hidden_labels = self.hidden_labels
         api_host = self.api_host
         api_port = self.api_port
-        bearer_token = self._bearer_token
         proxy = self  # exec policy is read per request, so the conductor can scope it per problem
 
         class FilteringProxyHandler(BaseHTTPRequestHandler):
@@ -424,6 +515,7 @@ class KubernetesAPIProxy:
                 """Whether the target pod carries a hidden label (e.g. a load generator)."""
                 conn = self._get_upstream_connection()
                 headers = {"Accept": "application/json"}
+                bearer_token = proxy.upstream_bearer_token()
                 if bearer_token:
                     headers["Authorization"] = f"Bearer {bearer_token}"
                 try:
@@ -490,6 +582,7 @@ class KubernetesAPIProxy:
                     self.send_error(502, f"Bad Gateway: {str(e)}")
                     return
                 try:
+                    bearer_token = proxy.upstream_bearer_token()
                     lines = [f"{method} {path} HTTP/1.1", f"Host: {api_host}:{api_port}"]
                     for header, value in self.headers.items():  # keeps repeated protocol headers
                         if header.lower() == "host" or (bearer_token and header.lower() == "authorization"):
@@ -706,7 +799,8 @@ class KubernetesAPIProxy:
                     conn = self._get_upstream_connection()
                     # Forward headers minus those the proxy re-derives (Host, Accept-Encoding, framing)
                     headers = upstream_request_headers(self.headers)
-                    # In-cluster mode: authenticate to the API server with the ServiceAccount bearer token
+                    # Bearer auth: in-cluster ServiceAccount token, or the kubeconfig user's token / exec plugin
+                    bearer_token = proxy.upstream_bearer_token()
                     if bearer_token:
                         headers["Authorization"] = f"Bearer {bearer_token}"
                     conn.request(method, path, body=body, headers=headers)

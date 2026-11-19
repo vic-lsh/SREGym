@@ -56,6 +56,13 @@ def reconcilable_persistent_volumes(volumes, *, baseline: set[str], preserved: s
     return names
 
 
+def _operator_preserved(name: str) -> bool:
+    """Cluster-scoped objects the operator of the cluster (not the benchmark) owns, e.g. the harness identity's
+    binding and the read-only role of the agent under test: SREGYM_PRESERVE_CLUSTER_OBJECTS=a,b,c."""
+    raw = os.environ.get("SREGYM_PRESERVE_CLUSTER_OBJECTS", "")
+    return name in {item.strip() for item in raw.split(",") if item.strip()}
+
+
 def _is_chaos_mesh_resource(name: str) -> bool:
     """True if the cluster-scoped resource (CRD / ClusterRole / RoleBinding /
     webhook config) belongs to chaos-mesh and should be preserved across runs.
@@ -265,7 +272,7 @@ class ClusterStateManager:
             # Skip system roles that may have been auto-created
             if role.startswith("system:") or role.startswith("kubeadm:"):
                 continue
-            if _is_chaos_mesh_resource(role):
+            if _is_chaos_mesh_resource(role) or _operator_preserved(role):
                 continue
             logger.info(f"Deleting unexpected ClusterRole: {role}")
             try:
@@ -281,7 +288,7 @@ class ClusterStateManager:
         for binding in unexpected_bindings:
             if binding.startswith("system:") or binding.startswith("kubeadm:"):
                 continue
-            if _is_chaos_mesh_resource(binding):
+            if _is_chaos_mesh_resource(binding) or _operator_preserved(binding):
                 continue
             logger.info(f"Deleting unexpected ClusterRoleBinding: {binding}")
             try:

@@ -25,8 +25,10 @@ from sregym.observer.jaeger import Jaeger
 from sregym.observer.otel_collector import OtelCollector
 from sregym.paths import cluster_baseline_state_file
 from sregym.service.apps.app_registry import AppRegistry
+from sregym.service.cluster_platform import is_kind_cluster
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.dm_flakey_manager import DmFlakeyManager
+from sregym.service.image_mirror import mirrored_manifest
 from sregym.service.k8s_proxy import KubernetesAPIProxy, agent_proxy_port, verify_agent_kubeconfig
 from sregym.service.khaos import KhaosController
 from sregym.service.kubectl import KubeCtl
@@ -189,7 +191,11 @@ class Conductor:
         verify_agent_kubeconfig(
             path,
             listen_port=self.k8s_proxy.listen_port,
-            cluster_name=os.environ.get("SREGYM_KIND_CLUSTER_NAME", "").strip() or None,
+            # Node names prove the cluster only on kind (``<cluster>-control-plane``); a remote
+            # cluster's nodes (EKS ``ip-...``) carry no cluster prefix.
+            cluster_name=(os.environ.get("SREGYM_KIND_CLUSTER_NAME", "").strip() or None)
+            if is_kind_cluster()
+            else None,
         )
 
     def _scope_agent_exec(self, problem):
@@ -764,7 +770,9 @@ class Conductor:
         self.detection_oracle = DetectionOracle(self.problem)
         self.results = {}
 
-        self.dependency_check(["kubectl", "helm", "docker"])
+        # Docker is needed on the harness host only to build source images (and for agent
+        # containers, which the launcher checks itself); a registry-delivered remote cluster needs none.
+        self.dependency_check(["kubectl", "helm", "docker"] if source_deploy_enabled() else ["kubectl", "helm"])
         self.logger.debug("Dependency check passed: kubectl, helm")
 
         self.logger.info(f"[Session Start] Problem ID: {self.problem_id}")
@@ -1105,31 +1113,7 @@ class Conductor:
         except Exception as e:
             self.logger.warning(f"Could not fix Calico route-reflector label drift state: {e}")
 
-    def fix_kubernetes(self):
-        self.logger.info("Fixing Kubernetes... to normal state.")
-        self.logger.info("[FIX] Imbalance leftover if any")
-
-        injector = VirtualizationFaultInjector(namespace="kube-system")
-        injector.recover_daemon_set_image_replacement(
-            daemon_set_name="kube-proxy", original_image="registry.k8s.io/kube-proxy:v1.31.13"
-        )
-
-        self.logger.info("[FIX] KubeletCrash leftover if any")
-        injector = RemoteOSFaultInjector()
-        injector.recover_kubelet_crash()
-
-        self.logger.info("[FIX] KubeletEvictionThresholdMisconfig leftover if any")
-        injector.recover_disk_pressure_all()
-        # Delete Failed pods left by the eviction loop. Skip the app namespace
-        # because undeploy_app() tears down the application namespace anyway.
-        from sregym.conductor.problems.kubelet_eviction_threshold_misconfig import KubeletEvictionThresholdMisconfig
-
-        self.kubectl.exec_command(
-            f"kubectl delete pods --all-namespaces "
-            f"--field-selector=status.phase=Failed,metadata.namespace!={KubeletEvictionThresholdMisconfig.NAMESPACE} "
-            "--ignore-not-found=true"
-        )
-
+    def _fix_calico_ippool(self):
         self.logger.info("[FIX] Calico IPPool/strictAffinity leftover if any")
         try:
             from sregym.conductor.problems.pod_cidr_exhaustion_hotel_reservation import (
@@ -1153,7 +1137,42 @@ class Conductor:
         except Exception as e:
             self.logger.warning(f"Could not fix Calico IPPool state: {e}")
 
-        self._fix_calico_route_reflector_label_drift()
+    def fix_kubernetes(self):
+        self.logger.info("Fixing Kubernetes... to normal state.")
+        kind = is_kind_cluster()
+        if kind:
+            self.logger.info("[FIX] Imbalance leftover if any")
+            injector = VirtualizationFaultInjector(namespace="kube-system")
+            injector.recover_daemon_set_image_replacement(
+                daemon_set_name="kube-proxy", original_image="registry.k8s.io/kube-proxy:v1.31.13"
+            )
+        else:
+            # The reset pins the kubeadm v1.31 image; on a managed cluster (EKS) kube-proxy is a
+            # provider add-on with its own image and config, so never overwrite it here.
+            self.logger.info("[FIX] Remote cluster: leaving the kube-proxy DaemonSet image unchanged")
+
+        self.logger.info("[FIX] KubeletCrash leftover if any")
+        injector = RemoteOSFaultInjector()
+        injector.recover_kubelet_crash()
+
+        self.logger.info("[FIX] KubeletEvictionThresholdMisconfig leftover if any")
+        injector.recover_disk_pressure_all()
+        # Delete Failed pods left by the eviction loop. Skip the app namespace
+        # because undeploy_app() tears down the application namespace anyway.
+        from sregym.conductor.problems.kubelet_eviction_threshold_misconfig import KubeletEvictionThresholdMisconfig
+
+        self.kubectl.exec_command(
+            f"kubectl delete pods --all-namespaces "
+            f"--field-selector=status.phase=Failed,metadata.namespace!={KubeletEvictionThresholdMisconfig.NAMESPACE} "
+            "--ignore-not-found=true"
+        )
+
+        if kind:
+            self._fix_calico_ippool()
+            self._fix_calico_route_reflector_label_drift()
+        else:
+            # Calico IPAM/BGP objects exist only on the kubeadm+Calico clusters SREGym builds.
+            self.logger.info("[FIX] Remote cluster: skipping Calico IPPool/BGP cleanup")
 
         self.logger.info("[FIX] Stale CoreDNS NXDOMAIN templates if any")
         injector = VirtualizationFaultInjector(namespace="kube-system")
@@ -1245,12 +1264,22 @@ class Conductor:
             self.logger.info("[DEPLOY] Deploying Khaos DaemonSet...")
             self.khaos.ensure_deployed()
 
-    def _deploy_shared_infrastructure(self, problem):
-        self.logger.info("[DEPLOY] Setting up metrics-server…")
-        self.kubectl.exec_command(
-            "kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/"
-            "releases/latest/download/components.yaml"
+    def _metrics_api_available(self) -> bool:
+        """On managed clusters (EKS add-on) the metrics API already exists; applying upstream components.yaml over it
+        merges the Service selector and leaves it without endpoints, which also wedges namespace deletion."""
+        if is_kind_cluster():
+            return False
+        out = self.kubectl.exec_command(
+            "kubectl get apiservice v1beta1.metrics.k8s.io -o jsonpath='{.status.conditions[?(@.type==\"Available\")].status}'"
         )
+        return "True" in str(out)
+
+    def _install_metrics_server(self):
+        self.logger.info("[DEPLOY] Setting up metrics-server…")
+        with mirrored_manifest(
+            "https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml"
+        ) as manifest:
+            self.kubectl.exec_command(f"kubectl apply -f {manifest}")
         self.kubectl.exec_command(
             "kubectl -n kube-system patch deployment metrics-server "
             "--type=json -p='["
@@ -1260,11 +1289,19 @@ class Conductor:
         )
         self.kubectl.wait_for_ready("kube-system")
 
+
+    def _deploy_shared_infrastructure(self, problem):
+        if self._metrics_api_available():
+            self.logger.info("[DEPLOY] metrics API already available (managed add-on): not installing metrics-server")
+        else:
+            self._install_metrics_server()
+
         self._deploy_khaos(problem)
 
         self.logger.info("[DEPLOY] Setting up OpenEBS…")
         self._preflight_openebs_udev_mount()
-        self.kubectl.exec_command("kubectl apply -f https://openebs.github.io/charts/openebs-operator.yaml")
+        with mirrored_manifest("https://openebs.github.io/charts/openebs-operator.yaml") as manifest:
+            self.kubectl.exec_command(f"kubectl apply -f {manifest}")
         self.kubectl.exec_command(
             "kubectl patch storageclass openebs-hostpath "
             '-p \'{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}\''
@@ -1298,6 +1335,9 @@ class Conductor:
             self.problem.app.cleanup()
 
     def _preflight_openebs_udev_mount(self) -> None:
+        if not is_kind_cluster():
+            self.logger.info("[DEPLOY] Remote cluster: skipping the kind /run/udev preflight")
+            return
         if shutil.which("docker") is None:
             self.logger.info("[DEPLOY] Docker is unavailable; skipping kind /run/udev preflight")
             return

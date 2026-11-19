@@ -1,3 +1,4 @@
+import os
 import logging
 import shlex
 from enum import StrEnum
@@ -82,7 +83,11 @@ class HotelReservation(Application):
 
         if hasattr(self, "wrk"):
             # self.wrk.stop()
-            self.kubectl.delete_job(label="job=workload", namespace=self.namespace)
+            self.kubectl.delete_job(label="job=workload", namespace=getattr(self, "workload_namespace", self.namespace))
+            if getattr(self, "workload_namespace", self.namespace) != self.namespace:
+                self.kubectl.exec_command(
+                    f"kubectl delete namespace {self.workload_namespace} --ignore-not-found --wait=false"
+                )
 
     def _remove_pv_finalizers(self, pv_name: str):
         """Remove finalizers from the PersistentVolume to prevent it from being stuck in a 'Terminating' state."""
@@ -93,6 +98,9 @@ class HotelReservation(Application):
     def create_workload(
         self, rate: int = 100, dist: str = "exp", connections: int = 100, duration: int = 30, threads: int = 3
     ):
+        # Benchmark hygiene: SREGYM_WORKLOAD_NAMESPACE moves the load generator out of the application namespace
+        # (an agent scoped to the app namespace then sees the traffic's effects, not the generator).
+        self.workload_namespace = os.environ.get("SREGYM_WORKLOAD_NAMESPACE") or self.namespace
         self.wrk = Wrk2WorkloadManager(
             wrk=Wrk2(
                 rate=rate,
@@ -100,17 +108,21 @@ class HotelReservation(Application):
                 connections=connections,
                 duration=duration,
                 threads=threads,
-                namespace=self.namespace,
+                namespace=self.workload_namespace,
             ),
             payload_script=self.payload_script,
             url="{placeholder}",
-            namespace=self.namespace,
+            namespace=self.workload_namespace,
         )
 
     def start_workload(self):
         if not hasattr(self, "wrk"):
             self.create_workload()
         self.wrk.url = get_frontend_url(self)
+        if self.workload_namespace != self.namespace:
+            self.kubectl.exec_command(
+                f"kubectl create namespace {self.workload_namespace} --dry-run=client -o yaml | kubectl apply -f -"
+            )
         self.wrk.start()
 
     def stop_workload(self):
