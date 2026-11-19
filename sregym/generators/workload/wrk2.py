@@ -12,6 +12,7 @@ from urllib3.exceptions import TimeoutError as HTTPTimeoutError
 from sregym.generators.workload.base import WorkloadEntry
 from sregym.generators.workload.stream import STREAM_WORKLOAD_EPS, StreamWorkloadManager
 from sregym.paths import BASE_DIR
+from sregym.service.image_mirror import rewrite_object
 
 logger = logging.getLogger("all.infra.workload")
 logger.propagate = True
@@ -87,7 +88,7 @@ class Wrk2:
     def create_wrk_job(self, job_name, namespace, payload_script, *, suspended=False):
         wrk_job_yaml = BASE_DIR / "generators" / "workload" / "wrk-job-template.yaml"
         with open(wrk_job_yaml) as f:
-            job_template = yaml.safe_load(f)
+            job_template = rewrite_object(yaml.safe_load(f))
 
         job_template["metadata"]["name"] = job_name
         job_template["spec"]["suspend"] = suspended

@@ -1,6 +1,7 @@
 """Interface to the social network application from DeathStarBench"""
 
 import logging
+import os
 import shlex
 
 from sregym.generators.workload.wrk2 import Wrk2, Wrk2WorkloadManager
@@ -51,12 +52,18 @@ class SocialNetwork(Application):
 
         if hasattr(self, "wrk"):
             # self.wrk.stop()
-            self.kubectl.delete_job(label="job=workload", namespace=self.namespace)
+            self.kubectl.delete_job(label="job=workload", namespace=getattr(self, "workload_namespace", self.namespace))
+            if getattr(self, "workload_namespace", self.namespace) != self.namespace:
+                self.kubectl.exec_command(
+                    f"kubectl delete namespace {self.workload_namespace} --ignore-not-found --wait=false"
+                )
         self.kubectl.delete_namespace(self.namespace)
 
     def create_workload(
         self, rate: int = 100, dist: str = "exp", connections: int = 3, duration: int = 10, threads: int = 3
     ):
+        # Benchmark hygiene: SREGYM_WORKLOAD_NAMESPACE moves the load generator out of the application namespace.
+        self.workload_namespace = os.environ.get("SREGYM_WORKLOAD_NAMESPACE") or self.namespace
         self.wrk = Wrk2WorkloadManager(
             wrk=Wrk2(
                 rate=rate,
@@ -64,17 +71,21 @@ class SocialNetwork(Application):
                 connections=connections,
                 duration=duration,
                 threads=threads,
-                namespace=self.namespace,
+                namespace=self.workload_namespace,
             ),
             payload_script=self.payload_script,
             url="{placeholder}/wrk2-api/post/compose",
-            namespace=self.namespace,
+            namespace=self.workload_namespace,
         )
 
     def start_workload(self):
         if not hasattr(self, "wrk"):
             self.create_workload()
         self.wrk.url = get_frontend_url(self) + "/wrk2-api/post/compose"
+        if self.workload_namespace != self.namespace:
+            self.kubectl.exec_command(
+                f"kubectl create namespace {self.workload_namespace} --dry-run=client -o yaml | kubectl apply -f -"
+            )
         self.wrk.start()
 
     def stop_workload(self):

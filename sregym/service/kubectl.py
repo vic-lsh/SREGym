@@ -12,6 +12,7 @@ from kubernetes.client import api_client
 from kubernetes.client.rest import ApiException
 
 from logger import console
+from sregym.service.image_mirror import rewrite_image
 
 logger = logging.getLogger("all.infra.kubectl")
 logger.propagate = True
@@ -750,7 +751,7 @@ class KubeCtl:
                 containers=[
                     client.V1Container(
                         name="gc",
-                        image="busybox:1.36",
+                        image=rewrite_image("busybox:1.36"),
                         image_pull_policy="IfNotPresent",
                         command=["sh", "-c", script],
                         env=[client.V1EnvVar(name="KEEP", value=keep_blob)],

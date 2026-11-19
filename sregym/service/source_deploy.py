@@ -9,12 +9,15 @@ import os
 import platform
 import re
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from sregym.paths import TARGET_MICROSERVICES
 from sregym.service.app_workspace import _astronomy_source_root, resolve_app_source_subdir
+from sregym.service.cluster_platform import is_kind_cluster
+from sregym.service.image_mirror import rewrite_manifest_text
 from sregym.worker_infra import kind_nodes_hold_image, tag_image_in_kind_nodes
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -92,6 +95,12 @@ class _BaseAdapter:
     def ensure_images_loaded(self, *, cluster_name: str, node_architectures: set[str]) -> None:
         raise NotImplementedError
 
+    def render_declared_manifests(self) -> str:
+        """The app's declared manifests as one YAML stream, for registry delivery without an accepted render."""
+        raise SourceDeployUnsupportedError(
+            f"registry image delivery for '{self.app_name}' needs SREGYM_ACCEPTED_RENDER (no built-in render)"
+        )
+
 
 class _HotelReservationAdapter(_BaseAdapter):
     app_name = "Hotel Reservation"
@@ -109,6 +118,18 @@ class _HotelReservationAdapter(_BaseAdapter):
             cluster_name,
             _SourceImage(_HOTEL_IMAGE_NAME, source_dir / "Dockerfile", source_dir, _HOTEL_DECLARED_TAG),
         )
+
+    def render_declared_manifests(self) -> str:
+        # The same kustomize root the accepted-source render uses for hotel (``kubernetes/``).
+        completed = subprocess.run(
+            ["kubectl", "kustomize", str(self._source_dir() / "kubernetes")],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise SourceDeployUnsupportedError(f"kubectl kustomize of the hotel source failed: {completed.stderr}")
+        return completed.stdout
 
 
 class _SocialNetworkAdapter(_BaseAdapter):
@@ -207,6 +228,25 @@ _UNSUPPORTED_APPS: dict[str, str] = {
     "Fleet Cast": "no local source build workflow is defined in this repo",
     "Blueprint Hotel Reservation": "no local source build workflow is defined in this repo",
 }
+
+
+IMAGE_DELIVERY_ENV = "SREGYM_IMAGE_DELIVERY"
+
+
+def image_delivery() -> str:
+    """``build`` (build from source, then ``_kind_load_image`` and ``_declare_image``) or ``registry`` (no build;
+    nodes pull the declared refs).
+
+    ``SREGYM_IMAGE_DELIVERY`` decides when set (``kind`` is the historical name of ``build``); otherwise kind
+    clusters build and remote clusters (EKS), which cannot ``kind load``, use ``registry``. A harness that
+    replaces the two load hooks (for example with a push to a registry the nodes mirror) builds on any cluster.
+    """
+    value = os.getenv(IMAGE_DELIVERY_ENV, "").strip().lower()
+    if value:
+        if value not in {"kind", "build", "registry"}:
+            raise ValueError(f"{IMAGE_DELIVERY_ENV} must be 'build' (or 'kind') or 'registry', got {value!r}")
+        return "build" if value == "kind" else value
+    return "build" if is_kind_cluster() else "registry"
 
 
 def source_deploy_enabled() -> bool:
@@ -316,6 +356,10 @@ def all_declared_apps() -> set[str]:
 @contextlib.contextmanager
 def plan_for_app(app, *, node_architectures: set[str] | None = None):
     ensure_app_supported(app.name)
+    if image_delivery() == "registry":
+        with _registry_plan(app) as plan:
+            yield plan
+        return
     cluster_name = os.getenv("SREGYM_KIND_CLUSTER_NAME", "").strip()
     if not cluster_name:
         raise RuntimeError("Source deploy requires SREGYM_KIND_CLUSTER_NAME to be set")
@@ -327,6 +371,26 @@ def plan_for_app(app, *, node_architectures: set[str] | None = None):
         )
     adapter.ensure_images_loaded(cluster_name=cluster_name, node_architectures=node_architectures or set())
     yield SourceDeploymentPlan(manifest_path=Path(rendered))
+
+
+@contextlib.contextmanager
+def _registry_plan(app):
+    """Registry delivery: no build or ``kind load``; nodes pull the refs the source declares.
+
+    The manifest is the accepted render when one is given, else the app's declared manifests. Image
+    refs go through ``image_mirror`` (a no-op unless a mirror is configured), so a cluster that
+    cannot reach Docker Hub anonymously pulls the same images from a private mirror.
+    """
+    adapter = _SUPPORTED_ADAPTERS[app.name]
+    rendered = os.getenv("SREGYM_ACCEPTED_RENDER", "")
+    if rendered and Path(rendered).is_file():
+        text = Path(rendered).read_text(encoding="utf-8")
+    else:
+        text = adapter.render_declared_manifests()
+    with tempfile.TemporaryDirectory(prefix="sregym-registry-render-") as directory:
+        path = Path(directory) / "manifests.yaml"
+        path.write_text(rewrite_manifest_text(text), encoding="utf-8")
+        yield SourceDeploymentPlan(manifest_path=path)
 
 
 def _is_arm(node_architectures: set[str]) -> bool:

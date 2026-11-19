@@ -1,9 +1,11 @@
 """Interface for helm operations"""
 
 import logging
+import shlex
 import subprocess
 import time
 
+from sregym.service.image_mirror import helm_post_renderer_args
 from sregym.service.kubectl import KubeCtl
 
 logger = logging.getLogger("all.infra.helm")
@@ -52,6 +54,11 @@ class Helm:
 
         if extra_args:
             command += " " + " ".join(extra_args)
+
+        # Off unless SREGYM_IMAGE_MIRROR_PREFIX / SREGYM_IMAGE_MIRRORS is set (clusters without kind load).
+        post_renderer = helm_post_renderer_args()
+        if post_renderer:
+            command += " " + " ".join(shlex.quote(arg) for arg in post_renderer)
 
         process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         output, error = process.communicate()

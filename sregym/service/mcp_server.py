@@ -7,6 +7,7 @@ import time
 import requests
 
 from sregym.paths import MCP_SERVER_K8S
+from sregym.service.image_mirror import mirroring_enabled, rewrite_manifest_text
 from sregym.service.kubectl import KubeCtl
 
 logger = logging.getLogger("all.sregym.mcp_server")
@@ -65,7 +66,11 @@ class MCPServer:
                 self.start_port_forward()
             return
 
-        self.kubectl.exec_command(f"kubectl apply -k {MCP_SERVER_K8S}")
+        if mirroring_enabled():
+            rendered = self.kubectl.exec_command_checked(f"kubectl kustomize {MCP_SERVER_K8S}")
+            self.kubectl.exec_command_checked("kubectl apply -f -", input_data=rewrite_manifest_text(rendered))
+        else:
+            self.kubectl.exec_command(f"kubectl apply -k {MCP_SERVER_K8S}")
         self.kubectl.wait_for_ready(self.namespace)
         self.start_port_forward()
         logger.info("MCP server deployed successfully.")
@@ -122,7 +127,13 @@ class MCPServer:
                 time.sleep(3)
                 continue
 
-            command = f"kubectl port-forward svc/{self.service_name} {self.port}:{SERVICE_PORT} -n {self.namespace} --address 0.0.0.0"
+            # SREGYM_MCP_BIND_ADDRESS narrows the listener (e.g. to the Docker bridge gateway, which agent
+            # containers reach as host.docker.internal); the default keeps the historical 0.0.0.0.
+            address = os.environ.get("SREGYM_MCP_BIND_ADDRESS", "").strip() or "0.0.0.0"
+            command = (
+                f"kubectl port-forward svc/{self.service_name} {self.port}:{SERVICE_PORT} -n {self.namespace} "
+                f"--address {address}"
+            )
             self.port_forward_process = subprocess.Popen(
                 command,
                 shell=True,

@@ -3,6 +3,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from sregym.service.image_mirror import mirrored_manifest
+
 logger = logging.getLogger("all.sregym.jaeger")
 
 
@@ -21,7 +23,8 @@ class Jaeger:
     def deploy(self):
         """Deploy Jaeger to the observe namespace."""
         self._ensure_namespace_ready()
-        self.run_cmd(f"kubectl apply -f {self.config_file} -n {self.namespace}")
+        with mirrored_manifest(self.config_file) as manifest:
+            self.run_cmd(f"kubectl apply -f {manifest} -n {self.namespace}")
         self.wait_for_service("jaeger-out", timeout=120)
         logger.info("Jaeger deployed successfully.")
 
