@@ -66,6 +66,15 @@ def test_named_init_problem_injects_recovers_and_preserves_wait(wired):
     assert len(patches) == 2
 
 
+def test_named_init_oracle_grades_the_healthy_application_before_injection(wired):
+    """The harness rehearses the oracle on a no-fault problem instance: it has no recorded originals."""
+    _, current, _ = wired
+    problem = pilot.NamedInitImage()
+    assert problem.mitigation_oracle.evaluate() == {"success": True}
+    current["spec"]["template"]["spec"]["initContainers"][0]["image"] = problem.bad_image
+    assert problem.mitigation_oracle.evaluate() == {"success": False}
+
+
 def test_healthy_tracing_performs_no_mutation(wired, monkeypatch):
     _, _, patches = wired
     sleeps = []

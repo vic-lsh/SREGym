@@ -30,6 +30,14 @@ class NamedInitMitigationOracle(Oracle):
         self.settle_rollouts(only=problem.faulty_service)
         current = deployment_json(problem.kubectl, problem.faulty_service, problem.namespace)
         spec = current["spec"]["template"]["spec"]
+        if problem.original_spec is None:
+            # No fault was injected (the harness grades the healthy application before injection):
+            # the live deployment is the reference, so it passes unless it carries the bad image.
+            image = next((c["image"] for c in spec.get("initContainers", []) if c["name"] == problem.init_name), None)
+            return {
+                "success": image not in (None, problem.bad_image)
+                and init_image_recovered(current, problem.init_name, image)
+            }
         success = (
             init_image_recovered(current, problem.init_name, problem.original_image)
             and spec.get("initContainers") == problem.original_spec.get("initContainers")
@@ -47,6 +55,8 @@ class NamedInitImage(Problem):
         self.init_name = init_name
         self.kubectl = KubeCtl()
         self.bad_image = "registry.invalid/sp1-wait-for-mongodb:missing"
+        self.original_spec: dict[str, Any] | None = None
+        self.original_image: str | None = None
         self.root_cause = self.build_structured_root_cause(
             component=f"deployment/{faulty_service}",
             namespace=self.namespace,
