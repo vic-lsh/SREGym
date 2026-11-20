@@ -323,3 +323,14 @@ def test_frontend_pod_is_not_mistaken_for_frontend_proxy():
     scope = AlertScope(frozenset({"frontend"}))
     assert not scope.attributes({"alertname": "ContainerCPUThrottling", "pod": "frontend-proxy-6c9669bb69-t9r6c"})
     assert scope.attributes({"alertname": "ContainerCPUThrottling", "pod": "frontend-7f9c8d6b5-abcde"})
+
+
+def test_verdict_records_the_firing_alert_names_without_changing_the_decision():
+    own = FAULT_ALERTS["adFailure"]
+    failed = FlagFault("adFailure", [*own, ACCOUNTING_OOM]).mitigation_oracle.evaluate()
+    assert failed["success"] is False
+    names = {a["alertname"] for a in failed["firing_alerts"]}
+    assert names >= {a["labels"]["alertname"] for a in own}
+    assert all(set(a) == {"alertname", "source", "severity", "active_at"} for a in failed["firing_alerts"])
+    passed = FlagFault("adFailure", []).mitigation_oracle.evaluate()
+    assert passed == {"success": True, "firing_alerts": []}

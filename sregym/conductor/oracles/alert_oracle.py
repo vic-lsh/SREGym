@@ -183,6 +183,17 @@ class AlertOracle(Oracle):
         severity = labels.get("severity", "")
         return f"{name} ({svc}) [{severity}]"
 
+    @staticmethod
+    def _record_alert(alert: dict) -> dict:
+        """The evidence kept for one firing alert: its name, source, severity and when it became active."""
+        labels = alert.get("labels", {})
+        return {
+            "alertname": labels.get("alertname"),
+            "source": labels.get("service_name") or labels.get("pod") or "",
+            "severity": labels.get("severity", ""),
+            "active_at": alert.get("activeAt"),
+        }
+
     # ------------------------------------------------------------------
     # Oracle interface
     # ------------------------------------------------------------------
@@ -210,7 +221,7 @@ class AlertOracle(Oracle):
             if firing:
                 names = ", ".join(self._fmt_alert(a) for a in firing)
                 print(f"❌ Firing alerts in {namespace}{self._scope_note()}: {names}")
-                return {"success": False}
+                return {"success": False, "firing_alerts": [self._record_alert(a) for a in firing]}
 
             elapsed_int = int(elapsed)
             if elapsed_int >= last_log_second + 30:
@@ -220,7 +231,7 @@ class AlertOracle(Oracle):
             self.sleep(self.poll_interval_seconds)
 
         print(f"✅ No alerts firing in {namespace}{self._scope_note()} for {self.sustained_silence_seconds}s")
-        return {"success": True}
+        return {"success": True, "firing_alerts": []}
 
     def _scope_note(self) -> str:
         if self.scope is None:
