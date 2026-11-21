@@ -26,6 +26,7 @@ from sregym.observer.otel_collector import OtelCollector
 from sregym.paths import cluster_baseline_state_file
 from sregym.service.apps.app_registry import AppRegistry
 from sregym.service.cluster_platform import is_kind_cluster
+from sregym.service.storage import managed_storage
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.dm_flakey_manager import DmFlakeyManager
 from sregym.service.image_mirror import mirrored_manifest
@@ -1298,16 +1299,19 @@ class Conductor:
 
         self._deploy_khaos(problem)
 
-        self.logger.info("[DEPLOY] Setting up OpenEBS…")
-        self._preflight_openebs_udev_mount()
-        with mirrored_manifest("https://openebs.github.io/charts/openebs-operator.yaml") as manifest:
-            self.kubectl.exec_command(f"kubectl apply -f {manifest}")
-        self.kubectl.exec_command(
-            "kubectl patch storageclass openebs-hostpath "
-            '-p \'{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}\''
-        )
-        self.kubectl.wait_for_ready("openebs")
-        self._ensure_openebs_device_storageclass()
+        if managed_storage():
+            self.logger.info("[DEPLOY] Storage is the platform's (a virtual lane): not installing OpenEBS")
+        else:
+            self.logger.info("[DEPLOY] Setting up OpenEBS…")
+            self._preflight_openebs_udev_mount()
+            with mirrored_manifest("https://openebs.github.io/charts/openebs-operator.yaml") as manifest:
+                self.kubectl.exec_command(f"kubectl apply -f {manifest}")
+            self.kubectl.exec_command(
+                "kubectl patch storageclass openebs-hostpath "
+                '-p \'{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}\''
+            )
+            self.kubectl.wait_for_ready("openebs")
+            self._ensure_openebs_device_storageclass()
 
         self.logger.info("[DEPLOY] Deploying Prometheus…")
         self.prometheus.deploy()

@@ -2,12 +2,14 @@ import json
 import logging
 import os
 import subprocess
+import tempfile
 
 import yaml
 
 from sregym.paths import BASE_DIR, PROMETHEUS_METADATA
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
+from sregym.service.storage import default_class_manifest, managed_storage
 
 
 class Prometheus:
@@ -43,6 +45,11 @@ class Prometheus:
                 self.helm_configs["chart_path"] = str(BASE_DIR / chart_path)
 
         self.pvc_config_file = os.path.join(BASE_DIR, metadata.get("PersistentVolumeClaimConfig"))
+        if managed_storage():
+            self.helm_configs = {
+                **self.helm_configs,
+                "extra_args": [*self.helm_configs.get("extra_args", []), "--set server.persistentVolume.storageClass=null"],
+            }
 
     def get_service_json(self) -> dict:
         """Get metric service metadata in JSON format."""
@@ -95,6 +102,16 @@ class Prometheus:
     def _apply_pvc(self):
         """Apply the PersistentVolumeClaim configuration."""
         self.logger.info(f"Applying PersistentVolumeClaim from {self.pvc_config_file}")
+        if managed_storage():
+            with open(self.pvc_config_file) as file:
+                manifest = default_class_manifest(file.read())
+            with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False) as out:
+                out.write(manifest)
+            try:
+                KubeCtl().exec_command(f"kubectl apply -f {out.name} -n {self.namespace}")
+            finally:
+                os.unlink(out.name)
+            return
         KubeCtl().exec_command(f"kubectl apply -f {self.pvc_config_file} -n {self.namespace}")
 
     def _delete_pvc(self):
