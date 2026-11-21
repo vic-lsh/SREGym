@@ -27,6 +27,12 @@ def test_prometheus_helm_uses_the_default_class_on_managed_storage(monkeypatch) 
     assert "--set server.persistentVolume.storageClass=null" in configs["extra_args"]
 
 
+def test_prometheus_helm_takes_no_fixed_node_port_on_a_shared_host_cluster(monkeypatch) -> None:
+    """Lanes of one host cluster share its NodePort range: a fixed 32000 allows one lane."""
+    monkeypatch.setenv(storage.MANAGED_STORAGE_ENV, "1")
+    assert "--set server.service.nodePort=null" in Prometheus().helm_configs["extra_args"]
+
+
 def test_prometheus_helm_keeps_its_class_otherwise(monkeypatch) -> None:
     monkeypatch.delenv(storage.MANAGED_STORAGE_ENV, raising=False)
     assert not Prometheus().helm_configs.get("extra_args")

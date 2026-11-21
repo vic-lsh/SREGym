@@ -48,7 +48,12 @@ class Prometheus:
         if managed_storage():
             self.helm_configs = {
                 **self.helm_configs,
-                "extra_args": [*self.helm_configs.get("extra_args", []), "--set server.persistentVolume.storageClass=null"],
+                "extra_args": [
+                    *self.helm_configs.get("extra_args", []),
+                    "--set server.persistentVolume.storageClass=null",
+                    # The lanes of one host cluster share its NodePort range; the chart's fixed 32000 allows one.
+                    "--set server.service.nodePort=null",
+                ],
             }
 
     def get_service_json(self) -> dict:
