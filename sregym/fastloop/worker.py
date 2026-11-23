@@ -615,13 +615,9 @@ def production_worker() -> FastloopWorker:
         return KubernetesAPIProxy(hidden_namespaces=hidden_namespaces, listen_port=listen_port)
 
     def kubeconfig_verifier(path: str, listen_port: int) -> None:
-        from sregym.service.k8s_proxy import verify_agent_kubeconfig
+        from sregym.service.k8s_proxy import agent_cluster_scope, verify_agent_kubeconfig
 
-        verify_agent_kubeconfig(
-            path,
-            listen_port=listen_port,
-            cluster_name=os.environ.get("SREGYM_KIND_CLUSTER_NAME", "").strip() or None,
-        )
+        verify_agent_kubeconfig(path, listen_port=listen_port, **agent_cluster_scope())
 
     return FastloopWorker(
         problem_factory=problem_factory,

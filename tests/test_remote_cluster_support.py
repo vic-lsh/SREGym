@@ -269,12 +269,17 @@ def test_agent_kubeconfig_check_skips_kind_node_names_on_remote_clusters(monkeyp
     conductor = Conductor.__new__(Conductor)
     conductor._agent_kubeconfig_path = str(tmp_path / "agent")
     conductor.k8s_proxy = SimpleNamespace(listen_port=16443)
+    monkeypatch.setattr("sregym.service.k8s_proxy.KubernetesAPIProxy._INCLUSTER_TOKEN_PATH", str(tmp_path / "no-token"))
+    monkeypatch.setenv("KUBECONFIG", str(tmp_path / "remote.kubeconfig"))
+    monkeypatch.delenv("SREGYM_BASE_KUBECONFIG", raising=False)
     monkeypatch.setenv("SREGYM_KIND_CLUSTER_NAME", "remote-0123456789ab")
     monkeypatch.delenv("SREGYM_CLUSTER_PLATFORM", raising=False)
     conductor._verify_agent_kubeconfig()
     monkeypatch.setenv("SREGYM_KIND_CLUSTER_NAME", "fastloop-w0")
     conductor._verify_agent_kubeconfig()
     assert [call["cluster_name"] for call in calls] == [None, "fastloop-w0"]
+    # A remote cluster is proved by its identity through the proxy's upstream kubeconfig instead.
+    assert [call["reference_kubeconfig"] for call in calls] == [str(tmp_path / "remote.kubeconfig"), None]
 
 
 # ---------------------------------------------------------------- conductor cleanup

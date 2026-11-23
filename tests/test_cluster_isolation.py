@@ -60,6 +60,62 @@ def test_agent_kubeconfig_guard_rejects_nodes_of_another_cluster(tmp_path) -> No
         )
 
 
+def _cluster_uids(uids: dict[str, str]):
+    """kubectl reading kube-system's UID through each kubeconfig; a kubeconfig not listed cannot reach a cluster."""
+
+    def run(command, **kwargs):
+        assert command[:2] == ["kubectl", "--kubeconfig"] and "kube-system" in command
+        uid = uids.get(command[2])
+        if uid is None:
+            return subprocess.CompletedProcess(command, 1, "", "Unable to connect to the server")
+        return subprocess.CompletedProcess(command, 0, uid, "")
+
+    return run
+
+
+def test_agent_kubeconfig_guard_proves_a_remote_cluster_by_its_identity(tmp_path) -> None:
+    """EKS nodes carry no cluster prefix (ip-...): off kind the agent must see the proxy upstream's own cluster."""
+    path = _agent_kubeconfig(tmp_path / "k", 16443)
+    upstream = str(tmp_path / "lane.kubeconfig")
+
+    k8s_proxy.verify_agent_kubeconfig(
+        path,
+        listen_port=16443,
+        cluster_name=None,
+        reference_kubeconfig=upstream,
+        runner=_cluster_uids({path: "uid-a", upstream: "uid-a"}),
+    )
+    with pytest.raises(k8s_proxy.AgentKubeconfigMismatch, match="uid-b"):
+        k8s_proxy.verify_agent_kubeconfig(
+            path,
+            listen_port=16443,
+            cluster_name=None,
+            reference_kubeconfig=upstream,
+            runner=_cluster_uids({path: "uid-b", upstream: "uid-a"}),
+        )
+    with pytest.raises(k8s_proxy.AgentKubeconfigMismatch, match="Unable to connect"):
+        k8s_proxy.verify_agent_kubeconfig(
+            path,
+            listen_port=16443,
+            cluster_name=None,
+            reference_kubeconfig=upstream,
+            runner=_cluster_uids({upstream: "uid-a"}),
+        )
+
+
+def test_agent_cluster_scope_is_node_names_on_kind_and_cluster_identity_elsewhere(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(k8s_proxy.KubernetesAPIProxy, "_INCLUSTER_TOKEN_PATH", str(tmp_path / "no-token"))
+    monkeypatch.setenv("SREGYM_KIND_CLUSTER_NAME", "fastloop-w1")
+    monkeypatch.setenv("KUBECONFIG", "/lanes/eks1.kubeconfig")
+    monkeypatch.delenv("SREGYM_BASE_KUBECONFIG", raising=False)
+    monkeypatch.setenv("SREGYM_CLUSTER_PLATFORM", "kind")
+    assert k8s_proxy.agent_cluster_scope() == {"cluster_name": "fastloop-w1", "reference_kubeconfig": None}
+    monkeypatch.setenv("SREGYM_CLUSTER_PLATFORM", "eks")
+    assert k8s_proxy.agent_cluster_scope() == {"cluster_name": None, "reference_kubeconfig": "/lanes/eks1.kubeconfig"}
+    monkeypatch.setenv("SREGYM_BASE_KUBECONFIG", "/base.kubeconfig")  # the proxy's upstream wins, as in the proxy
+    assert k8s_proxy.agent_cluster_scope()["reference_kubeconfig"] == "/base.kubeconfig"
+
+
 def test_second_experiment_on_the_same_cluster_fails_loudly(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("sregym.worker_infra._LOCK_DIR", str(tmp_path))
 
