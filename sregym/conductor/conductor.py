@@ -29,7 +29,12 @@ from sregym.service.cluster_platform import is_kind_cluster
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.dm_flakey_manager import DmFlakeyManager
 from sregym.service.image_mirror import mirrored_manifest
-from sregym.service.k8s_proxy import KubernetesAPIProxy, agent_proxy_port, verify_agent_kubeconfig
+from sregym.service.k8s_proxy import (
+    KubernetesAPIProxy,
+    agent_cluster_scope,
+    agent_proxy_port,
+    verify_agent_kubeconfig,
+)
 from sregym.service.khaos import KhaosController
 from sregym.service.kubectl import KubeCtl
 from sregym.service.mcp_server import MCPServer
@@ -188,15 +193,8 @@ class Conductor:
         path = getattr(self, "_agent_kubeconfig_path", None)
         if path is None:
             return  # no filtering proxy started, so no agent kubeconfig to check
-        verify_agent_kubeconfig(
-            path,
-            listen_port=self.k8s_proxy.listen_port,
-            # Node names prove the cluster only on kind (``<cluster>-control-plane``); a remote
-            # cluster's nodes (EKS ``ip-...``) carry no cluster prefix.
-            cluster_name=(os.environ.get("SREGYM_KIND_CLUSTER_NAME", "").strip() or None)
-            if is_kind_cluster()
-            else None,
-        )
+        # Kind: node names; a remote cluster (EKS ``ip-...`` nodes): its identity through the upstream kubeconfig.
+        verify_agent_kubeconfig(path, listen_port=self.k8s_proxy.listen_port, **agent_cluster_scope())
 
     def _scope_agent_exec(self, problem):
         """Limit proxied exec/attach/port-forward to this problem's application namespaces."""
@@ -1288,7 +1286,6 @@ class Conductor:
             "]'"
         )
         self.kubectl.wait_for_ready("kube-system")
-
 
     def _deploy_shared_infrastructure(self, problem):
         if self._metrics_api_available():

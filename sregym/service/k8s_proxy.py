@@ -361,9 +361,7 @@ class KubernetesAPIProxy:
             # Running outside the cluster — load from kubeconfig
             # Prefer the supervisor-provided base config so KUBECONFIG may later
             # point at this proxy without creating a circular dependency.
-            default_kubeconfig = os.environ.get("SREGYM_BASE_KUBECONFIG") or os.environ.get(
-                "KUBECONFIG", os.path.expanduser("~/.kube/config")
-            )
+            default_kubeconfig = base_kubeconfig()
             config.load_kube_config(config_file=default_kubeconfig)
             self.api_host, self.api_port, self.ca_cert, self.client_cert, self.client_key = self._load_cluster_config(
                 kubeconfig_path=default_kubeconfig
@@ -981,18 +979,69 @@ class AgentKubeconfigMismatch(RuntimeError):
     """The kubeconfig handed to agents does not reach this experiment's own cluster."""
 
 
+def base_kubeconfig() -> str:
+    """The kubeconfig the proxy forwards to (outside a pod): ``SREGYM_BASE_KUBECONFIG``, else ``KUBECONFIG``."""
+    return os.environ.get("SREGYM_BASE_KUBECONFIG") or os.environ.get(
+        "KUBECONFIG", os.path.expanduser("~/.kube/config")
+    )
+
+
+def agent_cluster_scope() -> dict[str, str | None]:
+    """What proves the agent kubeconfig reaches only this experiment's cluster, for ``verify_agent_kubeconfig``.
+
+    On kind, node names (``<cluster>-control-plane``). A remote cluster's nodes (EKS ``ip-...``) carry no cluster
+    prefix, so there the agent must see the same cluster identity as the proxy's upstream kubeconfig. Inside a pod
+    the proxy forwards to its own cluster with the ServiceAccount, and there is no kubeconfig to compare with.
+    """
+    from sregym.service.cluster_platform import is_kind_cluster
+
+    if is_kind_cluster():
+        return {
+            "cluster_name": os.environ.get("SREGYM_KIND_CLUSTER_NAME", "").strip() or None,
+            "reference_kubeconfig": None,
+        }
+    in_cluster = os.path.exists(KubernetesAPIProxy._INCLUSTER_TOKEN_PATH)
+    return {"cluster_name": None, "reference_kubeconfig": None if in_cluster else base_kubeconfig()}
+
+
+def _cluster_uid(kubeconfig: str, runner: Any) -> tuple[str, str]:
+    """kube-system's UID as ``kubeconfig`` sees it (a cluster's identity), and kubectl's error when it cannot tell."""
+    completed = runner(
+        [
+            "kubectl",
+            "--kubeconfig",
+            kubeconfig,
+            "get",
+            "namespace",
+            "kube-system",
+            "-o",
+            "jsonpath={.metadata.uid}",
+            "--request-timeout=20s",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    uid = completed.stdout.strip() if completed.returncode == 0 else ""
+    return uid, "" if uid else (completed.stderr.strip()[-300:] or "no kube-system UID")
+
+
 def verify_agent_kubeconfig(
     path: str,
     *,
     listen_port: int,
     cluster_name: str | None,
+    reference_kubeconfig: str | None = None,
     runner: Any = subprocess.run,
 ) -> None:
     """Fail loudly unless the agent kubeconfig reaches this conductor's proxy and cluster.
 
     The agent kubeconfig (mounted into agent containers, and ``KUBECONFIG`` for
-    host-side agents) must name exactly this proxy's port, and, for a kind
-    cluster, every node seen through it must belong to ``cluster_name``.
+    host-side agents) must name exactly this proxy's port. For a kind cluster
+    (``cluster_name``), every node seen through it must belong to that cluster; for a
+    remote one (``reference_kubeconfig``), it must see the same cluster identity
+    (kube-system's UID) as the proxy's upstream kubeconfig. ``agent_cluster_scope``
+    chooses between them.
     """
 
     with open(path, encoding="utf-8") as stream:
@@ -1001,20 +1050,31 @@ def verify_agent_kubeconfig(
     expected = f"http://127.0.0.1:{listen_port}"
     if servers != [expected]:
         raise AgentKubeconfigMismatch(f"agent kubeconfig {path} targets {servers}, expected this proxy {expected}")
-    if not cluster_name:
+    if cluster_name:
+        completed = runner(
+            ["kubectl", "--kubeconfig", path, "get", "nodes", "-o", "name", "--request-timeout=20s"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        nodes = [line.strip().removeprefix("node/") for line in completed.stdout.splitlines() if line.strip()]
+        foreign = [node for node in nodes if not node.startswith(f"{cluster_name}-")]
+        if completed.returncode != 0 or not nodes or foreign:
+            details = completed.stderr.strip() if completed.returncode != 0 else f"nodes {foreign or nodes}"
+            raise AgentKubeconfigMismatch(
+                f"agent kubeconfig {path} does not reach cluster {cluster_name} only: {details}"
+            )
+        logger.info("Agent kubeconfig %s verified: port %s reaches only %s", path, listen_port, cluster_name)
         return
-    completed = runner(
-        ["kubectl", "--kubeconfig", path, "get", "nodes", "-o", "name", "--request-timeout=20s"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    nodes = [line.strip().removeprefix("node/") for line in completed.stdout.splitlines() if line.strip()]
-    foreign = [node for node in nodes if not node.startswith(f"{cluster_name}-")]
-    if completed.returncode != 0 or not nodes or foreign:
-        details = completed.stderr.strip() if completed.returncode != 0 else f"nodes {foreign or nodes}"
-        raise AgentKubeconfigMismatch(f"agent kubeconfig {path} does not reach cluster {cluster_name} only: {details}")
-    logger.info("Agent kubeconfig %s verified: port %s reaches only %s", path, listen_port, cluster_name)
+    if reference_kubeconfig:
+        agent_uid, agent_error = _cluster_uid(path, runner)
+        upstream_uid, upstream_error = _cluster_uid(reference_kubeconfig, runner)
+        if not agent_uid or not upstream_uid or agent_uid != upstream_uid:
+            raise AgentKubeconfigMismatch(
+                f"agent kubeconfig {path} does not reach the cluster of {reference_kubeconfig}: "
+                f"agent sees kube-system {agent_uid or agent_error}, upstream {upstream_uid or upstream_error}"
+            )
+        logger.info("Agent kubeconfig %s verified: port %s reaches cluster %s", path, listen_port, upstream_uid)
 
 
 def agent_proxy_port() -> int:
